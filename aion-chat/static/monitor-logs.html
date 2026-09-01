@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>监控日志 - Obsidian Vow</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1714">
+<style>
+.sentinel-panel { background:linear-gradient(135deg, var(--surface) 0%, rgba(42,36,32,0.95) 100%); border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:12px; }
+.sentinel-panel-title { font-size:14px; font-weight:600; margin-bottom:10px; display:flex; align-items:center; gap:6px; }
+.sentinel-status-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.sentinel-status-dot.on { background:var(--accent); box-shadow:0 0 8px rgba(212,148,58,0.4); }
+.sentinel-status-dot.off { background:var(--text3); }
+.sentinel-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 0; }
+.sentinel-row-label { font-size:13px; color:var(--text2); }
+.sentinel-row-value { font-size:13px; color:var(--text); font-weight:500; }
+.sentinel-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:6px; }
+.sentinel-grid label { font-size:11px; color:var(--text3); display:block; margin-bottom:2px; }
+.sentinel-grid input { width:100%; padding:5px 6px; font-size:12px; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; box-sizing:border-box; outline:none; transition:border-color 0.2s, box-shadow 0.2s; }
+.sentinel-grid input:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(212,148,58,0.15); }
+.sentinel-hint { font-size:11px; color:var(--text3); margin-top:4px; }
+.log-date-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.log-date-row select { flex:1; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:13px; outline:none; }
+.log-date-row button { background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:6px 10px; font-size:13px; cursor:pointer; }
+.log-list { flex:1; overflow-y:auto; max-height:calc(100dvh - 420px); border:1px solid var(--border); border-radius:10px; background:linear-gradient(180deg, var(--bg) 0%, rgba(26,23,20,0.95) 100%); padding:4px; box-shadow: inset 0 1px 0 rgba(212,148,58,0.05); }
+.log-entry { padding:7px 10px; border-bottom:1px solid rgba(58,53,48,0.4); font-size:13px; line-height:1.5; border-radius:6px; transition: background 0.2s; }
+.log-entry:hover { background: rgba(212,148,58,0.03); }
+.log-entry:last-child { border-bottom:none; }
+.log-time { color:var(--text2); font-size:11px; font-family:monospace; margin-right:6px; }
+.log-text { color:var(--text); }
+.log-core { color:#e65100; font-style:italic; }
+.log-empty { padding:24px; text-align:center; color:var(--text3); font-size:14px; }
+.chat-status-bar { padding:8px 12px; border-top:1px solid var(--border); margin-top:8px; display:flex; flex-direction:column; gap:4px; font-size:12px; }
+.chat-status-label { color:var(--text2); white-space:nowrap; }
+.chat-status-text { color:#1a73e8; word-break:break-all; white-space:pre-wrap; line-height:1.5; }
+.shadow-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.shadow-toolbar label { color:var(--text3); font-size:11px; display:flex; align-items:center; gap:4px; }
+.shadow-list { display:flex; flex-direction:column; gap:7px; max-height:260px; overflow-y:auto; }
+.shadow-entry { border:1px solid var(--border); background:var(--surface2); border-radius:8px; padding:8px; }
+.shadow-entry-head { display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--text2); }
+.shadow-entry-reason { margin-top:4px; font-size:12px; color:var(--text); }
+.shadow-entry-meta { margin-top:3px; font-size:11px; color:var(--text3); }
+.shadow-labels { display:flex; gap:6px; margin-top:7px; }
+.shadow-labels button { flex:1; padding:4px 6px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text2); font-size:11px; cursor:pointer; }
+.shadow-labels button.active { border-color:var(--accent); color:var(--accent); background:rgba(212,148,58,0.08); }
+</style>
+</head>
+<body>
+<div class="sub-page">
+  <div class="top-bar">
+    <button class="back-btn" onclick="location.href='/'">⬅</button>
+    <h2>📜 监控日志</h2>
+  </div>
+  <div class="page-content">
+    <!-- 哨兵控制面板 -->
+    <div class="sentinel-panel">
+      <div class="sentinel-panel-title">
+        <span class="sentinel-status-dot" id="sentinelDot"></span>
+        <span>哨兵监控</span>
+        <span id="sentinelStatusText" style="font-size:12px;color:var(--text3);font-weight:400;margin-left:auto"></span>
+      </div>
+      <div class="sentinel-row">
+        <span class="sentinel-row-label">监控开关</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="sentinelToggle" onchange="toggleSentinel()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="sentinel-row">
+        <span class="sentinel-row-label">静默时段</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="quietToggle" onchange="saveQuietHours()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="sentinel-grid">
+        <div>
+          <label>静默开始</label>
+          <input type="time" id="quietStart" value="00:00" onchange="saveQuietHours()">
+        </div>
+        <div>
+          <label>静默结束</label>
+          <input type="time" id="quietEnd" value="09:00" onchange="saveQuietHours()">
+        </div>
+        <div>
+          <label>最小间隔(分)</label>
+          <input type="number" id="intervalMin" min="1" max="120" value="10" onchange="saveInterval()">
+        </div>
+        <div>
+          <label>最大间隔(分)</label>
+          <input type="number" id="intervalMax" min="1" max="120" value="20" onchange="saveInterval()">
+        </div>
+      </div>
+      <div class="sentinel-hint" id="sentinelNextCheck"></div>
+    </div>
+
+    <div class="sentinel-panel">
+      <div class="sentinel-panel-title">
+        <span>🪞 上下文触发影子</span>
+        <span id="shadowStatusText" style="font-size:11px;color:var(--text3);font-weight:400;margin-left:auto">读取中</span>
+      </div>
+      <div class="shadow-toolbar">
+        <span class="sentinel-hint" id="shadowStatsText">尚无候选</span>
+        <label><input type="checkbox" id="shadowIncludeDiagnostics" onchange="loadContextTriggerShadow()">显示未命中/缺数据</label>
+      </div>
+      <div class="shadow-list" id="shadowList"><div class="log-empty">暂无命中候选</div></div>
+    </div>
+
+    <div class="log-date-row">
+      <select id="logDateSelect" onchange="loadLogDate()"></select>
+      <button onclick="loadLogDates()">🔄</button>
+    </div>
+    <div class="log-list" id="logList"><div class="log-empty">暂无日志</div></div>
+    <div class="chat-status-bar">
+      <span class="chat-status-label">🧭 当前上下文：</span>
+      <span class="chat-status-text" id="currentContextText">暂无达到新鲜度要求的设备上下文</span>
+    </div>
+    <div class="chat-status-bar" style="border-top:none;margin-top:0;padding-top:0">
+      <span class="chat-status-label">📍 缓存定位：</span>
+      <span class="chat-status-text" id="locDebugText" style="color:#43a047">暂无</span>
+    </div>
+  </div>
+</div>
+<script src="/static/common.js"></script>
+<script src="/static/web_push.js"></script>
+<script>
+connectCommonWS(msg => {
+  if (msg.type === "chat_status") {
+    loadCurrentContext();
+  } else if (msg.type === "location_update" && msg.data) {
+    updateLocDebug(msg.data);
+  } else if (msg.type === "monitor_log") {
+    const today = new Date().toISOString().slice(0, 10);
+    if ($("logDateSelect").value === today) {
+      const e = msg.data;
+      const isCore = e.monitoringlog && e.monitoringlog.startsWith("🧠");
+      const cls = isCore ? "log-core" : "log-text";
+      const callTag = e.call_core ? ' <span style="color:#d32f2f;font-size:11px">[唤醒Core]</span>' : '';
+      const summaryTag = e.summary ? `<div style="color:#1a73e8;font-size:11px;margin-top:2px">📋 概况: ${escHtml(e.summary)}</div>` : '';
+      const reasonTag = e.core_reason ? `<div style="color:#e65100;font-size:11px;margin-top:2px">⚡ 唤醒原因: ${escHtml(e.core_reason)}</div>` : '';
+      const el = $("logList");
+      if (el.querySelector(".log-empty")) el.innerHTML = "";
+      el.insertAdjacentHTML("beforeend",
+        `<div class="log-entry"><span class="log-time">${escHtml(e.time || '')}</span><span class="${cls}">${escHtml(e.monitoringlog || '')}</span>${callTag}${summaryTag}${reasonTag}</div>`
+      );
+      el.scrollTop = el.scrollHeight;
+    }
+  }
+});
+
+/* ── 哨兵控制 ── */
+async function loadSentinelStatus() {
+  try {
+    const s = await api("GET", "/api/sentinel/status");
+    $("sentinelToggle").checked = s.monitoring;
+    $("quietToggle").checked = s.quiet_hours_enabled;
+    $("quietStart").value = s.quiet_hours_start || "00:00";
+    $("quietEnd").value = s.quiet_hours_end || "09:00";
+    $("intervalMin").value = s.auto_interval_min || 10;
+    $("intervalMax").value = s.auto_interval_max || 20;
+    const dot = $("sentinelDot");
+    dot.classList.toggle("on", s.monitoring);
+    dot.classList.toggle("off", !s.monitoring);
+    $("sentinelStatusText").textContent = s.monitoring
+      ? (s.is_quiet_hours ? "静默中" : `运行中 · ${s.next_check_in}s后下次检查`)
+      : "已停止";
+    $("sentinelNextCheck").textContent = s.monitoring
+      ? `线程: ${s.thread_alive ? "存活" : "异常"} · 间隔: ${s.auto_interval_min}-${s.auto_interval_max}分钟`
+      : "";
+  } catch(e) { $("sentinelStatusText").textContent = "读取失败"; }
+}
+
+async function toggleSentinel() {
+  await api("PUT", "/api/sentinel/config", { enabled: $("sentinelToggle").checked });
+  await loadSentinelStatus();
+}
+
+async function saveQuietHours() {
+  await api("PUT", "/api/sentinel/config", {
+    quiet_hours_enabled: $("quietToggle").checked,
+    quiet_hours_start: $("quietStart").value,
+    quiet_hours_end: $("quietEnd").value,
+  });
+  await loadSentinelStatus();
+}
+
+async function saveInterval() {
+  const min = parseInt($("intervalMin").value) || 10;
+  const max = parseInt($("intervalMax").value) || 20;
+  await api("PUT", "/api/sentinel/config", {
+    auto_interval_min: min,
+    auto_interval_max: Math.max(min, max),
+  });
+  await loadSentinelStatus();
+}
+
+(async function init() {
+  await loadSentinelStatus();
+  await loadContextTriggerShadow();
+  await loadLogDates();
+  loadCurrentContext();
+  setInterval(loadSentinelStatus, 15000);
+  setInterval(loadCurrentContext, 15000);
+  setInterval(loadContextTriggerShadow, 60000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      loadSentinelStatus();
+      loadCurrentContext();
+      loadContextTriggerShadow();
+    }
+  });
+})();
+
+async function loadCurrentContext() {
+  try { const data = await api("GET", "/api/context_delivery/current"); updateCurrentContext(data); } catch(e){}
+  try { const s = await api("GET", "/api/location/status"); updateLocDebug(s); } catch(e){}
+}
+
+function updateCurrentContext(data) {
+  $("currentContextText").textContent = data.status || "暂无达到新鲜度要求的设备上下文";
+}
+
+function updateLocDebug(s) {
+  if (!s || !s.lng) { $("locDebugText").textContent = "暂无"; return; }
+  const stateMap = {at_home:"🏠在家", outside:"🚶外出", unknown:"❓未知"};
+  const stale = !!s.location_stale;
+  let t = stale ? "❓定位过期" : (stateMap[s.state] || s.state);
+  if (stale && s.address) t += ` | 旧地址缓存`;
+  else if (s.address) t += ` | ${s.address}${s.address_stale ? "（地址缓存）" : ""}`;
+  else t += " | 地址未刷新";
+  const v2 = s.v2_state || {};
+  if (!stale && s.state === "outside") t += s.address ? " | 当前位置:高德地址" : " | 高德地址待刷新";
+  else if (!stale && v2.place_name) t += ` | 稳定地点:${v2.place_name}`;
+  else if (!stale) t += " | 未命中可信地点";
+  if (s.distance_from_home > 0) { const d = s.distance_from_home; t += ` | 距家${d>=1000?(d/1000).toFixed(1)+'km':Math.round(d)+'m'}`; }
+  t += `\n${stale ? "旧坐标" : "坐标"}: ${s.lng}, ${s.lat}`;
+  if (s.accuracy) t += ` (±${Math.round(s.accuracy)}m)`;
+  if (s.provider) t += ` | 来源:${s.provider}`;
+  if (typeof s.location_age_sec === "number") t += ` | 定位年龄:${formatAge(s.location_age_sec)}`;
+  if (s.updated_at) t += ` | 定位时间: ${new Date(s.updated_at * 1000).toLocaleTimeString()}`;
+  if (s.heartbeat_received_at) t += ` | 收到: ${new Date(s.heartbeat_received_at * 1000).toLocaleTimeString()}`;
+  if (s.weather && s.weather.weather) t += ` | ${s.weather.weather} ${s.weather.temperature}°C`;
+  $("locDebugText").textContent = t;
+}
+
+function formatAge(sec) {
+  if (sec < 60) return `${Math.round(sec)}秒`;
+  if (sec < 3600) return `${Math.round(sec / 60)}分钟`;
+  return `${(sec / 3600).toFixed(1)}小时`;
+}
+
+async function loadContextTriggerShadow() {
+  const includeDiagnostics = $("shadowIncludeDiagnostics").checked;
+  try {
+    const data = await api("GET", `/api/sentinel/context-trigger-shadow?limit=50&include_non_matched=${includeDiagnostics}`);
+    const stats = data.stats || {};
+    const byStatus = stats.by_status || {};
+    $("shadowStatusText").textContent = data.enabled ? "采集中" : "开关关闭";
+    $("shadowStatsText").textContent = `命中 ${byStatus.matched || 0} · 未命中 ${byStatus.not_matched || 0} · 缺数据 ${byStatus.unavailable || 0}`;
+    const entries = data.entries || [];
+    if (entries.length === 0) {
+      $("shadowList").innerHTML = `<div class="log-empty">${includeDiagnostics ? "暂无影子记录" : "暂无命中候选"}</div>`;
+      return;
+    }
+    $("shadowList").innerHTML = entries.map(renderShadowEntry).join("");
+  } catch(e) {
+    $("shadowStatusText").textContent = "读取失败";
+    $("shadowList").innerHTML = '<div class="log-empty">影子记录加载失败</div>';
+  }
+}
+
+function renderShadowEntry(entry) {
+  const ruleNames = {
+    location_region_transition: "位置范围跃迁",
+    first_interaction_after_long_silence: "长静默后首次交互",
+  };
+  const statusNames = {matched:"命中", not_matched:"未命中", unavailable:"缺数据"};
+  const labels = {right:"对", wrong:"不对", indifferent:"无所谓"};
+  const gate = entry.gate || {};
+  const gateText = entry.evaluation_status === "matched"
+    ? (gate.wake_allowed ? "边界放行" : `边界拦下：${(gate.blocked_reasons || []).join("、") || gate.status || "未知"}`)
+    : "未运行唤醒边界";
+  const ownerOutcome = entry.owner_message_within_30m === null
+    ? "30分钟结果待回填"
+    : (entry.owner_message_within_30m ? "随后30分钟你主动说过话" : "随后30分钟你没有主动说话");
+  const sentinelOutcome = entry.legacy_sentinel_woke_within_5m === null
+    ? "旧哨兵结果待回填"
+    : (entry.legacy_sentinel_woke_within_5m ? "旧哨兵5分钟内醒过" : "旧哨兵5分钟内没醒");
+  const labelButtons = entry.evaluation_status === "matched"
+    ? `<div class="shadow-entry-meta">如果当时醒来，合适吗？</div><div class="shadow-labels">${["right", "wrong", "indifferent"].map(label =>
+        `<button class="${entry.owner_label === label ? "active" : ""}" onclick="setShadowLabel('${entry.id}', '${label}')">${labels[label]}</button>`
+      ).join("")}</div>`
+    : "";
+  return `<div class="shadow-entry">
+    <div class="shadow-entry-head"><span>${escHtml(ruleNames[entry.rule] || entry.rule)} · ${escHtml(statusNames[entry.evaluation_status] || entry.evaluation_status)}</span><span>${new Date(entry.occurred_at * 1000).toLocaleString()}</span></div>
+    <div class="shadow-entry-reason">${escHtml(entry.evaluation_reason || "")}</div>
+    <div class="shadow-entry-meta">${escHtml(gateText)} · ${escHtml(sentinelOutcome)} · ${escHtml(ownerOutcome)}</div>
+    ${labelButtons}
+  </div>`;
+}
+
+async function setShadowLabel(evaluationId, label) {
+  try {
+    await api("PUT", `/api/sentinel/context-trigger-shadow/${encodeURIComponent(evaluationId)}/label`, {label});
+    await loadContextTriggerShadow();
+  } catch(e) {
+    alert("标注失败：" + (e.message || e));
+  }
+}
+
+async function loadLogDates() {
+  try {
+    const data = await api("GET", "/api/sentinel/logs");
+    const sel = $("logDateSelect");
+    if (data.dates.length === 0) { sel.innerHTML = '<option>暂无日志</option>'; $("logList").innerHTML = '<div class="log-empty">暂无监控日志</div>'; return; }
+    sel.innerHTML = data.dates.map(d => `<option value="${d}">${d}</option>`).join("");
+    await loadLogDate();
+  } catch(e) { $("logList").innerHTML = '<div class="log-empty">加载失败</div>'; }
+}
+
+async function loadLogDate() {
+  const date = $("logDateSelect").value;
+  if (!date || date === "暂无日志") return;
+  try {
+    const data = await api("GET", `/api/sentinel/logs/${date}`);
+    const entries = data.entries;
+    const el = $("logList");
+    if (!entries || entries.length === 0) { el.innerHTML = '<div class="log-empty">该日暂无日志</div>'; return; }
+    el.innerHTML = entries.map(e => {
+      const isCore = e.monitoringlog && e.monitoringlog.startsWith("🧠");
+      const cls = isCore ? "log-core" : "log-text";
+      const callTag = e.call_core ? ' <span style="color:#d32f2f;font-size:11px">[唤醒Core]</span>' : '';
+      const summaryTag = e.summary ? `<div style="color:#1a73e8;font-size:11px;margin-top:2px">📋 概况: ${escHtml(e.summary)}</div>` : '';
+      const reasonTag = e.core_reason ? `<div style="color:#e65100;font-size:11px;margin-top:2px">⚡ 唤醒原因: ${escHtml(e.core_reason)}</div>` : '';
+      return `<div class="log-entry"><span class="log-time">${escHtml(e.time || '')}</span><span class="${cls}">${escHtml(e.monitoringlog || '')}</span>${callTag}${summaryTag}${reasonTag}</div>`;
+    }).join("");
+    el.scrollTop = el.scrollHeight;
+  } catch(e) { $("logList").innerHTML = '<div class="log-empty">加载失败</div>'; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+pyinstaller
+Pillow
+certifi
+# Standard Windows CPython installs this wheel directly.  build_windows.bat
+# uses the matching MSYS2 package when sysconfig reports mingw/UCRT.
+PySide6

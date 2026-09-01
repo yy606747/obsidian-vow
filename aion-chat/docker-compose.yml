@@ -1,0 +1,23 @@
+services:
+  obsidian-vow:
+    build:
+      context: ..
+      dockerfile: aion-chat/Dockerfile
+    image: obsidian-vow:latest
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      AION_BIND_HOST: "0.0.0.0"
+      AION_BIND_PORT: "18080"
+      AION_SIGNAL_DAILY_TIMEZONE: "${AION_SIGNAL_DAILY_TIMEZONE:-UTC}"
+    ports:
+      - "127.0.0.1:18080:18080"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18080/static/home.html", "-o", "/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

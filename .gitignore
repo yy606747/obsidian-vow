@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+encrypted.data
+
+# Runtime data
+aion-chat/data/*
+!aion-chat/data/.gitkeep
+test-results/
+*.log
+*.ses
+
+# Generated and vendored artifacts
+aion-chat/wheels/
+aion-chat/static/*.apk
+node_modules/
+dist/
+build/
+
+# Android
+AionApp/.gradle/
+AionApp/app/build/
+AionApp/local.properties
+*.apk
+*.aab
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

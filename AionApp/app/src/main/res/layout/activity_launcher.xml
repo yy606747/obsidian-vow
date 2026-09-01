@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/launcher_background"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:padding="32dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Obsidian Vow"
+            android:textSize="28sp"
+            android:textColor="#f3e7d5"
+            android:textStyle="bold"
+            android:layout_marginTop="40dp"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="连接到你的 Obsidian Vow 服务"
+            android:textSize="14sp"
+            android:textColor="#b5a898"
+            android:layout_marginBottom="32dp" />
+
+        <!-- 服务器 URL -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="服务器地址"
+            android:textSize="13sp"
+            android:textColor="#b5a898"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/etUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="https://obsidian-vow.xxx.ts.net"
+            android:textColorHint="#75695d"
+            android:textColor="#e8dcc8"
+            android:textSize="14sp"
+            android:inputType="textUri"
+            android:background="@drawable/launcher_input_bg"
+            android:padding="14dp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Bearer Token (可选) -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="访问 Token（留空表示不鉴权）"
+            android:textSize="13sp"
+            android:textColor="#b5a898"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/etToken"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="（可选）"
+            android:textColorHint="#75695d"
+            android:textColor="#e8dcc8"
+            android:textSize="14sp"
+            android:inputType="textPassword"
+            android:background="@drawable/launcher_input_bg"
+            android:padding="14dp"
+            android:layout_marginBottom="32dp" />
+
+        <!-- 设备名称（用于 AI 区分手机 / 平板，留空用系统型号） -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="设备名称（留空用系统型号，如「华为平板」）"
+            android:textSize="13sp"
+            android:textColor="#b5a898"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/etDeviceName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="（可选）"
+            android:textColorHint="#75695d"
+            android:textColor="#e8dcc8"
+            android:textSize="14sp"
+            android:inputType="text"
+            android:background="@drawable/launcher_input_bg"
+            android:padding="14dp"
+            android:layout_marginBottom="32dp" />
+
+        <!-- 连接按钮 -->
+        <Button
+            android:id="@+id/btnConnect"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="连接"
+            android:textSize="16sp"
+            android:textColor="#1a1714"
+            android:textStyle="bold"
+            android:background="@drawable/launcher_button_primary"
+            android:padding="16dp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Health Connect 授权按钮（可选） -->
+        <Button
+            android:id="@+id/btnHealthAuth"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="授权健康数据（可选）"
+            android:textSize="14sp"
+            android:textColor="#e8dcc8"
+            android:background="@drawable/launcher_button_secondary"
+            android:padding="14dp"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tvHealthStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="未检测 · 点击按钮跳转「健康连接」授权"
+            android:textSize="11sp"
+            android:textColor="#75695d"
+            android:gravity="center"
+            android:layout_marginBottom="20dp" />
+
+        <!-- 记住选择 -->
+        <CheckBox
+            android:id="@+id/cbRemember"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="记住配置，下次自动连接"
+            android:textSize="13sp"
+            android:textColor="#b5a898"
+            android:buttonTint="#d4943a"
+            android:layout_marginBottom="24dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="默认进入首页，聊天页从首页打开\n推荐用 Tailscale MagicDNS 的 https://xxx.ts.net 域名"
+            android:textSize="11sp"
+            android:textColor="#75695d"
+            android:gravity="center"
+            android:layout_marginTop="16dp" />
+
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>活动日志 - Obsidian Vow</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1714">
+<style>
+/* ── 筛选栏 ── */
+.filter-row {
+  display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;
+}
+.filter-row select, .filter-row button {
+  background:var(--surface2); color:var(--text); border:1px solid var(--border);
+  border-radius:6px; padding:6px 10px; font-size:13px; outline:none; cursor:pointer;
+}
+.filter-row select { flex:1; min-width:0; }
+.filter-row .active-filter {
+  background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600;
+}
+
+/* ── 统计信息 ── */
+.stats-bar {
+  display:flex; gap:12px; margin-bottom:10px; font-size:12px; color:var(--text2);
+  flex-wrap:wrap;
+}
+.stats-bar .stat-item {
+  display:flex; align-items:center; gap:4px;
+}
+.stats-bar .stat-dot {
+  width:8px; height:8px; border-radius:50%; flex-shrink:0;
+}
+.stat-dot.pc { background:#4285f4; }
+.stat-dot.phone { background:#34a853; }
+
+/* ── 日志列表 ── */
+.log-list {
+  flex:1; overflow-y:auto; max-height:calc(100dvh - 200px);
+  border:1px solid var(--border); border-radius:10px; background:linear-gradient(180deg, var(--bg) 0%, rgba(26,23,20,0.95) 100%); padding:4px;
+  box-shadow: inset 0 1px 0 rgba(212,148,58,0.05);
+}
+.log-entry {
+  padding:9px 10px; border-bottom:1px solid rgba(58,53,48,0.4); font-size:13px; line-height:1.5;
+  display:flex; align-items:flex-start; gap:8px; border-radius:6px; transition: background 0.2s;
+}
+.log-entry:hover { background: rgba(212,148,58,0.03); }
+.log-entry:last-child { border-bottom:none; }
+
+.log-device {
+  display:inline-flex; align-items:center; justify-content:center;
+  min-width:20px; height:20px; border-radius:4px; font-size:11px; flex-shrink:0;
+  font-weight:600; padding:0 4px; margin-top:1px;
+}
+.log-device.pc { background:rgba(21,101,192,0.15); color:#64b5f6; }
+.log-device.phone { background:rgba(46,125,50,0.15); color:#7aad6a; }
+
+.log-body { flex:1; min-width:0; }
+.log-time { color:var(--text2); font-size:11px; font-family:monospace; margin-right:6px; }
+.log-app { font-weight:600; color:var(--text); }
+.log-action { color:var(--text2); font-size:12px; }
+.log-title { color:var(--text2); font-size:12px; margin-top:2px; word-break:break-all; }
+.log-empty { padding:24px; text-align:center; color:var(--text3); font-size:14px; }
+
+/* ── 实时指示器 ── */
+.live-dot {
+  width:8px; height:8px; border-radius:50%; background:#4caf50;
+  animation:livePulse 1.5s ease-in-out infinite; display:inline-block; margin-left:6px;
+  vertical-align:middle;
+}
+@keyframes livePulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* ── 摘要弹窗 ── */
+.summary-overlay {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:100;
+  align-items:center; justify-content:center; padding:16px;
+}
+.summary-overlay.show { display:flex; }
+.summary-panel {
+  background:var(--surface); border-radius:12px; width:100%; max-width:520px;
+  max-height:80vh; display:flex; flex-direction:column; box-shadow:0 8px 32px rgba(0,0,0,0.25);
+}
+.summary-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 16px; border-bottom:1px solid var(--border); flex-shrink:0;
+}
+.summary-header h3 { margin:0; font-size:15px; }
+.summary-close {
+  background:none; border:none; font-size:20px; color:var(--text2); cursor:pointer; padding:0 4px;
+}
+.summary-body {
+  overflow-y:auto; padding:12px 16px; flex:1;
+}
+.summary-item {
+  padding:10px 0; border-bottom:1px solid var(--border); font-size:13px; line-height:1.6;
+}
+.summary-item:last-child { border-bottom:none; }
+.summary-time {
+  font-family:monospace; font-size:12px; color:var(--accent); font-weight:600; margin-right:8px;
+}
+.summary-count {
+  font-size:11px; color:var(--text3); margin-left:6px;
+}
+.summary-text { color:var(--text); }
+.summary-empty { padding:32px; text-align:center; color:var(--text3); font-size:14px; }
+.summary-idle { color:var(--text3); font-style:italic; }
+.summary-stats {
+  padding:10px 16px; border-top:1px solid var(--border); font-size:12px; color:var(--text2);
+  text-align:center; flex-shrink:0;
+}
+</style>
+</head>
+<body>
+<div class="sub-page">
+  <div class="top-bar">
+    <button class="back-btn" onclick="location.href='/'">⬅</button>
+    <h2>📊 活动日志 <span class="live-dot" id="liveDot" title="实时接收中"></span></h2>
+    <div style="margin-left:auto; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text2);">
+      <span>AI联动</span>
+      <label class="toggle-switch" title="开启后AI可以查看设备动态、哨兵/监督也会携带活动摘要">
+        <input type="checkbox" id="activityTrackingToggle" onchange="toggleActivityTracking(this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+  <div class="page-content">
+    <!-- 筛选 -->
+    <div class="filter-row">
+      <select id="viewMode" onchange="onViewModeChange()">
+        <option value="recent" selected>最近 3 小时</option>
+        <option value="date">按日期查看</option>
+      </select>
+      <select id="dateSelect" onchange="loadByDate()" style="display:none"></select>
+      <button id="filterAll" class="active-filter" onclick="setDeviceFilter('all')">全部</button>
+      <button id="filterPC" onclick="setDeviceFilter('pc')">💻</button>
+      <button id="filterPhone" onclick="setDeviceFilter('phone')">📱</button>
+      <button onclick="refresh()">🔄</button>
+      <button onclick="clearAllLogs()" style="color:var(--danger)">🗑</button>
+      <button onclick="openSummary()" title="查看活动摘要">📋</button>
+    </div>
+    <!-- 统计 -->
+    <div class="stats-bar" id="statsBar"></div>
+    <!-- 日志 -->
+    <div class="log-list" id="logList"><div class="log-empty">暂无活动记录</div></div>
+  </div>
+</div>
+
+<!-- 摘要弹窗 -->
+<div class="summary-overlay" id="summaryOverlay" onclick="if(event.target===this)closeSummary()">
+  <div class="summary-panel">
+    <div class="summary-header">
+      <h3>📋 活动摘要（每10分钟）</h3>
+      <button class="summary-close" onclick="closeSummary()">✕</button>
+    </div>
+    <div class="summary-body" id="summaryBody">
+      <div class="summary-empty">加载中...</div>
+    </div>
+    <div class="summary-stats" id="summaryStats"></div>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script src="/static/web_push.js"></script>
+<script>
+let allEntries = [];
+let deviceFilter = 'all';
+
+/* ── WebSocket 实时推送 ── */
+connectCommonWS(msg => {
+  if (msg.type === 'activity_log' && msg.data) {
+    // 仅在"最近"模式下实时追加
+    if ($('viewMode').value === 'recent') {
+      allEntries.push(msg.data);
+      renderEntries();
+      // 自动滚到底部
+      const el = $('logList');
+      el.scrollTop = el.scrollHeight;
+    }
+  }
+});
+
+/* ── 视图切换 ── */
+function onViewModeChange() {
+  const mode = $('viewMode').value;
+  $('dateSelect').style.display = mode === 'date' ? '' : 'none';
+  if (mode === 'recent') {
+    loadRecent();
+  } else {
+    loadDates();
+  }
+}
+
+/* ── 设备筛选 ── */
+function setDeviceFilter(f) {
+  deviceFilter = f;
+  ['All','PC','Phone'].forEach(k => {
+    $('filter' + k).classList.toggle('active-filter', k.toLowerCase() === f);
+  });
+  renderEntries();
+}
+
+/* ── 加载最近 N 小时 ── */
+async function loadRecent() {
+  try {
+    const data = await api('GET', '/api/activity/recent');
+    allEntries = data.entries || [];
+    renderEntries();
+    const el = $('logList'); el.scrollTop = el.scrollHeight;
+  } catch(e) {
+    $('logList').innerHTML = '<div class="log-empty">加载失败</div>';
+  }
+}
+
+/* ── 加载日期列表 ── */
+async function loadDates() {
+  try {
+    const data = await api('GET', '/api/activity/dates');
+    const sel = $('dateSelect');
+    if (!data.dates || data.dates.length === 0) {
+      sel.innerHTML = '<option>暂无日志</option>';
+      $('logList').innerHTML = '<div class="log-empty">暂无活动记录</div>';
+      return;
+    }
+    sel.innerHTML = data.dates.map(d => `<option value="${d}">${d}</option>`).join('');
+    await loadByDate();
+  } catch(e) {
+    $('logList').innerHTML = '<div class="log-empty">加载失败</div>';
+  }
+}
+
+/* ── 加载指定日期 ── */
+async function loadByDate() {
+  const date = $('dateSelect').value;
+  if (!date || date === '暂无日志') return;
+  try {
+    const data = await api('GET', `/api/activity/logs/${date}`);
+    allEntries = data.entries || [];
+    renderEntries();
+    const el = $('logList'); el.scrollTop = el.scrollHeight;
+  } catch(e) {
+    $('logList').innerHTML = '<div class="log-empty">加载失败</div>';
+  }
+}
+
+/* ── 渲染 ── */
+function renderEntries() {
+  const filtered = deviceFilter === 'all'
+    ? allEntries
+    : allEntries.filter(e => e.device === deviceFilter);
+
+  // 统计
+  const pcCount = allEntries.filter(e => e.device === 'pc').length;
+  const phoneCount = allEntries.filter(e => e.device === 'phone').length;
+  $('statsBar').innerHTML = `
+    <span class="stat-item"><span class="stat-dot pc"></span> PC: ${pcCount} 条</span>
+    <span class="stat-item"><span class="stat-dot phone"></span> 手机: ${phoneCount} 条</span>
+    <span class="stat-item">共 ${allEntries.length} 条</span>
+  `;
+
+  const el = $('logList');
+  if (filtered.length === 0) {
+    el.innerHTML = '<div class="log-empty">暂无活动记录</div>';
+    return;
+  }
+
+  el.innerHTML = filtered.map(e => {
+    const deviceCls = e.device === 'pc' ? 'pc' : 'phone';
+    const deviceLabel = e.device === 'pc' ? 'PC' : '📱';
+    // PC: 显示窗口标题；手机: 如果 title 是包名就不显示
+    const isPackageName = e.title && e.title.includes('.') && !e.title.includes(' ');
+    const showTitle = e.title && !isPackageName && e.title !== e.app;
+    const titleHtml = showTitle
+      ? `<div class="log-title">${escHtml(e.title)}</div>`
+      : '';
+    // 动作描述
+    const action = e.device === 'phone' ? '打开了' : '正在使用';
+    return `<div class="log-entry">
+      <span class="log-device ${deviceCls}">${deviceLabel}</span>
+      <div class="log-body">
+        <span class="log-time">${escHtml(e.time || '')}</span>
+        <span class="log-action">${action} </span><span class="log-app">${escHtml(e.app || '')}</span>
+        ${titleHtml}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ── 刷新 ── */
+function refresh() {
+  if ($('viewMode').value === 'recent') loadRecent();
+  else loadByDate();
+}
+
+/* ── 清除全部日志 ── */
+async function clearAllLogs() {
+  if (!confirm('确定要清除所有活动日志吗？')) return;
+  try {
+    const res = await api('POST', '/api/activity/clear');
+    if (res.ok) {
+      allEntries = [];
+      renderEntries();
+      showToast('已清除 ' + (res.deleted || 0) + ' 个日志文件');
+    } else {
+      showToast('清除失败');
+    }
+  } catch(e) {
+    showToast('清除失败');
+  }
+}
+
+/* ── 摘要弹窗 ── */
+async function openSummary() {
+  $('summaryOverlay').classList.add('show');
+  $('summaryBody').innerHTML = '<div class="summary-empty">加载中...</div>';
+  $('summaryStats').textContent = '';
+  try {
+    const data = await api('GET', '/api/activity/summary');
+    const items = data.summaries || [];
+    if (items.length === 0) {
+      $('summaryBody').innerHTML = '<div class="summary-empty">暂无活动摘要</div>';
+      return;
+    }
+    const totalRaw = items.reduce((s, i) => s + i.count, 0);
+    const activeItems = items.filter(i => i.count > 0);
+    $('summaryBody').innerHTML = items.map(i => {
+      const isIdle = i.count === 0;
+      const countHtml = isIdle ? '' : `<span class="summary-count">${i.count}条→1条</span>`;
+      const textCls = isIdle ? 'summary-text summary-idle' : 'summary-text';
+      return `<div class="summary-item">
+        <span class="summary-time">${escHtml(i.start)}~${escHtml(i.end)}</span>
+        ${countHtml}
+        <div class="${textCls}">${escHtml(i.summary)}</div>
+      </div>`;
+    }).join('');
+    $('summaryStats').textContent = `${totalRaw} 条原始记录 → ${activeItems.length} 条活动摘要 + ${items.length - activeItems.length} 段空闲`;
+    const sb = $('summaryBody'); sb.scrollTop = sb.scrollHeight;
+  } catch(e) {
+    $('summaryBody').innerHTML = '<div class="summary-empty">加载失败</div>';
+  }
+}
+function closeSummary() {
+  $('summaryOverlay').classList.remove('show');
+}
+
+/* ── AI联动总开关 ── */
+async function loadActivityConfig() {
+  try {
+    const data = await api('GET', '/api/activity/config');
+    $('activityTrackingToggle').checked = data.activity_tracking_enabled;
+  } catch(e) {}
+}
+async function toggleActivityTracking(enabled) {
+  try {
+    await api('PUT', '/api/activity/config', { activity_tracking_enabled: enabled });
+    showToast(enabled ? 'AI联动已开启' : 'AI联动已关闭');
+  } catch(e) {
+    showToast('设置失败');
+    $('activityTrackingToggle').checked = !enabled;
+  }
+}
+
+/* ── 初始化 ── */
+loadRecent();
+loadActivityConfig();
+</script>
+</body>
+</html>

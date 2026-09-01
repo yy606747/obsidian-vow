@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>世界书 - Obsidian Vow</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1714">
+</head>
+<body>
+<div class="sub-page">
+  <div class="top-bar">
+    <button class="back-btn" onclick="location.href='/'">⬅</button>
+    <h2>📖 世界书</h2>
+  </div>
+  <div class="page-content">
+    <!-- 头像 -->
+    <div style="display:flex; gap:24px; justify-content:center; margin-bottom:16px;">
+      <div style="text-align:center">
+        <img id="avAi" class="av-img" src="/api/avatar/ai" alt="AI">
+        <div style="margin-top:6px; font-size:13px; color:var(--text2)">AI 头像</div>
+        <div style="margin-top:4px; display:flex; gap:4px; justify-content:center;">
+          <label class="mini-btn" style="background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px;">
+            上传<input type="file" accept="image/*" style="display:none" onchange="uploadAvatar('ai', this)">
+          </label>
+          <button class="mini-btn" style="background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px;" onclick="resetAvatar('ai')">重置</button>
+        </div>
+      </div>
+      <div style="text-align:center">
+        <img id="avUser" class="av-img" src="/api/avatar/user" alt="你">
+        <div style="margin-top:6px; font-size:13px; color:var(--text2)">你的头像</div>
+        <div style="margin-top:4px; display:flex; gap:4px; justify-content:center;">
+          <label class="mini-btn" style="background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px;">
+            上传<input type="file" accept="image/*" style="display:none" onchange="uploadAvatar('user', this)">
+          </label>
+          <button class="mini-btn" style="background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px;" onclick="resetAvatar('user')">重置</button>
+        </div>
+      </div>
+    </div>
+    <style>
+      .av-img { width:72px; height:72px; border-radius:50%; object-fit:cover; border:2px solid rgba(212,148,58,0.3); background:var(--surface2); box-shadow: 0 0 16px rgba(212,148,58,0.15), 0 2px 8px rgba(0,0,0,0.3); transition: border-color 0.3s, box-shadow 0.3s; }
+      .av-img:hover { border-color: var(--accent); box-shadow: 0 0 24px rgba(212,148,58,0.25), 0 4px 12px rgba(0,0,0,0.3); }
+    </style>
+
+    <label class="form-label">AI 名字</label>
+    <input class="form-input" type="text" id="wbAiName" placeholder="默认：AI" autocomplete="off">
+    <label class="form-label">用户名字</label>
+    <input class="form-input" type="text" id="wbUserName" placeholder="默认：你" autocomplete="off">
+    <label class="form-label">AI 人设</label>
+    <div class="form-hint">设定 AI 的性格、角色、行为规则等</div>
+    <textarea class="form-input" id="wbAiPersona" placeholder="例如：你是一个叫小星的AI助手，语气活泼可爱..."></textarea>
+    <label class="form-label">用户人设</label>
+    <div class="form-hint">关于你自己的信息，AI 会以此为参考</div>
+    <textarea class="form-input" id="wbUserPersona" placeholder="例如：我叫小明，喜欢编程和游戏..."></textarea>
+    <div class="btn-row">
+      <button class="btn-cancel" onclick="location.href='/'">取消</button>
+      <button class="btn-save" onclick="saveWorldBook()">保存</button>
+    </div>
+
+    <!-- ═══ AI 行为 prompt ═══ -->
+    <h3 style="margin:24px 0 10px 0; padding-top:16px; border-top:1px solid var(--border); font-size:15px;">🎭 AI 行为</h3>
+    <div class="form-hint" style="margin-bottom:12px">
+      这两段 prompt 决定 AI 写心语的频率、主动联系你的标准。改完会立即生效（下次推理时读取）。
+    </div>
+
+    <label class="form-label">
+      心语 prompt
+      <button class="mini-btn" style="float:right; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:2px 8px; cursor:pointer; font-size:11px;" onclick="restoreHeart()">恢复默认</button>
+    </label>
+    <div class="form-hint">[HEART:…] 指令的使用说明。写得越鼓励、越具体，AI 会越频繁地写内心小想法。</div>
+    <textarea class="form-input" id="aiHeartPrompt" style="min-height:140px; font-family:ui-monospace, monospace; font-size:13px;"></textarea>
+
+    <label class="form-label">
+      哨兵 call_core 判断标准
+      <button class="mini-btn" style="float:right; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:2px 8px; cursor:pointer; font-size:11px;" onclick="restoreSentinel()">恢复默认</button>
+    </label>
+    <div class="form-hint">哨兵 LLM 如何决定何时主动发消息。调低主动联系频率、改变判断信号都在这里。</div>
+    <textarea class="form-input" id="aiSentinelCriteria" style="min-height:180px; font-family:ui-monospace, monospace; font-size:13px;"></textarea>
+
+    <div class="btn-row">
+      <button class="btn-save" onclick="saveAIBehavior()">保存行为 prompt</button>
+    </div>
+  </div>
+</div>
+<script src="/static/common.js"></script>
+<script src="/static/web_push.js"></script>
+<script>
+connectCommonWS();
+
+let _behaviorDefaults = {};
+
+(async function init() {
+  const wb = await api("GET", "/api/worldbook");
+  $("wbAiName").value = wb.ai_name || "";
+  $("wbUserName").value = wb.user_name || "";
+  $("wbAiPersona").value = wb.ai_persona || "";
+  $("wbUserPersona").value = wb.user_persona || "";
+
+  const ab = await api("GET", "/api/ai_behavior");
+  _behaviorDefaults = ab.defaults || {};
+  const cur = ab.current || {};
+  $("aiHeartPrompt").value = cur.heart_whisper_prompt || "";
+  $("aiSentinelCriteria").value = cur.sentinel_call_core_criteria || "";
+
+  await refreshAvatars();
+})();
+
+async function refreshAvatars() {
+  try {
+    const info = await api("GET", "/api/avatar/info");
+    $("avAi").src = `/api/avatar/ai?v=${info.ai || 0}`;
+    $("avUser").src = `/api/avatar/user?v=${info.user || 0}`;
+  } catch (e) {}
+}
+
+async function uploadAvatar(kind, input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) {
+    showToast("❌ 文件过大（>5MB）", 3000);
+    input.value = "";
+    return;
+  }
+  const fd = new FormData();
+  fd.append("file", file);
+  showToast("⏳ 上传中...", 1200);
+  try {
+    const resp = await fetch(`/api/avatar/${kind}`, { method: "POST", body: fd });
+    const res = await resp.json();
+    if (res.error) { showToast("❌ " + res.error, 3000); return; }
+    showToast("✅ 头像已更新");
+    await refreshAvatars();
+  } catch (e) {
+    showToast("❌ 上传失败: " + e, 3000);
+  } finally {
+    input.value = "";
+  }
+}
+
+async function resetAvatar(kind) {
+  if (!confirm(`恢复${kind === 'ai' ? 'AI' : '你的'}默认头像？`)) return;
+  await fetch(`/api/avatar/${kind}`, { method: "DELETE" });
+  showToast("🗑 已重置");
+  await refreshAvatars();
+}
+
+async function saveWorldBook() {
+  const wb = {
+    ai_name: $("wbAiName").value.trim() || "AI",
+    user_name: $("wbUserName").value.trim() || "你",
+    ai_persona: $("wbAiPersona").value,
+    user_persona: $("wbUserPersona").value
+  };
+  await api("PUT", "/api/worldbook", wb);
+  showToast("✅ 世界书已保存");
+}
+
+async function saveAIBehavior() {
+  await api("PUT", "/api/ai_behavior", {
+    heart_whisper_prompt: $("aiHeartPrompt").value,
+    sentinel_call_core_criteria: $("aiSentinelCriteria").value,
+  });
+  showToast("✅ AI 行为已保存");
+}
+
+function restoreHeart() {
+  if (!confirm("恢复心语 prompt 为默认值？")) return;
+  $("aiHeartPrompt").value = _behaviorDefaults.heart_whisper_prompt || "";
+}
+function restoreSentinel() {
+  if (!confirm("恢复哨兵判断标准为默认值？")) return;
+  $("aiSentinelCriteria").value = _behaviorDefaults.sentinel_call_core_criteria || "";
+}
+</script>
+</body>
+</html>

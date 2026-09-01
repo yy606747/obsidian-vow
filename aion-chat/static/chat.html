@@ -1,0 +1,194 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Obsidian Vow</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/public/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a1714">
+<link rel="stylesheet" href="/static/chat.css?v=20260825-voice-input">
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button data-action="newConversation">+ 新对话</button>
+      <button class="settings-btn" data-action="openFileManager">📁</button>
+      <button class="settings-btn" data-action="openSubPage" data-subpage="/settings">⚙</button>
+    </div>
+    <div class="conv-list" id="convList"></div>
+    <div class="sidebar-footer">
+      <button id="sysLogBtn" data-action="openSystemLog">📋 系统日志</button>
+      <button data-action="openWhisper">💗 密语时刻</button>
+      <button data-action="openAiDom">🔒 亲密控制</button>
+      <button data-action="openTide">🌊 潮汐控制</button>
+      <button data-action="openSubPage" data-subpage="/devices">📟 设备面板</button>
+      <button data-action="openSubPage" data-subpage="/">🏠 返回主页</button>
+    </div>
+  </aside>
+  <div class="overlay" id="overlay" data-action="closeSidebar"></div>
+
+  <div class="modal-overlay" id="sysLogModal">
+    <div class="modal syslog-modal">
+      <h3>📋 系统日志</h3>
+      <div class="syslog-count" id="sysLogCount">共 0 条（刷新后清空）</div>
+      <div class="syslog-list" id="sysLogList">
+        <div class="syslog-empty">暂无日志</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn-cancel" data-action="clearSystemLog">清空</button>
+        <button class="btn-cancel" data-action="closeSystemLog">关闭</button>
+      </div>
+    </div>
+  </div>
+
+
+
+
+
+
+
+
+
+  <div class="alarm-overlay" id="alarmOverlay">
+    <div class="alarm-box">
+      <div class="alarm-icon">⏰</div>
+      <h3>日程提醒</h3>
+      <div class="alarm-content" id="alarmContent"></div>
+      <div class="alarm-time" id="alarmTime"></div>
+      <button data-action="dismissAlarm">确认</button>
+    </div>
+  </div>
+
+  <main class="chat-area">
+    <div class="chat-header">
+      <button class="home-btn" data-action="openSubPage" data-subpage="/" title="返回主页">⬅</button>
+      <button class="menu-btn" data-action="openSidebar">☰</button>
+      <div class="title" id="chatTitle" data-action="renameCurrent">Obsidian Vow</div>
+      <div class="tts-toggle" title="自动语音播放">
+        <span class="tts-label">🔊</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="ttsToggle">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <button class="config-btn" data-action="toggleConfig">&#9881;</button>
+    </div>
+    <div class="config-popup" id="configPopup">
+      <label>模型</label>
+      <select id="modelSelect"></select>
+      <label>上下文数量</label>
+      <div class="slider-row">
+        <input type="range" id="contextSlider" min="1" max="100" value="30">
+        <span class="slider-val" id="contextValue">30条</span>
+      </div>
+      <label>模型温度</label>
+      <div class="slider-row">
+        <input type="range" id="tempSlider" min="0" max="2" step="0.1" value="1">
+        <span class="slider-val" id="tempValue">1</span>
+      </div>
+      <div class="cam-section">
+        <div class="cam-section-title">◈ 语音合成 (TTS)</div>
+        <div class="tts-voice-row">
+          <label>音色</label>
+          <select id="ttsVoiceSelect"><option value="">加载中...</option></select>
+          <button class="tts-refresh-btn" data-action="refreshTTSVoices" title="刷新音色列表">🔄</button>
+        </div>
+      </div>
+      <div class="cam-section">
+        <div class="cam-section-title">🎙 语音唤醒 (通话模式)</div>
+        <div class="cam-toggle-row">
+          <span class="cam-toggle-label">语音监听</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="voiceToggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="cam-config-row">
+          <label>麦克风</label>
+          <select class="voice-config-control" id="voiceMicSource">
+            <option value="local">🖥 本机 (PC后端)</option>
+            <option value="remote">📱 手机麦克风</option>
+          </select>
+        </div>
+        <div class="cam-config-row">
+          <label>唤醒词</label>
+          <input class="voice-config-control" type="text" id="voiceWakeWord" value="老公">
+        </div>
+        <div class="cam-status" id="voiceStatus">未开启</div>
+      </div>
+    </div>
+    <div class="context-bar">
+      <span class="context-label">上下文:</span>
+      <input type="range" min="1" max="100" value="20">
+      <span>20 条</span>
+    </div>
+    <div class="voice-indicator" id="voiceIndicator">
+      <span class="voice-pulse"></span>
+      <span id="voiceIndicatorText">语音监听中...</span>
+      <button class="voice-hangup-btn" data-action="voiceHangup" id="voiceHangupBtn">挂断</button>
+    </div>
+    <div class="messages" id="messages"></div>
+    <div class="input-area">
+      <div class="preview-area" id="previewArea"></div>
+      <div class="input-row" id="textInputRow">
+        <button class="upload-btn" data-action="chooseUpload" title="发送图片/视频">📎</button>
+        <input class="hidden-file-input" type="file" id="fileInput" accept="image/*,video/*" multiple>
+        <button class="voice-mode-btn" id="voiceMessageToggle" data-voice-action="voice-mode" title="发送语音消息">🎙</button>
+        <textarea id="input" rows="1" placeholder="输入消息..."></textarea>
+        <button class="send-btn" id="sendBtn" data-action="send" disabled>➤</button>
+      </div>
+      <div class="voice-record-row" id="voiceRecordRow" aria-hidden="true">
+        <button class="voice-mode-btn" data-voice-action="text-mode" title="切回文字输入">⌨</button>
+        <button class="voice-hold-btn" id="voiceHoldBtn" data-voice-action="hold">按住 说话</button>
+        <span class="voice-record-time" id="voiceRecordTime">0:00</span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/js/chat/perf.js"></script>
+<script src="/static/js/chat/core.js?v=20260813-arch-debt"></script>
+<script src="/static/js/chat/state.js"></script>
+<script src="/static/js/chat/control_runtime.js?v=20260531-control-trace4"></script>
+<script src="/static/js/chat/control_toy_router.js?v=20260531-control-trace4"></script>
+<script src="/static/js/chat/tide_toy_router.js"></script>
+<script src="/static/js/chat/control_emergency_stop.js"></script>
+<script src="/static/js/chat/mood.js"></script>
+<script src="/static/js/chat/config_panel.js"></script>
+<script src="/static/js/chat/render.js?v=20260825-voice-input"></script>
+<script src="/static/js/chat/lifecycle.js"></script>
+<script src="/static/js/chat/alarms.js"></script>
+<script src="/static/js/chat/debug_log_facade.js"></script>
+<script src="/static/js/chat/music_cards.js"></script>
+<script src="/static/js/chat/realtime.js?v=20260627-error-persist"></script>
+<script src="/static/js/chat/conversations.js?v=20260825-voice-input"></script>
+<script src="/static/js/chat/toy_bridge.js?v=20260531-control-trace4"></script>
+<script src="/static/js/chat/whisper_toy_facade.js?v=20260531-control-trace4"></script>
+<script src="/static/js/chat/ai_dom_facade.js?v=20260531-control-trace4"></script>
+<script src="/static/js/chat/tide_facade.js?v=20260531-tide-ui3"></script>
+<script src="/static/js/chat/send.js?v=20260825-voice-input"></script>
+<script src="/static/js/chat/messages.js?v=20260825-voice-input"></script>
+<script src="/static/js/chat/indicators.js"></script>
+<script src="/static/js/chat/ui.js?v=20260825-voice-input"></script>
+<script src="/static/js/chat/boot.js"></script>
+<script src="/static/js/chat/voice_facade.js"></script>
+<script src="/static/js/chat/tts.js"></script>
+<script src="/static/js/chat/start.js"></script>
+<script src="/static/js/chat/tts_boot.js"></script>
+<!-- ── 子页面 iframe 浮层（保持聊天页存活，SSE/TTS 不中断） ── -->
+<div id="subPageOverlay">
+  <div id="subPageBar">
+    <button data-action="closeSubPage">✕</button>
+    <span id="subPageTitle"></span>
+  </div>
+  <iframe id="subPageFrame" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"></iframe>
+</div>
+<script src="/static/js/chat/subpage.js"></script>
+<script src="/static/web_push.js"></script>
+</body>
+</html>

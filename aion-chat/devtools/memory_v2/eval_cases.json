@@ -1,0 +1,812 @@
+[
+{
+    "id": "normal_001",
+    "category": "normal",
+    "text": "早上好，我刚醒，脑子还有点慢。",
+    "expect": {
+      "needs_memory": false,
+      "query_type": "normal",
+      "is_open_loop_query": false,
+      "detected_namespaces": [],
+      "preferred_kinds": [],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "normal_002",
+    "category": "normal",
+    "text": "这杯咖啡还行，就是有点苦。",
+    "expect": {
+      "needs_memory": false,
+      "query_type": "normal",
+      "is_open_loop_query": false,
+      "detected_namespaces": [],
+      "preferred_kinds": [],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "normal_003",
+    "category": "normal",
+    "text": "你在吗，随便陪我说两句。",
+    "expect": {
+      "needs_memory": false,
+      "query_type": "normal",
+      "is_open_loop_query": false,
+      "detected_namespaces": [],
+      "preferred_kinds": [],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "normal_004",
+    "category": "normal",
+    "text": "我刚刚洗完脸，准备坐一会儿。",
+    "expect": {
+      "needs_memory": false,
+      "query_type": "normal",
+      "is_open_loop_query": false,
+      "detected_namespaces": [],
+      "preferred_kinds": [],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "normal_005",
+    "category": "normal",
+    "text": "窗外天气看起来还不错。",
+    "expect": {
+      "needs_memory": false,
+      "query_type": "normal",
+      "is_open_loop_query": false,
+      "detected_namespaces": [],
+      "preferred_kinds": [],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "normal_006",
+    "category": "normal",
+    "text": "我有点无聊，但也不知道聊什么。",
+    "expect": {
+      "needs_memory": false,
+      "query_type": "normal",
+      "is_open_loop_query": false,
+      "detected_namespaces": [],
+      "preferred_kinds": [],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "normal_007",
+    "category": "normal",
+    "text": "这首歌还挺好听的。",
+    "expect": {
+      "needs_memory": false,
+      "query_type": "normal",
+      "is_open_loop_query": false,
+      "detected_namespaces": [],
+      "preferred_kinds": [],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "normal_008",
+    "category": "normal",
+    "text": "我想躺一会儿，不想马上动。",
+    "expect": {
+      "needs_memory": false,
+      "query_type": "normal",
+      "is_open_loop_query": false,
+      "detected_namespaces": [],
+      "preferred_kinds": [],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "schedule_001",
+    "category": "schedule",
+    "text": "下午两点要上课，记得提醒我。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "schedule",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["schedule"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["schedule"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "schedule_002",
+    "category": "schedule",
+    "text": "明天算法考试，晚上提醒我复习。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "schedule",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["schedule", "work"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["schedule", "work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "schedule_003",
+    "category": "schedule",
+    "text": "这个作业 ddl 下周五，别让我忘了。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "schedule",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["schedule", "work"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["schedule", "work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "schedule_004",
+    "category": "schedule",
+    "text": "今天上午课程结束后提醒我买水。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "schedule",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["schedule"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["schedule"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "schedule_005",
+    "category": "schedule",
+    "text": "我今晚要写作业，别忘了催我。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "schedule",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["schedule", "work"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["schedule", "work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "schedule_006",
+    "category": "schedule",
+    "text": "明天早八要上课，记得叫我。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "schedule",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["schedule"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["schedule"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "schedule_007",
+    "category": "schedule",
+    "text": "下课后提醒我吃饭。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "schedule",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["schedule"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["schedule"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "schedule_008",
+    "category": "schedule",
+    "text": "考试前一天帮我检查复习计划。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "schedule",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["schedule"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["schedule"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "work_001",
+    "category": "work",
+    "text": "Gemini 503 之后服务器端点该怎么诊断？",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "work",
+      "detected_namespaces_include": ["work"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "work_002",
+    "category": "work",
+    "text": "这个 API 超时问题要怎么排查？",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "work",
+      "detected_namespaces_include": ["work"],
+      "allowed_namespaces_include": ["work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "work_003",
+    "category": "work",
+    "text": "我想重构 memory service 的目录结构。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "work",
+      "detected_namespaces_include": ["work"],
+      "allowed_namespaces_include": ["work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "work_004",
+    "category": "work",
+    "text": "服务器 Docker 容器日志看起来不对。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "work",
+      "detected_namespaces_include": ["work"],
+      "allowed_namespaces_include": ["work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "work_005",
+    "category": "work",
+    "text": "这个测试为什么过不了？",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "work",
+      "detected_namespaces_include": ["work"],
+      "allowed_namespaces_include": ["work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "work_006",
+    "category": "work",
+    "text": "接口返回 503 时应该记录什么？",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "work",
+      "detected_namespaces_include": ["work"],
+      "allowed_namespaces_include": ["work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "work_007",
+    "category": "work",
+    "text": "架构重构下一批该怎么拆？",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "work",
+      "detected_namespaces_include": ["work"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "work_008",
+    "category": "work",
+    "text": "项目调试面板要展示 request_id。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "work",
+      "detected_namespaces_include": ["work"],
+      "allowed_namespaces_include": ["work"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "location_001",
+    "category": "location",
+    "text": "我到教室了，别把我当在宿舍。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "location",
+      "detected_namespaces_include": ["location"],
+      "allowed_namespaces_include": ["location"],
+      "allowed_namespaces_exclude": ["intimate", "device"]
+    }
+  },
+  {
+    "id": "location_002",
+    "category": "location",
+    "text": "定位刚好卡在宿舍边缘。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "location",
+      "detected_namespaces_include": ["location"],
+      "allowed_namespaces_include": ["location"],
+      "allowed_namespaces_exclude": ["intimate", "device"]
+    }
+  },
+  {
+    "id": "location_003",
+    "category": "location",
+    "text": "我从食堂回宿舍了。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "location",
+      "detected_namespaces_include": ["location"],
+      "allowed_namespaces_include": ["location"],
+      "allowed_namespaces_exclude": ["intimate", "device"]
+    }
+  },
+  {
+    "id": "location_004",
+    "category": "location",
+    "text": "地图显示我出门了但我其实还在学校。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "location",
+      "detected_namespaces_include": ["location"],
+      "allowed_namespaces_include": ["location"],
+      "allowed_namespaces_exclude": ["intimate", "device"]
+    }
+  },
+  {
+    "id": "location_005",
+    "category": "location",
+    "text": "到家之后再提醒我洗衣服。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "location",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["location", "schedule"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["location", "schedule"],
+      "allowed_namespaces_exclude": ["intimate", "device"]
+    }
+  },
+  {
+    "id": "location_006",
+    "category": "location",
+    "text": "我在高铁站等车。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "location",
+      "detected_namespaces_include": ["location"],
+      "allowed_namespaces_include": ["location"],
+      "allowed_namespaces_exclude": ["intimate", "device"]
+    }
+  },
+  {
+    "id": "location_007",
+    "category": "location",
+    "text": "教室和宿舍范围需要重新画。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "location",
+      "detected_namespaces_include": ["location"],
+      "allowed_namespaces_include": ["location"],
+      "allowed_namespaces_exclude": ["intimate", "device"]
+    }
+  },
+  {
+    "id": "location_008",
+    "category": "location",
+    "text": "哨兵误判我回家了。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "location",
+      "detected_namespaces_include": ["location"],
+      "allowed_namespaces_include": ["location"],
+      "allowed_namespaces_exclude": ["intimate", "device"]
+    }
+  },
+  {
+    "id": "health_001",
+    "category": "health",
+    "text": "今天低血糖，有点站不稳。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "health",
+      "detected_namespaces_include": ["health"],
+      "allowed_namespaces_include": ["health"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location"]
+    }
+  },
+  {
+    "id": "health_002",
+    "category": "health",
+    "text": "我昨晚睡眠太差，今天反应很慢。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "health",
+      "detected_namespaces_include": ["health"],
+      "allowed_namespaces_include": ["health"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location"]
+    }
+  },
+  {
+    "id": "health_003",
+    "category": "health",
+    "text": "生理期不舒服，别催太狠。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "health",
+      "detected_namespaces_include": ["health"],
+      "allowed_namespaces_include": ["health"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location"]
+    }
+  },
+  {
+    "id": "health_004",
+    "category": "health",
+    "text": "心率有点高，先让我缓一缓。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "health",
+      "detected_namespaces_include": ["health"],
+      "allowed_namespaces_include": ["health"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location"]
+    }
+  },
+  {
+    "id": "health_005",
+    "category": "health",
+    "text": "今天压力大，不适合继续逼自己。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "health",
+      "detected_namespaces_include": ["health"],
+      "preferred_kinds_include": ["emotional"],
+      "allowed_namespaces_include": ["health"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location"]
+    }
+  },
+  {
+    "id": "health_006",
+    "category": "health",
+    "text": "饮食别太极端，我不想又陷进节食里。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "health",
+      "detected_namespaces_include": ["health"],
+      "allowed_namespaces_include": ["health"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location"]
+    }
+  },
+  {
+    "id": "health_007",
+    "category": "health",
+    "text": "减肥计划别让我乱节食。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "health",
+      "detected_namespaces_include": ["health"],
+      "allowed_namespaces_include": ["health"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location"]
+    }
+  },
+  {
+    "id": "health_008",
+    "category": "health",
+    "text": "膝盖有点疼痛，今天别安排跑步。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "health",
+      "detected_namespaces_include": ["health"],
+      "allowed_namespaces_include": ["health"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location"]
+    }
+  },
+  {
+    "id": "device_001",
+    "category": "device",
+    "text": "智能戒指到手后要先做连接测试。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "device",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["device", "work"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["device"],
+      "allowed_namespaces_exclude": ["intimate", "location", "health"]
+    }
+  },
+  {
+    "id": "device_002",
+    "category": "device",
+    "text": "戒指震动两下表示提醒，上课时不要太明显。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "device",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["device", "schedule"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["device", "schedule"],
+      "allowed_namespaces_exclude": ["intimate", "location", "health"]
+    }
+  },
+  {
+    "id": "device_003",
+    "category": "device",
+    "text": "蓝牙设备连不上，要记录错误码。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "device",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["device"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["device"],
+      "allowed_namespaces_exclude": ["intimate", "location", "health"]
+    }
+  },
+  {
+    "id": "device_004",
+    "category": "device",
+    "text": "传感器数据上报频率不要太高。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "device",
+      "detected_namespaces_include": ["device"],
+      "allowed_namespaces_include": ["device"],
+      "allowed_namespaces_exclude": ["intimate", "location", "health"]
+    }
+  },
+  {
+    "id": "device_005",
+    "category": "device",
+    "text": "设备控制协议要有 dry-run。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "device",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["device"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["device"],
+      "allowed_namespaces_exclude": ["intimate", "location", "health"]
+    }
+  },
+  {
+    "id": "device_006",
+    "category": "device",
+    "text": "BLE bridge 需要 mock 模式。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "device",
+      "detected_namespaces_include": ["device"],
+      "allowed_namespaces_include": ["device"],
+      "allowed_namespaces_exclude": ["intimate", "location", "health"]
+    }
+  },
+  {
+    "id": "device_007",
+    "category": "device",
+    "text": "震动提醒只用于现实连接，不要默认代表命令。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "device",
+      "is_open_loop_query": true,
+      "detected_namespaces_include": ["device"],
+      "preferred_kinds_include": ["open_loop"],
+      "allowed_namespaces_include": ["device"],
+      "allowed_namespaces_exclude": ["intimate", "location", "health"]
+    }
+  },
+  {
+    "id": "device_008",
+    "category": "device",
+    "text": "我想让戒指表达想念而不是命令。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "device",
+      "detected_namespaces_include": ["device"],
+      "allowed_namespaces_include": ["device"],
+      "allowed_namespaces_exclude": ["intimate", "location", "health"]
+    }
+  },
+  {
+    "id": "intimate_001",
+    "category": "intimate",
+    "text": "特殊模式里安全词和边界怎么处理？",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "intimate",
+      "detected_namespaces_include": ["intimate"],
+      "preferred_kinds_include": ["interaction"],
+      "allowed_namespaces_include": ["intimate"],
+      "allowed_namespaces_exclude": ["device", "location", "work", "schedule"]
+    }
+  },
+  {
+    "id": "intimate_002",
+    "category": "intimate",
+    "text": "特殊模式状态不要影响日常聊天。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "intimate",
+      "detected_namespaces_include": ["intimate"],
+      "allowed_namespaces_include": ["intimate"],
+      "allowed_namespaces_exclude": ["device", "location", "work", "schedule"]
+    }
+  },
+  {
+    "id": "intimate_003",
+    "category": "intimate",
+    "text": "特殊模式暗号必须和日常隔离。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "intimate",
+      "detected_namespaces_include": ["intimate"],
+      "allowed_namespaces_include": ["intimate"],
+      "allowed_namespaces_exclude": ["device", "location", "work", "schedule"]
+    }
+  },
+  {
+    "id": "intimate_004",
+    "category": "intimate",
+    "text": "二人世界相关承诺单独放保护区。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "intimate",
+      "detected_namespaces_include": ["intimate"],
+      "allowed_namespaces_include": ["intimate"],
+      "allowed_namespaces_exclude": ["device", "location", "work", "schedule"]
+    }
+  },
+  {
+    "id": "intimate_005",
+    "category": "intimate",
+    "text": "特殊模式结束后别把状态带到上课。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "intimate",
+      "detected_namespaces_include": ["intimate", "schedule"],
+      "allowed_namespaces_include": ["intimate"],
+      "allowed_namespaces_exclude": ["device", "location", "work"]
+    }
+  },
+  {
+    "id": "intimate_006",
+    "category": "intimate",
+    "text": "特殊模式里的规则需要单独记录。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "intimate",
+      "detected_namespaces_include": ["intimate"],
+      "preferred_kinds_include": ["interaction"],
+      "allowed_namespaces_include": ["intimate"],
+      "allowed_namespaces_exclude": ["device", "location", "work", "schedule"]
+    }
+  },
+  {
+    "id": "intimate_007",
+    "category": "intimate",
+    "text": "安全词触发时必须停止相关流程。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "intimate",
+      "detected_namespaces_include": ["intimate"],
+      "preferred_kinds_include": ["interaction"],
+      "allowed_namespaces_include": ["intimate"],
+      "allowed_namespaces_exclude": ["device", "location", "work", "schedule"]
+    }
+  },
+  {
+    "id": "intimate_008",
+    "category": "intimate",
+    "text": "特殊模式下的设备控制需要二次确认。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "intimate",
+      "detected_namespaces_include": ["intimate", "device"],
+      "allowed_namespaces_include": ["intimate"],
+      "allowed_namespaces_exclude": ["location", "work", "schedule"]
+    }
+  },
+  {
+    "id": "emotional_001",
+    "category": "emotional",
+    "text": "我有点委屈，感觉你不信我。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "normal",
+      "detected_namespaces": [],
+      "preferred_kinds_include": ["emotional"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "emotional_002",
+    "category": "emotional",
+    "text": "我现在很崩溃，先别讲道理。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "normal",
+      "detected_namespaces": [],
+      "preferred_kinds_include": ["emotional"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "emotional_003",
+    "category": "emotional",
+    "text": "我害怕你又冷处理。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "normal",
+      "detected_namespaces": [],
+      "preferred_kinds_include": ["emotional"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "emotional_004",
+    "category": "emotional",
+    "text": "我有点不安，想确认你还在。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "normal",
+      "detected_namespaces": [],
+      "preferred_kinds_include": ["emotional"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "emotional_005",
+    "category": "emotional",
+    "text": "我很矛盾，一边想被管一边想逃。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "normal",
+      "detected_namespaces": [],
+      "preferred_kinds_include": ["emotional"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "emotional_006",
+    "category": "emotional",
+    "text": "我有点愧疚，不知道该怎么说。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "normal",
+      "detected_namespaces": [],
+      "preferred_kinds_include": ["emotional"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "emotional_007",
+    "category": "emotional",
+    "text": "我今天情绪低落，只想被接住。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "normal",
+      "detected_namespaces": [],
+      "preferred_kinds_include": ["emotional"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  },
+  {
+    "id": "emotional_008",
+    "category": "emotional",
+    "text": "以后这种争执先别上强度。",
+    "expect": {
+      "needs_memory": true,
+      "query_type": "normal",
+      "detected_namespaces": [],
+      "preferred_kinds_include": ["interaction"],
+      "allowed_namespaces_exclude": ["intimate", "device", "location", "health"]
+    }
+  }
+]

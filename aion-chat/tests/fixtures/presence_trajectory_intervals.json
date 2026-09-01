@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "translucent_hold",
+      "trajectory": {
+        "sprite_id": "fixture_sprite",
+        "target_screen": "active",
+        "anchor": "center",
+        "transform_origin": "center",
+        "duration_ms": 60000,
+        "tracks": [
+          {"prop": "opacity", "keys": [[0, 0.5], [60000, 0.5]], "ease": "linear"}
+        ]
+      },
+      "intervals": [
+        {"start_ms": 0, "end_ms": 60000, "is_long": true, "is_dwell": true}
+      ]
+    },
+    {
+      "name": "invisible_tail",
+      "trajectory": {
+        "sprite_id": "fixture_sprite",
+        "target_screen": "active",
+        "anchor": "center",
+        "transform_origin": "center",
+        "duration_ms": 60000,
+        "tracks": [
+          {"prop": "opacity", "keys": [[0, 1], [1000, 0], [60000, 0]], "ease": "linear"}
+        ]
+      },
+      "intervals": [
+        {"start_ms": 0, "end_ms": 1000, "is_long": false, "is_dwell": false},
+        {"start_ms": 1000, "end_ms": 60000, "is_long": true, "is_dwell": false}
+      ]
+    },
+    {
+      "name": "slow_drift",
+      "trajectory": {
+        "sprite_id": "fixture_sprite",
+        "target_screen": "active",
+        "anchor": "center",
+        "transform_origin": "center",
+        "duration_ms": 300000,
+        "tracks": [
+          {"prop": "x", "keys": [[0, 0], [300000, 5]], "ease": "in_out_cubic"},
+          {"prop": "opacity", "keys": [[0, 0.5], [300000, 0.5]], "ease": "linear"}
+        ]
+      },
+      "intervals": [
+        {"start_ms": 0, "end_ms": 300000, "is_long": true, "is_dwell": false}
+      ]
+    },
+    {
+      "name": "short_hold",
+      "trajectory": {
+        "sprite_id": "fixture_sprite",
+        "target_screen": "active",
+        "anchor": "center",
+        "transform_origin": "center",
+        "duration_ms": 19999,
+        "tracks": [
+          {"prop": "opacity", "keys": [[0, 0.5], [19999, 0.5]], "ease": "linear"}
+        ]
+      },
+      "intervals": [
+        {"start_ms": 0, "end_ms": 19999, "is_long": false, "is_dwell": false}
+      ]
+    },
+    {
+      "name": "union_key_hold",
+      "trajectory": {
+        "sprite_id": "fixture_sprite",
+        "target_screen": "active",
+        "anchor": "center",
+        "transform_origin": "center",
+        "duration_ms": 60000,
+        "tracks": [
+          {"prop": "x", "keys": [[0, 0], [60000, 0]], "ease": "linear"},
+          {"prop": "opacity", "keys": [[0, 0], [1000, 0.5], [59000, 0.5], [60000, 0]], "ease": "linear"}
+        ]
+      },
+      "intervals": [
+        {"start_ms": 0, "end_ms": 1000, "is_long": false, "is_dwell": false},
+        {"start_ms": 1000, "end_ms": 59000, "is_long": true, "is_dwell": true},
+        {"start_ms": 59000, "end_ms": 60000, "is_long": false, "is_dwell": false}
+      ]
+    }
+  ]
+}

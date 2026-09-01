@@ -1,0 +1,80 @@
+{
+  "reference_time": 1000.0,
+  "edge_cases": {
+    "restart_empty": {"records": [], "expected_phone_missing": false},
+    "disabled_location": {"enabled": false, "expected_availability": []},
+    "low_coverage_baseline": {"coverage": 0.1, "expected_deviations": []}
+  },
+  "records": [
+    {
+      "id": "screen-off",
+      "kind": "activity.app",
+      "source": "android.activity",
+      "observed_at": 700.0,
+      "received_at": 701.0,
+      "confidence": 1.0,
+      "payload": {"device": "phone", "device_id": "owner-phone", "screen_state": "off", "app": "锁屏"},
+      "metadata": {"device_id": "owner-phone"}
+    },
+    {
+      "id": "screen-on-new",
+      "kind": "sensing.sensor",
+      "source": "android.sensing",
+      "observed_at": 900.0,
+      "received_at": 901.0,
+      "confidence": 0.18,
+      "payload": {"screen_on": true, "motion": "still", "motion_confidence": 18, "battery_pct": 73},
+      "metadata": {}
+    },
+    {
+      "id": "screen-off-delayed",
+      "kind": "sensing.sensor",
+      "source": "android.sensing",
+      "observed_at": 800.0,
+      "received_at": 950.0,
+      "confidence": 0.22,
+      "payload": {"screen_on": false, "motion": "walking", "motion_confidence": 22},
+      "metadata": {}
+    },
+    {
+      "id": "screen-on-duplicate",
+      "kind": "sensing.sensor",
+      "source": "android.sensing",
+      "observed_at": 920.0,
+      "received_at": 921.0,
+      "confidence": 0.19,
+      "payload": {"screen_on": true, "motion": "still", "motion_confidence": 19, "battery_pct": 72},
+      "metadata": {}
+    },
+    {
+      "id": "mobile-app",
+      "kind": "activity.app",
+      "source": "android.activity",
+      "observed_at": 930.0,
+      "received_at": 931.0,
+      "confidence": 1.0,
+      "payload": {"device": "phone", "device_id": "owner-phone", "app": "微信"},
+      "metadata": {"device_id": "owner-phone"}
+    },
+    {
+      "id": "notification",
+      "kind": "sensing.notification",
+      "source": "android.sensing",
+      "observed_at": 940.0,
+      "received_at": 941.0,
+      "confidence": 1.0,
+      "payload": {"app": "QQ"},
+      "metadata": {}
+    },
+    {
+      "id": "future",
+      "kind": "sensing.unlock",
+      "source": "android.sensing",
+      "observed_at": 1100.0,
+      "received_at": 950.0,
+      "confidence": 1.0,
+      "payload": {},
+      "metadata": {}
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "schema_version": "context_delivery.production_replays.v1",
+  "cases": [
+    {
+      "id": "self_wake_gym_inside_broad_home_geofence",
+      "now": 1787634000.0,
+      "last_user_ts": 1787632080.0,
+      "intent": "查岗看她有没有放下铁乖乖去吃饭，别又在健身房给我硬扛",
+      "recent_owner_statement": "我在健身房练背。",
+      "sensing_entries": [
+        {
+          "timestamp": 1787633940.0,
+          "type": "sensor",
+          "data": {
+            "motion": "still",
+            "light_lux": 300.0,
+            "wifi_ssid": "NJU-WLAN",
+            "screen_on": true,
+            "battery_pct": 73,
+            "charging": false
+          }
+        }
+      ],
+      "location_config": {
+        "enabled": true,
+        "home_threshold": 400
+      },
+      "location_status": {
+        "state": "at_home",
+        "accuracy": 30.0,
+        "updated_at": 1787633940.0,
+        "v2_state": {
+          "place_id": "home",
+          "place_name": "家",
+          "place_kind": "home",
+          "last_fix_at": 1787633940.0,
+          "state_updated_at": 1787633940.0,
+          "accuracy_m": 30.0
+        }
+      }
+    },
+    {
+      "id": "self_wake_lamp_spike_while_owner_remains_indoor",
+      "now": 1787641200.0,
+      "last_user_ts": 1787639400.0,
+      "intent": "看看她午休醒了没，气消了没有，还委不委屈",
+      "recent_owner_statement": "我还在室内，只是刚开灯。",
+      "sensing_entries": [
+        {
+          "timestamp": 1787641140.0,
+          "type": "sensor",
+          "data": {
+            "motion": "still",
+            "light_lux": 1200.0,
+            "wifi_ssid": "NJU-WLAN",
+            "screen_on": true,
+            "battery_pct": 69,
+            "charging": false
+          }
+        }
+      ],
+      "location_config": {
+        "enabled": true,
+        "home_threshold": 400
+      },
+      "location_status": {
+        "state": "at_home",
+        "accuracy": 30.0,
+        "updated_at": 1787641140.0,
+        "v2_state": {
+          "place_id": "home",
+          "place_name": "家",
+          "place_kind": "home",
+          "last_fix_at": 1787641140.0,
+          "state_updated_at": 1787641140.0,
+          "accuracy_m": 30.0
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "server_url": "https://your-aion-server.example.com",
+  "token": "set-the-same-value-as-AION_AUTH_TOKEN",
+  "sample_interval_sec": 60,
+  "idle_threshold_sec": 180,
+  "screen_poll_enabled": false,
+  "screen_poll_timeout_sec": 30,
+  "presence_enabled": true,
+  "summon_button_enabled": false,
+  "summon_hotkey": ""
+}

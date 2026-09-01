@@ -1,0 +1,365 @@
+/* ── Obsidian Vow Common Styles ── */
+:root {
+  --bg: #1a1714;
+  --surface: #242120;
+  --surface2: #2e2a26;
+  --surface-alpha: rgba(36,33,32,0.88);
+  --surface2-alpha: rgba(46,42,38,0.84);
+  --panel-alpha: rgba(26,23,20,0.82);
+  --border: #3a3530;
+  --text: #e8ddd4;
+  --text2: #a09388;
+  --text3: #6a5f58;
+  --accent: #d4943a;
+  --accent-glow: rgba(212,148,58,0.35);
+  --user-bg: #3a2a22;
+  --ai-bg: #2a2e28;
+  --danger: #cf222e;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; }
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  background: var(--bg) url('/public/ChildPageBackGround.png') center / 256px 256px repeat;
+  color: var(--text);
+  overflow: hidden;
+}
+.vow-paused *, .vow-paused *::before, .vow-paused *::after {
+  animation-play-state: paused !important;
+}
+
+/* ── 自定义滚动条 ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background-color: rgba(212,148,58,0.25); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background-color: rgba(212,148,58,0.5); }
+
+/* ── 子页面布局 ── */
+.sub-page {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 600px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── 通用卡片发光 hover ── */
+.card, .summary-item, .device-card, .hw-card, .sentinel-panel, .recall-section {
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s;
+  border-left: 2px solid rgba(212,148,58,0.15);
+  background: linear-gradient(135deg, var(--surface-alpha) 0%, rgba(42,36,32,0.80) 100%) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2), inset 0 1px 0 rgba(212,148,58,0.04);
+}
+.sch-item, .recall-item {
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s;
+  background: rgba(36,33,32,0.72) !important;
+}
+.card:hover, .device-card:hover, .hw-card:hover, .sentinel-panel:hover, .recall-section:hover {
+  border-color: rgba(212,148,58,0.4);
+  border-left-color: var(--accent);
+  box-shadow: 0 0 28px rgba(212,148,58,0.15), 0 4px 16px rgba(0,0,0,0.3);
+  transform: translateY(-1px);
+}
+
+/* ── 标签页发光下划线 ── */
+.tab, .mem-tab {
+  position: relative;
+  transition: color 0.2s;
+}
+.tab.active, .mem-tab.active {
+  text-shadow: 0 0 12px var(--accent-glow);
+}
+.tab.active::after, .mem-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px; left: 10%; right: 10%;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow), 0 0 30px rgba(212,148,58,0.15);
+  border-radius: 1px;
+}
+
+/* ── 顶部导航栏 ── */
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(212,148,58,0.18);
+  background: rgba(26,23,20,0.94);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  box-shadow: 0 2px 16px rgba(212,148,58,0.06), 0 1px 0 rgba(212,148,58,0.1) inset;
+}
+.top-bar .back-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 6px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  transition: transform 0.15s, filter 0.15s;
+}
+.top-bar .back-btn:hover { filter: drop-shadow(0 0 6px var(--accent-glow)); }
+.top-bar .back-btn:active { transform: scale(0.9); }
+.top-bar h2 {
+  flex: 1;
+  font-size: 17px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: linear-gradient(90deg, var(--text) 0%, var(--accent) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── 内容区 ── */
+.page-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  position: relative;
+  z-index: 2;
+}
+
+/* ── 通用 toggle ── */
+.toggle-switch { position:relative; width:42px; height:24px; cursor:pointer; flex-shrink:0; }
+.toggle-switch input { opacity:0; width:0; height:0; }
+.toggle-slider { position:absolute; inset:0; background:var(--surface2); border:1px solid var(--border); border-radius:12px; transition:0.2s; }
+.toggle-slider:before { content:""; position:absolute; height:18px; width:18px; left:2px; top:2px; background:var(--text3); border-radius:50%; transition:0.2s; }
+.toggle-switch input:checked + .toggle-slider { background:var(--accent); border-color:var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+.toggle-switch input:checked + .toggle-slider:before { transform:translateX(18px); background:#fff; }
+
+/* ── 通用按钮 ── */
+.btn-row { display:flex; gap:8px; margin-top:16px; justify-content:flex-end; }
+.btn-row button { padding:8px 18px; border:none; border-radius:8px; font-size:14px; cursor:pointer; }
+.btn-save { background:var(--accent); color:#fff; transition: box-shadow 0.2s, transform 0.1s; }
+.btn-save:hover { box-shadow: 0 0 18px var(--accent-glow); }
+.btn-save:active { transform: scale(0.97); }
+.btn-cancel { background:var(--surface2); color:var(--text); transition: border-color 0.2s; }
+
+/* ── 通用表单 ── */
+.form-label { display:block; font-size:13px; color:var(--text2); margin-bottom:4px; margin-top:14px; }
+.form-label:first-child { margin-top:0; }
+.form-input {
+  width:100%;
+  background:var(--surface2);
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:10px 12px;
+  font-size:14px;
+  outline:none;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.form-input:focus { border-color:var(--accent); box-shadow: 0 0 0 3px rgba(212,148,58,0.2), 0 0 16px rgba(212,148,58,0.1); }
+textarea.form-input { resize:vertical; min-height:120px; line-height:1.6; }
+.form-hint { font-size:11px; color:var(--text3); margin-top:2px; }
+
+/* ── 通用列表 ── */
+.list-container {
+  border:1px solid var(--border);
+  border-radius:10px;
+  background: linear-gradient(180deg, var(--panel-alpha) 0%, rgba(26,23,20,0.90) 100%);
+  padding:4px;
+  overflow-y:auto;
+  box-shadow: inset 0 1px 0 rgba(212,148,58,0.05), 0 2px 12px rgba(0,0,0,0.2);
+}
+.list-empty { padding:24px; text-align:center; color:var(--text3); font-size:14px; }
+
+/* ── 空状态美化 ── */
+.list-empty, .sch-empty, .hw-empty, .mem-empty, .log-empty, .empty {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text3);
+  font-size: 14px;
+  line-height: 1.8;
+  position: relative;
+}
+.list-empty::before, .sch-empty::before, .hw-empty::before, .mem-empty::before, .log-empty::before, .empty::before {
+  content: '';
+  display: block;
+  width: 64px; height: 64px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(212,148,58,0.12) 0%, transparent 70%);
+  box-shadow: 0 0 40px rgba(212,148,58,0.08);
+  animation: emptyPulse 3s ease-in-out infinite;
+}
+@keyframes emptyPulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+/* ── 闹铃弹窗 ── */
+.alarm-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:100; align-items:center; justify-content:center; }
+.alarm-overlay.show { display:flex; }
+.alarm-box { background:var(--surface); border:2px solid var(--accent); border-radius:16px; padding:24px 28px; max-width:380px; width:90%; text-align:center; animation:alarmPulse 1s ease-in-out infinite alternate; }
+.alarm-box h3 { font-size:20px; margin-bottom:12px; }
+.alarm-box .alarm-icon { font-size:48px; margin-bottom:8px; }
+.alarm-box .alarm-content { font-size:15px; margin-bottom:6px; line-height:1.5; }
+.alarm-box .alarm-time { font-size:12px; color:var(--text3); margin-bottom:16px; }
+.alarm-box button { padding:10px 32px; border:none; border-radius:8px; background:var(--accent); color:#fff; font-size:14px; font-weight:600; cursor:pointer; }
+.alarm-box button:hover { background:#b87e30; }
+@keyframes alarmPulse { from { box-shadow:0 0 20px rgba(212,148,58,0.3); } to { box-shadow:0 0 40px rgba(212,148,58,0.6); } }
+
+/* ── Toast 提示 ── */
+.toast-msg {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(46,42,38,0.95);
+  color: var(--text);
+  padding: 10px 20px;
+  border-radius: 12px;
+  font-size: 13px;
+  border: 1px solid rgba(212,148,58,0.2);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 0 20px rgba(212,148,58,0.1);
+  opacity: 0;
+  transition: all 0.3s;
+  pointer-events: none;
+  z-index: 10001;
+  white-space: nowrap;
+}
+.toast-msg.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ── 页面入场动画 ── */
+.sub-page {
+  animation: pageEnter 0.4s ease-out;
+}
+.sub-page::before {
+  content: '';
+  position: fixed; top: 0; left: 0; right: 0; height: 180px;
+  background: radial-gradient(ellipse at top center, rgba(212,148,58,0.06) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+@keyframes pageEnter {
+  0% { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 标题微光动画 ── */
+.top-bar h2 {
+  animation: titleShimmer 4s ease-in-out infinite;
+}
+@keyframes titleShimmer {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.85; }
+}
+
+/* ── 卡片入场动画 ── */
+.card, .device-card, .hw-card, .sch-item, .recall-section {
+  animation: cardSlideIn 0.35s ease-out backwards;
+}
+.card:nth-child(2) { animation-delay: 0.05s; }
+.card:nth-child(3) { animation-delay: 0.1s; }
+.card:nth-child(4) { animation-delay: 0.15s; }
+.card:nth-child(5) { animation-delay: 0.2s; }
+@keyframes cardSlideIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ══════════════════════════════════════════
+   琥珀光场 — 动态氛围层
+   ══════════════════════════════════════════ */
+
+/* ── 漂浮琥珀光球 ── */
+.vow-orbs {
+  position: fixed; inset: 0;
+  pointer-events: none; z-index: 0;
+  overflow: hidden;
+}
+.vow-orbs .orb {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(212,148,58,0.45) 0%, rgba(212,148,58,0.08) 35%, transparent 60%);
+  box-shadow: 0 0 20px rgba(212,148,58,0.25);
+  animation: orbRise linear infinite;
+}
+.vow-orbs .spark {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(212,148,58,0.8);
+  box-shadow: 0 0 6px rgba(212,148,58,0.5);
+  animation: orbRise linear infinite;
+}
+@keyframes orbRise {
+  0%   { transform: translateY(10vh) scale(0.5); opacity: 0; }
+  8%   { opacity: 0.7; }
+  40%  { opacity: 0.5; }
+  90%  { opacity: 0.2; }
+  100% { transform: translateY(-112vh) scale(1); opacity: 0; }
+}
+
+/* ── 角落呼吸光晕 ── */
+.vow-halo {
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+}
+.vow-halo.tr {
+  top: -80px; right: -80px;
+  width: 500px; height: 500px;
+  background: radial-gradient(circle, rgba(212,148,58,0.20) 0%, rgba(212,148,58,0.05) 40%, transparent 68%);
+  animation: haloPulse1 7s ease-in-out infinite;
+}
+.vow-halo.bl {
+  bottom: -60px; left: -60px;
+  width: 420px; height: 420px;
+  background: radial-gradient(circle, rgba(212,148,58,0.15) 0%, rgba(212,148,58,0.04) 40%, transparent 65%);
+  animation: haloPulse2 9s ease-in-out infinite;
+}
+@keyframes haloPulse1 {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 0.9; }
+}
+@keyframes haloPulse2 {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 0.8; }
+}
+
+/* ── 顶部流光线 ── */
+.vow-streak {
+  position: fixed; top: 0; left: 0; right: 0; height: 1px;
+  pointer-events: none; z-index: 5; overflow: hidden;
+}
+.vow-streak::after {
+  content: '';
+  position: absolute; top: 0; left: -60%;
+  width: 60%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(212,148,58,0.8), var(--accent), rgba(212,148,58,0.8), transparent);
+  animation: streakSweep 4s ease-in-out infinite;
+}
+@keyframes streakSweep {
+  0%   { left: -60%; }
+  100% { left: 100%; }
+}
+
+/* ── 暗角 ── */
+.vow-vignette {
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(10,8,6,0.5) 100%);
+  pointer-events: none; z-index: 0;
+}
+
+/* ── 让背景光场透过主要面板，但不压住文字 ── */
+.mem-list, .log-list, .sch-list {
+  background: linear-gradient(180deg, var(--panel-alpha) 0%, rgba(26,23,20,0.90) 100%) !important;
+}
+.mem-entry, .log-entry, .meta-box, .log-item {
+  background: rgba(26,23,20,0.58) !important;
+}

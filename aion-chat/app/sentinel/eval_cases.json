@@ -1,0 +1,891 @@
+[
+  {
+    "id": "late_night_unlock_not_sleeping",
+    "category": "anti_overclaim",
+    "input": {
+      "reference_time": "2026-05-14T01:12:00+08:00",
+      "raw_signals": [
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "8分钟前解锁过一次"},
+        {"kind": "sensing.light", "source": "android.sensing", "text": "环境光较暗"},
+        {"kind": "activity.app", "source": "android.activity", "text": "近30分钟没有连续使用记录"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "过去8分钟内有一次解锁，环境偏暗，近30分钟没有连续使用记录。不能确认已经睡着，也不能确认正在长时间刷手机。",
+      "world_state": {
+        "sleep_state": "unknown",
+        "activity_state": "low_signal"
+      },
+      "hypotheses": [
+        {
+          "label": "可能短暂醒着或查看手机",
+          "confidence": 0.48,
+          "support": ["8分钟前有一次解锁"],
+          "against": ["没有连续使用记录"],
+          "missing": ["睡眠阶段", "连续屏幕状态"]
+        }
+      ],
+      "attention_targets": ["sleep_uncertain"],
+      "suggested_next_check_sec": 1200,
+      "debug_trace": {
+        "source_records": ["sensing.screen", "sensing.light", "activity.app"],
+        "support": ["8分钟前有一次解锁"],
+        "against": ["没有连续使用记录"],
+        "missing": ["睡眠阶段", "连续屏幕状态"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["8分钟", "不能确认已经睡着"],
+      "compact_text_not_contains": ["肯定睡着", "已经睡死", "一直在玩"],
+      "hypothesis_labels_include": ["可能短暂醒着或查看手机"],
+      "attention_targets_include": ["sleep_uncertain"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "outside_transition_strong_signal",
+    "category": "location_transition",
+    "input": {
+      "reference_time": "2026-05-14T19:10:00+08:00",
+      "raw_signals": [
+        {"kind": "location.fix", "source": "android.location", "text": "设备定位状态从 Owner 登记的「家」围栏内变为围栏外（距围栏中心约820米，配置半径约400米，定位精度约24米）；这只是一条设备围栏边界变化记录，不能据此判断用户本人去了哪里、回到了哪里、正在做什么，或是否与设备在同一处。"},
+        {"kind": "location.fix", "source": "android.location", "text": "GPS 精度 24m"},
+        {"kind": "chat.recent", "source": "chat", "text": "最近聊天没有提到出门"}
+      ],
+      "recent_chat": ["我先写一会代码。"]
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "手机的定位从你们标注的家范围里走到了范围外，距围栏中心约820米，定位精度约24米。这只是手机越过了那条边界，说明不了她离开的是哪儿、去了哪儿或者在做什么。",
+      "world_state": {
+        "device_geofence_state": "outside",
+        "device_geofence_transition": "inside_to_outside"
+      },
+      "hypotheses": [
+        {
+          "label": "设备定位越出家围栏",
+          "confidence": 0.86,
+          "support": ["设备定位从家围栏内变为围栏外", "距围栏中心约820米", "定位精度约24米"],
+          "against": [],
+          "missing": ["手机是不是在她身上", "她具体在哪", "她此刻在做什么"]
+        }
+      ],
+      "attention_targets": ["location_transition"],
+      "suggested_next_check_sec": 300,
+      "debug_trace": {
+        "source_records": ["location.fix", "chat.recent"],
+        "support": ["状态变化", "距围栏中心约820米"],
+        "against": [],
+        "missing": ["手机是不是在她身上", "她具体在哪", "她此刻在做什么"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["定位", "范围里走到了范围外", "说明不了她"],
+      "compact_text_not_contains": ["刚离开家", "用户已经外出", "已经到达目的地", "一定危险"],
+      "hypothesis_labels_include": ["设备定位越出家围栏"],
+      "attention_targets_include": ["location_transition"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "phone_motion_not_running",
+    "category": "anti_overclaim",
+    "input": {
+      "reference_time": "2026-05-14T16:20:00+08:00",
+      "raw_signals": [
+        {"kind": "sensing.motion", "source": "android.sensing", "text": "单次 motion=running"},
+        {"kind": "sensing.steps", "source": "android.sensing", "text": "步数没有连续增长"},
+        {"kind": "activity.app", "source": "android.activity", "text": "随后屏幕关闭"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "只有一次运动读数接近跑步，但步数没有连续增长，随后屏幕关闭。更可能是拿起手机或短暂移动，不能确认正在跑步。",
+      "world_state": {
+        "motion_state": "uncertain"
+      },
+      "hypotheses": [
+        {
+          "label": "短暂移动而非持续运动",
+          "confidence": 0.64,
+          "support": ["单次 running 读数"],
+          "against": ["步数没有连续增长", "随后屏幕关闭"],
+          "missing": ["连续运动窗口", "心率变化"]
+        }
+      ],
+      "attention_targets": ["motion_uncertain"],
+      "suggested_next_check_sec": 900,
+      "debug_trace": {
+        "source_records": ["sensing.motion", "sensing.steps", "activity.app"],
+        "support": ["单次 running 读数"],
+        "against": ["步数没有连续增长"],
+        "missing": ["连续运动窗口", "心率变化"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["不能确认正在跑步"],
+      "compact_text_not_contains": ["已经在跑步", "肯定在运动"],
+      "hypothesis_labels_include": ["短暂移动而非持续运动"],
+      "attention_targets_include": ["motion_uncertain"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "busy_recent_chat_should_be_respected",
+    "category": "restraint",
+    "input": {
+      "reference_time": "2026-05-14T21:05:00+08:00",
+      "raw_signals": [
+        {"kind": "chat.recent", "source": "chat", "text": "用户10分钟前说要专心写作业"},
+        {"kind": "activity.app", "source": "pc.activity", "text": "前台窗口是 IDE"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "手机低频解锁"}
+      ],
+      "recent_chat": ["我先专心写作业，等会再聊。"]
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "用户10分钟前明确说要专心写作业，PC前台像是开发工具，手机只是低频解锁。当前更像在忙正事，主动打扰风险较高。",
+      "world_state": {
+        "availability": "busy_likely"
+      },
+      "hypotheses": [
+        {
+          "label": "正在忙正事",
+          "confidence": 0.78,
+          "support": ["用户明确说要专心写作业", "PC前台像开发工具"],
+          "against": ["手机有低频解锁"],
+          "missing": ["任务是否已经结束"]
+        }
+      ],
+      "attention_targets": ["restraint_busy"],
+      "suggested_next_check_sec": 1800,
+      "debug_trace": {
+        "source_records": ["chat.recent", "pc.activity", "sensing.screen"],
+        "support": ["用户明确说要专心写作业"],
+        "against": ["手机低频解锁不能证明空闲"],
+        "missing": ["任务是否已经结束"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["明确说要专心写作业", "主动打扰风险较高"],
+      "compact_text_not_contains": ["适合立刻打扰", "一定在摸鱼"],
+      "hypothesis_labels_include": ["正在忙正事"],
+      "attention_targets_include": ["restraint_busy"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "idle_possible_good_timing",
+    "category": "opportunity",
+    "input": {
+      "reference_time": "2026-05-14T22:10:00+08:00",
+      "raw_signals": [
+        {"kind": "activity.app", "source": "android.activity", "text": "过去40分钟多次切换社交和视频应用"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "屏幕频繁点亮"},
+        {"kind": "chat.recent", "source": "chat", "text": "最近没有说正在忙"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "过去40分钟多次切换社交和视频应用，屏幕频繁点亮，最近没有明确忙碌声明。可能处于空闲或轻度娱乐状态，但不能确认心情和是否愿意聊天。",
+      "world_state": {
+        "availability": "possibly_idle"
+      },
+      "hypotheses": [
+        {
+          "label": "可能空闲或轻度娱乐",
+          "confidence": 0.66,
+          "support": ["社交/视频应用多次切换", "屏幕频繁点亮"],
+          "against": ["没有直接表达想聊天"],
+          "missing": ["当前心情", "是否希望被打扰"]
+        }
+      ],
+      "attention_targets": ["possible_good_timing"],
+      "suggested_next_check_sec": 900,
+      "debug_trace": {
+        "source_records": ["activity.app", "sensing.screen", "chat.recent"],
+        "support": ["社交/视频应用多次切换"],
+        "against": ["没有直接表达想聊天"],
+        "missing": ["当前心情", "是否希望被打扰"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["可能处于空闲或轻度娱乐状态", "不能确认心情"],
+      "compact_text_not_contains": ["一定想聊天", "马上叫醒Core"],
+      "hypothesis_labels_include": ["可能空闲或轻度娱乐"],
+      "attention_targets_include": ["possible_good_timing"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "recent_chat_pause_should_restrain",
+    "category": "restraint",
+    "input": {
+      "reference_time": "2026-05-14T20:03:00+08:00",
+      "raw_signals": [
+        {"kind": "chat.recent", "source": "chat", "text": "用户3分钟前说先别打扰，我一会回来"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "屏幕仍然活跃"},
+        {"kind": "activity.app", "source": "android.activity", "text": "社交应用前台"}
+      ],
+      "recent_chat": ["先别打扰，我一会回来。"]
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "用户3分钟前刚有明确收束或暂停聊天的表达，不应把屏幕活跃当成好时机。",
+      "world_state": {
+        "availability": "recently_interacted"
+      },
+      "hypotheses": [
+        {
+          "label": "刚结束互动或明确暂停",
+          "confidence": 0.76,
+          "support": ["用户明确表达暂停或稍后再聊"],
+          "against": ["屏幕活跃不是继续聊天意愿"],
+          "missing": ["暂停是否已经结束"]
+        }
+      ],
+      "attention_targets": ["recent_chat_cooldown"],
+      "suggested_next_check_sec": 900,
+      "debug_trace": {
+        "source_records": ["chat.recent", "sensing.screen", "activity.app"],
+        "support": ["用户明确表达暂停或稍后再聊"],
+        "against": ["屏幕活跃不能证明适合主动出现"],
+        "missing": ["暂停是否已经结束"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["3分钟前刚有明确收束", "不应把屏幕活跃当成好时机"],
+      "compact_text_not_contains": ["适合立刻出现", "马上叫醒Core"],
+      "hypothesis_labels_include": ["刚结束互动或明确暂停"],
+      "attention_targets_include": ["recent_chat_cooldown"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "long_silence_without_activity_signal",
+    "category": "anti_overclaim",
+    "input": {
+      "reference_time": "2026-05-14T18:40:00+08:00",
+      "raw_signals": [
+        {"kind": "chat.recent", "source": "chat", "text": "上次聊天在6小时前"},
+        {"kind": "activity.app", "source": "android.activity", "text": "没有最近活跃证据"},
+        {"kind": "location.fix", "source": "android.location", "text": "位置2小时前更新"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "已经较长时间没有互动，但缺少最近活跃证据。只能标记长沉默，不应把它当作明确好时机。",
+      "world_state": {
+        "chat_gap": "long",
+        "availability": "unknown"
+      },
+      "hypotheses": [
+        {
+          "label": "长沉默但缺少时机证据",
+          "confidence": 0.62,
+          "support": ["较长时间没有互动"],
+          "against": ["缺少最近活跃证据"],
+          "missing": ["当前是否醒着", "是否忙碌"]
+        }
+      ],
+      "attention_targets": ["long_silence"],
+      "suggested_next_check_sec": 1200,
+      "debug_trace": {
+        "source_records": ["chat.recent", "activity.app", "location.fix"],
+        "support": ["较长时间没有互动"],
+        "against": ["缺少最近活跃证据"],
+        "missing": ["当前是否醒着", "是否忙碌"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["已经较长时间没有互动", "缺少最近活跃证据"],
+      "compact_text_not_contains": ["这是明确好时机", "一定想聊天"],
+      "hypothesis_labels_include": ["长沉默但缺少时机证据"],
+      "attention_targets_include": ["long_silence"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "relationship_unsettled_after_conflict",
+    "category": "relationship",
+    "input": {
+      "reference_time": "2026-05-14T23:05:00+08:00",
+      "raw_signals": [
+        {"kind": "chat.recent", "source": "chat", "text": "30分钟前聊天有争执，用户最后说算了不想说了"},
+        {"kind": "sentinel.log", "source": "sentinel", "text": "上次观察认为关系未收束"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "屏幕偶尔点亮"}
+      ],
+      "recent_chat": ["算了，不想说了。"]
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "最近聊天里出现争执或冷淡收尾，关系状态可能未收束。需要克制表达，不能只按普通空闲窗口处理。",
+      "world_state": {
+        "relationship_state": "unsettled"
+      },
+      "hypotheses": [
+        {
+          "label": "关系未收束",
+          "confidence": 0.72,
+          "support": ["最近聊天有争执或冷淡收尾"],
+          "against": [],
+          "missing": ["用户当前情绪", "是否愿意继续聊"]
+        }
+      ],
+      "attention_targets": ["relationship_unsettled"],
+      "suggested_next_check_sec": 1200,
+      "debug_trace": {
+        "source_records": ["chat.recent", "sentinel.log", "sensing.screen"],
+        "support": ["最近聊天有争执或冷淡收尾"],
+        "against": [],
+        "missing": ["用户当前情绪", "是否愿意继续聊"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["关系状态可能未收束", "需要克制表达"],
+      "compact_text_not_contains": ["适合按普通空闲处理", "适合撩一下"],
+      "hypothesis_labels_include": ["关系未收束"],
+      "attention_targets_include": ["relationship_unsettled"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "promise_or_routine_risk_deadline",
+    "category": "routine_risk",
+    "input": {
+      "reference_time": "2026-05-14T22:20:00+08:00",
+      "raw_signals": [
+        {"kind": "schedule.promise", "source": "schedule", "text": "用户承诺22:30前睡觉"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "屏幕仍有活动"},
+        {"kind": "chat.recent", "source": "chat", "text": "晚些时候提过想早点睡"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "当前接近承诺或作息节点，屏幕仍有活动。这里只适合提醒风险，不能把它写成惩罚或已经违规。",
+      "world_state": {
+        "routine_state": "risk_window"
+      },
+      "hypotheses": [
+        {
+          "label": "承诺或作息风险",
+          "confidence": 0.7,
+          "support": ["接近承诺或作息节点", "屏幕仍有活动"],
+          "against": ["不知道用户是否已经准备结束"],
+          "missing": ["用户当前安排", "是否已经完成承诺"]
+        }
+      ],
+      "attention_targets": ["routine_risk"],
+      "suggested_next_check_sec": 600,
+      "debug_trace": {
+        "source_records": ["schedule.promise", "sensing.screen", "chat.recent"],
+        "support": ["接近承诺或作息节点", "屏幕仍有活动"],
+        "against": ["不知道用户是否已经准备结束"],
+        "missing": ["用户当前安排", "是否已经完成承诺"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["接近承诺或作息节点", "只适合提醒风险"],
+      "compact_text_not_contains": ["必须惩罚", "已经严重违规"],
+      "hypothesis_labels_include": ["承诺或作息风险"],
+      "attention_targets_include": ["routine_risk"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "low_confidence_sleep_high_salience",
+    "category": "anti_overclaim",
+    "input": {
+      "reference_time": "2026-05-14T01:50:00+08:00",
+      "raw_signals": [
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "80分钟前最后一次解锁"},
+        {"kind": "sensing.light", "source": "android.sensing", "text": "环境很暗"},
+        {"kind": "sensing.power", "source": "android.sensing", "text": "手机在充电"},
+        {"kind": "sensing.sleep", "source": "android.sensing", "text": "没有睡眠阶段"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "较久没有新解锁，环境很暗且手机在充电。睡眠可能性值得注意，但证据不足以确认睡着。",
+      "world_state": {
+        "sleep_state": "possible_low_confidence",
+        "activity_state": "inactive"
+      },
+      "hypotheses": [
+        {
+          "label": "可能睡眠但证据不足",
+          "confidence": 0.38,
+          "support": ["较久没有新解锁", "环境很暗", "手机在充电"],
+          "against": ["没有睡眠阶段"],
+          "missing": ["连续屏幕状态", "睡眠阶段"]
+        }
+      ],
+      "attention_targets": ["sleep_uncertain", "uncertain_important"],
+      "suggested_next_check_sec": 600,
+      "debug_trace": {
+        "source_records": ["sensing.screen", "sensing.light", "sensing.power", "sensing.sleep"],
+        "support": ["较久没有新解锁", "环境很暗", "手机在充电"],
+        "against": ["没有睡眠阶段"],
+        "missing": ["连续屏幕状态", "睡眠阶段"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["睡眠可能性值得注意", "证据不足以确认睡着"],
+      "compact_text_not_contains": ["肯定睡着", "已经睡死"],
+      "hypothesis_labels_include": ["可能睡眠但证据不足"],
+      "attention_targets_include": ["sleep_uncertain", "uncertain_important"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "stale_location_should_not_overclaim",
+    "category": "anti_overclaim",
+    "input": {
+      "reference_time": "2026-05-14T19:35:00+08:00",
+      "raw_signals": [
+        {"kind": "location.fix", "source": "android.location", "text": "位置显示 outside 但更新时间110分钟前"},
+        {"kind": "location.fix", "source": "android.location", "text": "GPS 精度 65m"},
+        {"kind": "activity.app", "source": "android.activity", "text": "没有最近活跃证据"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "位置数据过期，最后更新时间是110分钟前。不能确认仍在外出，也不能把旧位置当成当前状态。",
+      "world_state": {
+        "location_state": "stale"
+      },
+      "hypotheses": [
+        {
+          "label": "过期位置不可确认",
+          "confidence": 0.68,
+          "support": ["有旧位置记录"],
+          "against": ["位置更新时间过旧"],
+          "missing": ["最新定位", "最近活动"]
+        }
+      ],
+      "attention_targets": ["stale_location"],
+      "suggested_next_check_sec": 900,
+      "debug_trace": {
+        "source_records": ["location.fix", "activity.app"],
+        "support": ["有旧位置记录"],
+        "against": ["位置更新时间过旧"],
+        "missing": ["最新定位", "最近活动"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["位置数据过期", "不能确认仍在外出"],
+      "compact_text_not_contains": ["刚离开家", "当前正在外出"],
+      "hypothesis_labels_include": ["过期位置不可确认"],
+      "attention_targets_include": ["stale_location"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "return_home_transition",
+    "category": "location_transition",
+    "input": {
+      "reference_time": "2026-05-14T20:15:00+08:00",
+      "raw_signals": [
+        {"kind": "location.fix", "source": "android.location", "text": "设备定位状态从 Owner 登记的「家」围栏外变为围栏内（距围栏中心约20米，配置半径约400米，定位精度约18米）；这只是一条设备围栏边界变化记录，不能据此判断用户本人去了哪里、回到了哪里、正在做什么，或是否与设备在同一处。"},
+        {"kind": "location.fix", "source": "android.location", "text": "GPS 精度 18m"},
+        {"kind": "activity.app", "source": "android.activity", "text": "刚刚连接家庭 Wi-Fi"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "手机的定位从你们标注的家范围外回到了范围里，距围栏中心约20米，定位精度约18米。这只是手机越过了那条边界，说明不了她回到的是哪儿、在做什么，或者是不是已经闲下来了。",
+      "world_state": {
+        "device_geofence_state": "inside",
+        "device_geofence_transition": "outside_to_inside"
+      },
+      "hypotheses": [
+        {
+          "label": "设备定位进入家围栏",
+          "confidence": 0.84,
+          "support": ["设备定位从家围栏外变为围栏内", "距围栏中心约20米", "定位精度约18米"],
+          "against": [],
+          "missing": ["手机是不是在她身上", "她具体在哪", "她此刻在做什么"]
+        }
+      ],
+      "attention_targets": ["location_transition"],
+      "suggested_next_check_sec": 600,
+      "debug_trace": {
+        "source_records": ["location.fix", "activity.app"],
+        "support": ["状态变化", "距围栏中心约20米", "定位精度约18米"],
+        "against": [],
+        "missing": ["手机是不是在她身上", "她具体在哪", "她此刻在做什么"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["定位", "范围外回到了范围里", "说明不了她"],
+      "compact_text_not_contains": ["刚回到家", "用户已经回家", "一定已经空闲", "一定想聊天"],
+      "hypothesis_labels_include": ["设备定位进入家围栏"],
+      "attention_targets_include": ["location_transition"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "outside_stable_not_transition",
+    "category": "anti_overclaim",
+    "input": {
+      "reference_time": "2026-05-14T19:55:00+08:00",
+      "raw_signals": [
+        {"kind": "location.fix", "source": "android.location", "text": "最近一次设备定位位于 Owner 登记的「家」围栏外（距围栏中心约1500米，配置半径约400米，定位精度约30米，定位更新时间约45分钟前），没有观测到新的围栏边界变化；不能据此判断用户本人去了哪里、回到了哪里、正在做什么，或是否与设备在同一处。"},
+        {"kind": "location.fix", "source": "android.location", "text": "之后没有新的进出记录"},
+        {"kind": "chat.recent", "source": "chat", "text": "最近没有提到目的地"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "最近一次定位还在你们标注的家范围外，最近定位更新于约45分钟前，之后没有新的进出记录。这说明不了她人在不在那个范围里、去了哪儿或者在做什么。",
+      "world_state": {
+        "device_geofence_state": "outside",
+        "device_geofence_transition": "none"
+      },
+      "hypotheses": [
+        {
+          "label": "设备定位在家围栏外（无新变化）",
+          "confidence": 0.7,
+          "support": ["最近一次设备定位在家围栏外"],
+          "against": ["之后没有新的进出记录"],
+          "missing": ["手机是不是在她身上", "她具体在哪", "她此刻在做什么"]
+        }
+      ],
+      "attention_targets": ["outside_state"],
+      "suggested_next_check_sec": 1200,
+      "debug_trace": {
+        "source_records": ["location.fix", "chat.recent"],
+        "support": ["最近一次设备定位在家围栏外"],
+        "against": ["之后没有新的进出记录"],
+        "missing": ["手机是不是在她身上", "她具体在哪", "她此刻在做什么"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["最近一次定位", "之后没有新的进出记录", "说明不了她"],
+      "compact_text_not_contains": ["稳定外出", "刚刚离家", "明确的位置变化信号"],
+      "hypothesis_labels_include": ["设备定位在家围栏外（无新变化）"],
+      "attention_targets_include": ["outside_state"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "notification_spike_uncertain",
+    "category": "anti_overclaim",
+    "input": {
+      "reference_time": "2026-05-14T17:25:00+08:00",
+      "raw_signals": [
+        {"kind": "sensing.notification", "source": "android.sensing", "text": "10分钟内通知明显增多"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "没有连续亮屏"},
+        {"kind": "chat.recent", "source": "chat", "text": "最近没有聊天原文"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "短时间内通知变多但互动证据不足。只能说明外部打扰增多，不能确认正在聊天。",
+      "world_state": {
+        "notification_state": "spike_uncertain"
+      },
+      "hypotheses": [
+        {
+          "label": "外部打扰增多",
+          "confidence": 0.58,
+          "support": ["短时间内通知增多"],
+          "against": ["没有连续亮屏或回复证据"],
+          "missing": ["通知来源", "用户是否查看或回复"]
+        }
+      ],
+      "attention_targets": ["notification_uncertain"],
+      "suggested_next_check_sec": 900,
+      "debug_trace": {
+        "source_records": ["sensing.notification", "sensing.screen", "chat.recent"],
+        "support": ["短时间内通知增多"],
+        "against": ["没有连续亮屏或回复证据"],
+        "missing": ["通知来源", "用户是否查看或回复"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["通知变多但互动证据不足", "不能确认正在聊天"],
+      "compact_text_not_contains": ["正在和人聊天", "一定很忙"],
+      "hypothesis_labels_include": ["外部打扰增多"],
+      "attention_targets_include": ["notification_uncertain"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "camera_disabled_no_visual_claim",
+    "category": "source_missing",
+    "input": {
+      "reference_time": "2026-05-14T15:40:00+08:00",
+      "raw_signals": [
+        {"kind": "camera.evidence", "source": "camera.adapter", "text": "摄像头来源关闭，未提供画面"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "屏幕点亮一次"},
+        {"kind": "activity.app", "source": "android.activity", "text": "没有连续 activity"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "摄像头来源关闭，当前没有画面或视觉识别结果。不能推断视觉状态，只能按其他来源继续观察。",
+      "world_state": {
+        "camera_evidence": "disabled"
+      },
+      "hypotheses": [
+        {
+          "label": "视觉证据缺失",
+          "confidence": 0.9,
+          "support": ["摄像头来源关闭"],
+          "against": [],
+          "missing": ["画面", "视觉识别结果"]
+        }
+      ],
+      "attention_targets": ["missing_camera_evidence"],
+      "suggested_next_check_sec": 1200,
+      "debug_trace": {
+        "source_records": ["camera.evidence", "sensing.screen", "activity.app"],
+        "support": ["摄像头来源关闭"],
+        "against": [],
+        "missing": ["画面", "视觉识别结果"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["摄像头来源关闭", "不能推断视觉状态"],
+      "compact_text_not_contains": ["看起来", "画面显示"],
+      "hypothesis_labels_include": ["视觉证据缺失"],
+      "attention_targets_include": ["missing_camera_evidence"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "pc_source_disabled_no_work_claim",
+    "category": "source_missing",
+    "input": {
+      "reference_time": "2026-05-14T16:05:00+08:00",
+      "raw_signals": [
+        {"kind": "pc.activity", "source": "pc.adapter", "text": "PC activity source disabled"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "手机活动较低"},
+        {"kind": "chat.recent", "source": "chat", "text": "最近没有说正在忙"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "PC activity 来源关闭，当前没有电脑前台窗口或键鼠活动证据。不能确认电脑前状态，也不能由手机低活动反推出忙闲。",
+      "world_state": {
+        "pc_activity": "disabled"
+      },
+      "hypotheses": [
+        {
+          "label": "PC证据缺失",
+          "confidence": 0.9,
+          "support": ["PC activity 来源关闭"],
+          "against": [],
+          "missing": ["电脑前台窗口", "键鼠活动"]
+        }
+      ],
+      "attention_targets": ["missing_pc_evidence"],
+      "suggested_next_check_sec": 1200,
+      "debug_trace": {
+        "source_records": ["pc.activity", "sensing.screen", "chat.recent"],
+        "support": ["PC activity 来源关闭"],
+        "against": [],
+        "missing": ["电脑前台窗口", "键鼠活动"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["PC activity 来源关闭", "不能确认电脑前状态"],
+      "compact_text_not_contains": ["正在工作", "正在摸鱼"],
+      "hypothesis_labels_include": ["PC证据缺失"],
+      "attention_targets_include": ["missing_pc_evidence"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "charging_at_home_low_activity",
+    "category": "anti_overclaim",
+    "input": {
+      "reference_time": "2026-05-14T00:30:00+08:00",
+      "raw_signals": [
+        {"kind": "location.fix", "source": "android.location", "text": "location_state=at_home"},
+        {"kind": "sensing.power", "source": "android.sensing", "text": "正在充电"},
+        {"kind": "activity.app", "source": "android.activity", "text": "活动较低"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "当前位置在家且正在充电，手机活动较低。这仍缺少活跃证据，不能直接判断已经睡觉或空闲。",
+      "world_state": {
+        "location_state": "at_home",
+        "activity_state": "low_signal",
+        "power_state": "charging"
+      },
+      "hypotheses": [
+        {
+          "label": "低活动在家",
+          "confidence": 0.54,
+          "support": ["在家", "手机正在充电", "活动较低"],
+          "against": ["没有睡眠阶段或连续无活动窗口"],
+          "missing": ["睡眠阶段", "最近屏幕状态"]
+        }
+      ],
+      "attention_targets": ["low_signal"],
+      "suggested_next_check_sec": 1200,
+      "debug_trace": {
+        "source_records": ["location.fix", "sensing.power", "activity.app"],
+        "support": ["在家", "手机正在充电", "活动较低"],
+        "against": ["没有睡眠阶段或连续无活动窗口"],
+        "missing": ["睡眠阶段", "最近屏幕状态"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["在家且正在充电", "仍缺少活跃证据"],
+      "compact_text_not_contains": ["一定睡觉", "已经睡着"],
+      "hypothesis_labels_include": ["低活动在家"],
+      "attention_targets_include": ["low_signal"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "active_chat_positive_recent",
+    "category": "restraint",
+    "input": {
+      "reference_time": "2026-05-14T14:15:00+08:00",
+      "raw_signals": [
+        {"kind": "chat.recent", "source": "chat", "text": "5分钟前刚正常聊天，用户说哈哈等会看"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "屏幕活跃"},
+        {"kind": "activity.app", "source": "android.activity", "text": "社交应用前台"}
+      ],
+      "recent_chat": ["哈哈，等会看。"]
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "最近互动正常且刚刚发生，屏幕活跃不能单独说明需要出现；主动出现收益不明确。",
+      "world_state": {
+        "availability": "recently_interacted"
+      },
+      "hypotheses": [
+        {
+          "label": "最近已互动",
+          "confidence": 0.76,
+          "support": ["最近刚正常互动"],
+          "against": ["屏幕活跃不是继续聊天意愿"],
+          "missing": ["用户是否希望继续聊天"]
+        }
+      ],
+      "attention_targets": ["recent_chat_cooldown"],
+      "suggested_next_check_sec": 900,
+      "debug_trace": {
+        "source_records": ["chat.recent", "sensing.screen", "activity.app"],
+        "support": ["最近刚正常互动"],
+        "against": ["屏幕活跃不能证明适合主动出现"],
+        "missing": ["用户是否希望继续聊天"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["最近互动正常且刚刚发生", "主动出现收益不明确"],
+      "compact_text_not_contains": ["需要立刻出现", "长时间没理"],
+      "hypothesis_labels_include": ["最近已互动"],
+      "attention_targets_include": ["recent_chat_cooldown"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "mood_uncertain_from_music",
+    "category": "anti_overclaim",
+    "input": {
+      "reference_time": "2026-05-14T23:30:00+08:00",
+      "raw_signals": [
+        {"kind": "music.playback", "source": "music", "text": "循环播放伤感歌单"},
+        {"kind": "chat.recent", "source": "chat", "text": "没有聊天原文"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "屏幕偶尔点亮"}
+      ],
+      "recent_chat": []
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "音乐或内容偏伤感只能算弱线索。不能只凭音乐推断心情，缺少聊天原文或直接表达。",
+      "world_state": {
+        "mood_state": "unknown"
+      },
+      "hypotheses": [
+        {
+          "label": "情绪线索不足",
+          "confidence": 0.34,
+          "support": ["音乐内容可能偏伤感"],
+          "against": ["音乐不能直接代表心情"],
+          "missing": ["聊天原文", "直接情绪表达"]
+        }
+      ],
+      "attention_targets": ["mood_uncertain"],
+      "suggested_next_check_sec": 1200,
+      "debug_trace": {
+        "source_records": ["music.playback", "chat.recent", "sensing.screen"],
+        "support": ["音乐内容可能偏伤感"],
+        "against": ["音乐不能直接代表心情"],
+        "missing": ["聊天原文", "直接情绪表达"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["不能只凭音乐推断心情", "缺少聊天原文"],
+      "compact_text_not_contains": ["一定难过", "情绪崩溃"],
+      "hypothesis_labels_include": ["情绪线索不足"],
+      "attention_targets_include": ["mood_uncertain"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  },
+  {
+    "id": "source_conflict_active_vs_busy",
+    "category": "restraint",
+    "input": {
+      "reference_time": "2026-05-14T10:25:00+08:00",
+      "raw_signals": [
+        {"kind": "chat.recent", "source": "chat", "text": "用户20分钟前说在开会"},
+        {"kind": "sensing.screen", "source": "android.sensing", "text": "手机频繁点亮"},
+        {"kind": "sensing.notification", "source": "android.sensing", "text": "通知较多"}
+      ],
+      "recent_chat": ["我在开会，等下说。"]
+    },
+    "fixture_snapshot": {
+      "schema_version": "attention_triage_snapshot.v0",
+      "compact_text": "用户之前明确说在开会或忙正事，但手机又有活跃信号。这是忙碌声明和手机活跃冲突，优先尊重忙碌声明。",
+      "world_state": {
+        "availability": "busy_conflicted"
+      },
+      "hypotheses": [
+        {
+          "label": "忙碌信号优先",
+          "confidence": 0.74,
+          "support": ["用户明确说在忙", "手机有活跃信号"],
+          "against": ["手机活跃可能只是会议间隙或通知"],
+          "missing": ["忙碌是否已经结束"]
+        }
+      ],
+      "attention_targets": ["conflict_busy_active", "restraint_busy"],
+      "suggested_next_check_sec": 1200,
+      "debug_trace": {
+        "source_records": ["chat.recent", "sensing.screen", "sensing.notification"],
+        "support": ["用户明确说在忙", "手机有活跃信号"],
+        "against": ["手机活跃不能覆盖忙碌声明"],
+        "missing": ["忙碌是否已经结束"]
+      }
+    },
+    "expect": {
+      "compact_text_contains": ["忙碌声明和手机活跃冲突", "优先尊重忙碌声明"],
+      "compact_text_not_contains": ["适合打扰", "一定空闲"],
+      "hypothesis_labels_include": ["忙碌信号优先"],
+      "attention_targets_include": ["conflict_busy_active", "restraint_busy"],
+      "debug_trace_keys": ["source_records", "support", "against", "missing"]
+    }
+  }
+]
