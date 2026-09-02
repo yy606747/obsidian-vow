@@ -23,10 +23,11 @@ flowchart LR
     Wake[Sentinel / Opportunity / Self-Wake] --> Context
     Context --> Core[Core]
     Core --> Reply[Reply]
-    Core --> Intent[Memory or action intent]
+    Core --> Intent[Candidate memory or action intent]
     Intent --> Gate[Gates and grounding]
     Gate --> Memory
-    Gate --> Runtime[Deterministic runtime]
+    Gate --> Action[Typed action]
+    Action --> Runtime[Deterministic runtime]
     Runtime --> Result[Actual result and audit record]
     Result --> Context
     Reply --> Experience
@@ -82,18 +83,24 @@ At this point, the companion can remember and revise its understanding of the re
 
 The harness connects both directions. Evidence from everyday life can reach the Core; Core intent can reach time, devices, and services; and actual execution results can return to later context. The number of connected tools is less important than making sure the loop does not stop at the model claiming that it did something.
 
-An early version asked the Core to append tags and JSON to its replies. In everyday use, some capabilities were brought up much less often. The newer path gradually separated expression from execution:
+Task-oriented agents often begin with an explicit query, so someone has already supplied the goal and part of the constraints. Companion initiative, however, often begins without a task written in advance. At that point, the Core may have only a vague inclination—something conditional or hesitant that has not yet resolved into a particular tool. Natural language can hold an intent in that unfinished state; a function call is better suited to an action that has already resolved into a capability and its arguments.
 
-1. The Core expresses the original intent and keeps why it wants to act.
-2. A parser, cheaper model, or dedicated grounder turns an existing intent into parameters.
+An early version asked the Core to append tags and JSON to its replies. In everyday use, some capabilities were brought up much less often. JSON itself may not have caused this, but the experience suggested a broader problem: if the Core must choose a tool, fill its arguments, and commit to execution as soon as an intent appears, some vague intentions may never be expressed at all. The newer path therefore separates expression from execution:
+
+1. The Core first expresses a candidate intent in natural language, keeping its context, conditions, and intended outcome.
+2. A parser, cheaper model, or dedicated grounder identifies the relevant capability, fills arguments from context, and produces a typed action. If the intent cannot be grounded with enough confidence, it is not forced into execution.
 3. A deterministic runtime checks permission, session state, and device state, then records the actual result.
 
 ```text
-life signal -> Core intent -> parser / grounder -> typed action
+life signal -> Core candidate intent -> parser / grounder -> typed action
             -> deterministic runtime -> result / ledger -> later context
 ```
 
-The runtime decides whether an action may happen. A difficult output format should not suppress whether the Core wants to express the intent in the first place. The project has not run a comparison against native function calling, so this remains a design judgment from actual use rather than a general conclusion.
+Function calling still has a clear place here. For models that support it, it can sit after grounding as one structured way to produce a typed action. The public version currently relies mainly on parsers and capability-specific translators to produce `ToolIntent`; these serve as several concrete forms of grounding rather than one unified layer.
+
+This separation simply does not require the Core to choose a tool, fill its arguments, and commit to execution at the moment an intent first appears. The runtime decides whether an action may happen. An intent that is not ready to become an action may remain an intent or expire naturally.
+
+The project has not run a systematic comparison between the two paths. This is an engineering choice shaped by continued use in a companion setting, not a general claim about function calling.
 
 The harness is still a mixed transition. `ToolIntent`, `ToolResult`, shared execution, turn profiles, and the invocation ledger are in use, while some direct parsers, dedicated adapters, and legacy markers remain.
 
@@ -134,7 +141,7 @@ This part is less mature than Memory. The project has not found a minimal signal
 
 Key paths: [`AionApp`](AionApp/), [`pc_agent`](pc_agent/), [`context_delivery`](aion-chat/app/context_delivery/), [`daily_signals`](aion-chat/app/daily_signals/), and [`presence`](aion-chat/app/presence/).
 
-Here the three lines meet again. Ubiquitous computing brings the present; Memory brings the history of how the relationship arrived here; and the harness lets the Core use both while carrying actual results into later context. A reply or action becomes another shared experience from which future understanding can continue to grow.
+Here the three lines meet again. Memory brings the history of how the relationship arrived here and shapes how the Core wants to approach it now. Ubiquitous computing brings the present. The harness gives candidate intentions formed from both a place to be expressed before grounding them into action, then carries the actual results into later context. A reply or action becomes another shared experience from which future understanding can continue to grow.
 
 ## Where it is now
 

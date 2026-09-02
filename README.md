@@ -23,10 +23,11 @@ flowchart LR
     Wake[Sentinel / Opportunity / Self-Wake] --> Context
     Context --> Core[Core]
     Core --> Reply[回复]
-    Core --> Intent[记忆或行动意图]
+    Core --> Intent[记忆或行动的候选意图]
     Intent --> Gate[门控与 Grounding]
     Gate --> Memory
-    Gate --> Runtime[确定性执行层]
+    Gate --> Action[typed action]
+    Action --> Runtime[确定性执行层]
     Runtime --> Result[真实结果与审计记录]
     Result --> Context
     Reply --> Experience
@@ -82,18 +83,24 @@ Memory 做到这里，companion 已经能记得，也能改变对这段关系的
 
 Harness 负责把这件事接起来：生活里的信号可以进入 Core，Core 的意图可以落到时间、设备和服务上，真实执行结果也会回到后续上下文。接入多少工具不是重点，重点是这条来回的路径不能只停在模型声称自己做过什么。
 
-项目早期试过让 Core 在回复末尾吐标签和 JSON。实际使用里，一些能力被主动想起的频率明显下降。后来逐步把表达和执行拆开：
+任务型 Agent 往往从一个明确 query 开始，目标和一部分约束已经有人给出。companion 的主动性却经常发生在没人先写好任务的时刻。Core 最先形成的可能只是“有点想做什么”。这个念头还带着犹豫和条件，也没有收敛到某个工具。自然语言可以容纳这种尚未定形的意图；function call 更适合描述已经收敛到具体能力和参数的动作。
 
-1. Core 表达原始意图，并保留它为什么想这样做；
-2. parser、便宜模型或专用 grounder 把已有意图整理成参数；
+项目早期试过让 Core 在回复末尾吐标签和 JSON。实际使用里，一些能力被主动想起的频率明显下降。这个现象不一定是 JSON 本身造成的，但它提示了一件事：如果 Core 在意图刚出现时，就要同时完成工具选择、参数填写和执行承诺，一些模糊的想法可能根本没有机会被表达。新的路径因此逐步把表达和执行拆开：
+
+1. Core 先用自然语言表达候选意图，保留当时的语境、条件和希望发生的结果；
+2. parser、便宜模型或专用 grounder 识别它指向的能力，结合上下文补齐参数，再生成 typed action；条件不足时，不强行执行；
 3. 确定性执行层检查权限、会话和设备状态，执行后记录真实结果。
 
 ```text
-生活信号 -> Core 意图 -> parser / grounder -> typed action
+生活信号 -> Core 候选意图 -> parser / grounder -> typed action
          -> deterministic runtime -> result / ledger -> 后续上下文
 ```
 
-动作能不能执行，由运行时决定；Core 愿不愿意表达意图，不该先被一套难写的输出格式压低。项目没有与原生 function calling 做过对照，所以这仍是一条来自实际使用的设计判断，不是普遍结论。
+Function calling 在这里仍有明确的位置：对支持它的模型，它可以接在 grounding 之后，作为生成 typed action 的一种结构化协议。公开版本目前仍以 parser 和能力专用转换器生成 `ToolIntent` 为主，它们承担了不同形态的 grounding。
+
+这样的分层只是不要求 Core 在意图刚出现时，同时完成工具选择、参数填写和执行承诺。动作能不能发生，由运行时决定；尚未落地的想法可以保持原样，或者自然失效。
+
+项目还没有对两条路径做系统对照。这是针对 companion 场景、从实际使用中形成的工程选择，不是对 function calling 的普遍判断。
 
 目前 Harness 仍处在新旧路径并存的阶段。`ToolIntent`、`ToolResult`、共享执行层、turn profile 和调用账本已经在用，少量直接 parser、专用 adapter 与旧 marker 也仍然存在。
 
@@ -134,7 +141,7 @@ Context Delivery 先统一来源、新鲜度、数量上限和缺失状态，再
 
 代码入口：[`AionApp`](AionApp/)、[`pc_agent`](pc_agent/)、[`context_delivery`](aion-chat/app/context_delivery/)、[`daily_signals`](aion-chat/app/daily_signals/) 和 [`presence`](aion-chat/app/presence/)。
 
-到这里，三条线又接回了一起：普适计算带来当下，Memory 带来这段关系走到这里的历史，Harness 让 Core 使用两边的信息，也把实际结果带进后续上下文。一次回复或行动变成新的共同经历，后来的理解再从这些经历里继续生长。
+到这里，三条线又接回了一起：Memory 带来这段关系走到这里的历史，也影响 Core 此刻想以什么姿态靠近；普适计算带来当下；Harness 让 Core 基于两边形成的想法先有地方表达，再逐步落到现实，并把实际结果带进后续上下文。一次回复或行动变成新的共同经历，后来的理解再从这些经历里继续生长。
 
 ## 它现在是什么样
 
