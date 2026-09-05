@@ -55,7 +55,7 @@ def get_bytes(url: str, *, token: str, timeout: int = 40) -> bytes:
 
 
 def post_file(url: str, content: bytes, *, filename: str, token: str) -> None:
-    boundary = f"----AionScreen{int(time.time() * 1000)}"
+    boundary = f"----ObsidianScreen{int(time.time() * 1000)}"
     head = (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="screenshot"; filename="{filename}"\r\n'

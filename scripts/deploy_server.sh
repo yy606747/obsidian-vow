@@ -36,7 +36,7 @@ The script never uses rsync --delete.
 Options:
   --dry-run          Show what would be synced. This is the default.
   --apply            Sync deployable source files to the server.
-  --build-apk        Build Android debug APK locally and copy it to aion-chat/static/.
+  --build-apk        Build Android debug APK locally and copy it to obsidian-chat/static/.
   --no-runtime       Do not copy backend files into the running Docker container.
   --no-restart       Do not restart the Docker container.
   --no-commit        Do not commit the running container back to IMAGE_NAME.
@@ -145,12 +145,12 @@ EXCLUDES=(
   --exclude '*.pem'
   --exclude '*.key'
   --exclude '.env'
-  --exclude 'AionApp/.gradle/'
-  --exclude 'AionApp/app/build/'
-  --exclude 'AionApp/local.properties'
-  --exclude 'aion-chat/data/'
-  --exclude 'aion-chat/.pytest_cache/'
-  --exclude 'aion-chat/__pycache__/'
+  --exclude 'ObsidianApp/.gradle/'
+  --exclude 'ObsidianApp/app/build/'
+  --exclude 'ObsidianApp/local.properties'
+  --exclude 'obsidian-chat/data/'
+  --exclude 'obsidian-chat/.pytest_cache/'
+  --exclude 'obsidian-chat/__pycache__/'
   --exclude 'toy/jadx_out/'
   --exclude 'toy/android_adv/build/'
   --exclude 'toy/hci_logs_*/'
@@ -172,10 +172,10 @@ remote_ssh() {
 build_apk() {
   echo "Building Android debug APK locally..."
   require_cmd cp
-  (cd AionApp && GRADLE_USER_HOME="$GRADLE_USER_HOME" ./gradlew --no-daemon :app:assembleDebug)
-  mkdir -p aion-chat/static
-  cp -f AionApp/app/build/outputs/apk/debug/app-debug.apk aion-chat/static/obsidianvow-debug.apk
-  echo "APK staged at aion-chat/static/obsidianvow-debug.apk"
+  (cd ObsidianApp && GRADLE_USER_HOME="$GRADLE_USER_HOME" ./gradlew --no-daemon :app:assembleDebug)
+  mkdir -p obsidian-chat/static
+  cp -f ObsidianApp/app/build/outputs/apk/debug/app-debug.apk obsidian-chat/static/obsidianvow-debug.apk
+  echo "APK staged at obsidian-chat/static/obsidianvow-debug.apk"
 }
 
 rsync_dry_run() {
@@ -186,10 +186,10 @@ rsync_dry_run() {
     -e "$RSYNC_RSH" \
     "${LOCAL_RELEASE_DIR}/source/" "${REMOTE}:${SERVER_PATH}/"
   rsync -ani --checksum -e "$RSYNC_RSH" \
-    aion-chat/wheels/ "${REMOTE}:${SERVER_PATH}/aion-chat/wheels/"
-  if [[ -f aion-chat/static/obsidianvow-debug.apk ]]; then
-    rsync -ani --checksum -e "$RSYNC_RSH" aion-chat/static/obsidianvow-debug.apk \
-      "${REMOTE}:${SERVER_PATH}/aion-chat/static/obsidianvow-debug.apk"
+    obsidian-chat/wheels/ "${REMOTE}:${SERVER_PATH}/obsidian-chat/wheels/"
+  if [[ -f obsidian-chat/static/obsidianvow-debug.apk ]]; then
+    rsync -ani --checksum -e "$RSYNC_RSH" obsidian-chat/static/obsidianvow-debug.apk \
+      "${REMOTE}:${SERVER_PATH}/obsidian-chat/static/obsidianvow-debug.apk"
   fi
 }
 
@@ -198,18 +198,22 @@ rsync_apply() {
   local release_dir="${SERVER_PATH}/.codex-backups/releases/${RELEASE_ID}"
   echo "Remote backup dir: ${backup_dir}"
   remote_ssh "mkdir -p '$backup_dir' '$release_dir'"
+  # Retain the existing container's bind-mount path until it is recreated.
+  # The migration backs up environment files and preserves all runtime data.
+  rsync -a -e "$RSYNC_RSH" "${LOCAL_RELEASE_DIR}/source/scripts/migrate_project_names.py" "${REMOTE}:${release_dir}/migrate_project_names.py"
+  remote_ssh "python3 '$release_dir/migrate_project_names.py' --root '$SERVER_PATH' --apply --keep-runtime-alias"
   rsync -aic --backup --backup-dir="$backup_dir" \
     "${EXCLUDES[@]}" \
     -e "$RSYNC_RSH" \
     "${LOCAL_RELEASE_DIR}/source/" "${REMOTE}:${SERVER_PATH}/"
   rsync -aic -e "$RSYNC_RSH" \
-    aion-chat/wheels/ "${REMOTE}:${SERVER_PATH}/aion-chat/wheels/"
+    obsidian-chat/wheels/ "${REMOTE}:${SERVER_PATH}/obsidian-chat/wheels/"
   rsync -a -e "$RSYNC_RSH" \
     "${LOCAL_RELEASE_DIR}/manifest.json" "${REMOTE}:${release_dir}/source-manifest.json"
   # 安装包不是源码，单独同步；不改变原有 --build-apk 行为。
-  if [[ -f aion-chat/static/obsidianvow-debug.apk ]]; then
-    rsync -aic -e "$RSYNC_RSH" aion-chat/static/obsidianvow-debug.apk \
-      "${REMOTE}:${SERVER_PATH}/aion-chat/static/obsidianvow-debug.apk"
+  if [[ -f obsidian-chat/static/obsidianvow-debug.apk ]]; then
+    rsync -aic -e "$RSYNC_RSH" obsidian-chat/static/obsidianvow-debug.apk \
+      "${REMOTE}:${SERVER_PATH}/obsidian-chat/static/obsidianvow-debug.apk"
   fi
 }
 
@@ -246,7 +250,7 @@ runtime_sync() {
   echo "Copying backend source into Docker container ${CONTAINER_NAME}..."
   remote_ssh "SERVER_PATH='$SERVER_PATH' CONTAINER_NAME='$CONTAINER_NAME' bash -s" <<'REMOTE_SCRIPT'
 set -euo pipefail
-base="${SERVER_PATH}/aion-chat"
+base="${SERVER_PATH}/obsidian-chat"
 
 for d in app routes static tests scripts wheels; do
   if [[ -d "${base}/${d}" ]]; then
@@ -325,7 +329,7 @@ image_id = subprocess.check_output([
 recovery_id = subprocess.check_output([
     "docker", "image", "inspect", "--format", "{{.Id}}", os.environ["RECOVERY_IMAGE_NAME"],
 ], text=True).strip()
-lock_path = Path(os.environ["SERVER_PATH"]) / "aion-chat/requirements.lock"
+lock_path = Path(os.environ["SERVER_PATH"]) / "obsidian-chat/requirements.lock"
 record = {
     "release_id": os.environ["RELEASE_ID"], "image_id": image_id,
     "recovery_image_id": recovery_id, "recovery_image": os.environ["RECOVERY_IMAGE_NAME"],
@@ -365,12 +369,12 @@ token = ""
 env_path = root / ".env"
 if env_path.exists():
     for line in env_path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("AION_AUTH_TOKEN="):
+        if line.startswith("OBSIDIAN_AUTH_TOKEN="):
             token = line.split("=", 1)[1].strip().strip(chr(34)).strip(chr(39))
             break
 
 if not token:
-    print("skip diagnostic smoke: missing AION_AUTH_TOKEN")
+    print("skip diagnostic smoke: missing OBSIDIAN_AUTH_TOKEN")
 else:
     body = json.dumps({
         "event": "deploy_script_smoke",
@@ -399,7 +403,7 @@ else:
         print("push public-key smoke", resp.status, "sha256=" + digest)
 PY
 
-if [[ -f "${SERVER_PATH}/aion-chat/static/obsidianvow-debug.apk" ]]; then
+if [[ -f "${SERVER_PATH}/obsidian-chat/static/obsidianvow-debug.apk" ]]; then
   curl -kfsSI "https://${SERVER_HOST}/static/obsidianvow-debug.apk" >/dev/null || true
 fi
 REMOTE_SCRIPT

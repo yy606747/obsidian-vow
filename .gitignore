@@ -17,23 +17,23 @@ venv/
 encrypted.data
 
 # Runtime data
-aion-chat/data/*
-!aion-chat/data/.gitkeep
+obsidian-chat/data/*
+!obsidian-chat/data/.gitkeep
 test-results/
 *.log
 *.ses
 
 # Generated and vendored artifacts
-aion-chat/wheels/
-aion-chat/static/*.apk
+obsidian-chat/wheels/
+obsidian-chat/static/*.apk
 node_modules/
 dist/
 build/
 
 # Android
-AionApp/.gradle/
-AionApp/app/build/
-AionApp/local.properties
+ObsidianApp/.gradle/
+ObsidianApp/app/build/
+ObsidianApp/local.properties
 *.apk
 *.aab
 

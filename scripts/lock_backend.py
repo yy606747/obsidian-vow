@@ -15,7 +15,7 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BACKEND = ROOT / "aion-chat"
+BACKEND = ROOT / "obsidian-chat"
 
 
 def read_requirements(path: Path) -> list[Requirement]:

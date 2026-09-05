@@ -21,7 +21,7 @@
 在仓库根目录和对应虚拟环境中执行：
 
 ```sh
-python -m pip install --only-binary=:all: -r aion-chat/requirements-dev.txt
+python -m pip install --only-binary=:all: -r obsidian-chat/requirements-dev.txt
 python scripts/check_backend.py
 ```
 
@@ -31,9 +31,9 @@ python scripts/check_backend.py
 
 ```sh
 python -m pip download --only-binary=:all: --require-hashes \
-  -r aion-chat/requirements-test.lock -d aion-chat/wheels
-python -m pip install --no-index --find-links=aion-chat/wheels \
-  -r aion-chat/requirements-dev.txt
+  -r obsidian-chat/requirements-test.lock -d obsidian-chat/wheels
+python -m pip install --no-index --find-links=obsidian-chat/wheels \
+  -r obsidian-chat/requirements-dev.txt
 ```
 
 `scripts/lock_backend.py --check` 用于核对已安装环境、安装包和锁定文件，不会自动升级依赖。
@@ -46,7 +46,7 @@ python -m pip install --no-index --find-links=aion-chat/wheels \
 python scripts/engineering_baseline.py snapshot \
   --output .codex-backups/source-20260905
 python scripts/engineering_baseline.py backup-data \
-  --data-dir aion-chat/data --env-file .env \
+  --data-dir obsidian-chat/data --env-file .env \
   --output .codex-backups/data-20260905
 python scripts/engineering_baseline.py verify .codex-backups/data-20260905
 python scripts/engineering_baseline.py restore .codex-backups/data-20260905 \
@@ -59,7 +59,7 @@ python scripts/engineering_baseline.py restore .codex-backups/data-20260905 \
 
 ## 部署与回退
 
-普通自托管入口仍是 `aion-chat/docker-compose.yml`。`deploy/docker-compose.prod.yml` 是绑定本机地址的 Linux 服务器模板，使用前检查环境文件、数据目录权限和反向代理。
+普通自托管入口仍是 `obsidian-chat/docker-compose.yml`。`deploy/docker-compose.prod.yml` 是绑定本机地址的 Linux 服务器模板，使用前检查环境文件、数据目录权限和反向代理。
 
 `scripts/deploy_server.sh` 用于已有容器的热更新。先配置 `SERVER_USER`、`SERVER_HOST`、`SERVER_PATH`，准备本地虚拟环境和离线安装包；服务器默认地址是占位符，不会指向维护者的实例。通过 `bash scripts/deploy_server.sh` 预览，明确加 `--apply` 才会修改服务器。
 

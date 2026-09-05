@@ -5,23 +5,23 @@ services:
     platform: linux/amd64
     build:
       context: ..
-      dockerfile: aion-chat/Dockerfile
-    image: ${AION_RELEASE_IMAGE:-obsidian-vow:prod}
+      dockerfile: obsidian-chat/Dockerfile
+    image: ${OBSIDIAN_RELEASE_IMAGE:-obsidian-vow:prod}
     container_name: obsidian-vow
     restart: unless-stopped
     network_mode: host
     env_file:
       - ../.env
     environment:
-      AION_BIND_HOST: "127.0.0.1"
-      AION_BIND_PORT: "18080"
-      AION_SIGNAL_DAILY_TIMEZONE: "${AION_SIGNAL_DAILY_TIMEZONE:-UTC}"
+      OBSIDIAN_BIND_HOST: "127.0.0.1"
+      OBSIDIAN_BIND_PORT: "18080"
+      OBSIDIAN_SIGNAL_DAILY_TIMEZONE: "${OBSIDIAN_SIGNAL_DAILY_TIMEZONE:-UTC}"
       HOME: "/tmp"
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
-    user: "${AION_UID:-1000}:${AION_GID:-1000}"
+    user: "${OBSIDIAN_UID:-1000}:${OBSIDIAN_GID:-1000}"
     volumes:
-      - ../aion-chat/data:/app/data
+      - ../obsidian-chat/data:/app/data
     tmpfs:
       - /tmp:size=256m,mode=1777
     security_opt:

@@ -13,9 +13,9 @@
 **/__pycache__
 **/*.pyc
 **/.pytest_cache
-aion-chat/data
-aion-chat/tests
-AionApp
+obsidian-chat/data
+obsidian-chat/tests
+ObsidianApp
 pc_agent
 *.apk
 *.aab

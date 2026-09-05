@@ -12,6 +12,7 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
+from brand_compat import migrate_environment
 
 # These remain direct imports because their byte-identical copies are an
 # acceptance boundary shared with the backend.
@@ -43,6 +44,7 @@ log = logging.getLogger("pc_agent")
 
 
 def main() -> None:
+    migrate_environment()
     base_dir = _base_dir()
     if not os.environ.get("SSL_CERT_FILE"):
         bundled_ca = base_dir / "cacert.pem"
@@ -53,11 +55,11 @@ def main() -> None:
     interval = _sample_interval(config)
     idle_threshold = int(config.get("idle_threshold_sec") or DEFAULT_IDLE_THRESHOLD_SEC)
     server_url = str(config.get("server_url") or "").rstrip("/")
-    token = str(config.get("token") or os.environ.get("AION_AUTH_TOKEN") or "").strip()
+    token = str(config.get("token") or os.environ.get("OBSIDIAN_AUTH_TOKEN") or "").strip()
     if not server_url:
         raise SystemExit("server_url is required")
     if not token:
-        raise SystemExit("token is required; set config token or AION_AUTH_TOKEN")
+        raise SystemExit("token is required; set config token or OBSIDIAN_AUTH_TOKEN")
     try:
         from PySide6.QtWidgets import QApplication
         from presence_player import PresenceController
@@ -162,9 +164,7 @@ def _load_config(base_dir: Path | None = None) -> dict[str, Any]:
         config_path = base_dir / "config.example.json"
     if not config_path.exists():
         return {}
-    # Windows PowerShell 5 writes a UTF-8 BOM by default.  ``utf-8-sig``
-    # accepts those files while remaining byte-for-byte compatible with the
-    # ordinary BOM-free config produced by editors and our example file.
+    # Accept both PowerShell's UTF-8 BOM and ordinary editor output.
     return json.loads(config_path.read_text(encoding="utf-8-sig"))
 
 

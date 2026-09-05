@@ -16,7 +16,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRS = ("aion-chat", "pc_agent", "AionApp", "public", "cloudflare-worker", "scripts", "deploy", "docs")
+SOURCE_DIRS = ("obsidian-chat", "pc_agent", "ObsidianApp", "public", "cloudflare-worker", "scripts", "deploy", "docs")
 SOURCE_FILES = (
     "AGENTS.md", "README.md", "README.en.md", "LICENSE", ".gitignore", ".gitattributes",
     ".dockerignore", ".env.example", ".python-version",
@@ -75,7 +75,7 @@ def source_files(root: Path):
             base = Path(directory)
             children[:] = sorted(
                 child for child in children
-                if child not in SKIP_DIRS and base / child != root / "aion-chat" / "data"
+                if child not in SKIP_DIRS and base / child != root / "obsidian-chat" / "data"
             )
             for child in children:
                 if (base / child).is_symlink():
@@ -261,8 +261,8 @@ def check_restored_startup(data_dir: Path) -> None:
     """仅由本次恢复流程调用，在新目录检查初始化；禁用真实网络和后台动作。"""
     env = {key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "LC_ALL", "TZ"}}
     env.update({
-        "AION_TEST_MODE": "1", "AION_DATA_DIR": str(data_dir.resolve()),
-        "PYTHONPATH": str(ROOT / "aion-chat"), "PYTHONDONTWRITEBYTECODE": "1",
+        "OBSIDIAN_TEST_MODE": "1", "OBSIDIAN_DATA_DIR": str(data_dir.resolve()),
+        "PYTHONPATH": str(ROOT / "obsidian-chat"), "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONNOUSERSITE": "1",
     })
     program = (
@@ -273,7 +273,7 @@ def check_restored_startup(data_dir: Path) -> None:
         "        pass\n"
         "asyncio.run(check())\n"
     )
-    subprocess.run([sys.executable, "-c", program], env=env, cwd=ROOT / "aion-chat", timeout=45, check=True)
+    subprocess.run([sys.executable, "-c", program], env=env, cwd=ROOT / "obsidian-chat", timeout=45, check=True)
 
 
 def main() -> int:

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<script src="/static/brand_compat.js?v=20260905-brand"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>摄像头监控已下线 - Obsidian Vow</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1714">
+<style>
+.disabled-panel { border:1px solid var(--border); border-radius:8px; background:var(--surface); padding:18px; display:flex; flex-direction:column; gap:12px; }
+.disabled-title { font-size:18px; font-weight:700; color:var(--text); }
+.disabled-text { font-size:14px; line-height:1.7; color:var(--text2); }
+.disabled-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:4px; }
+.disabled-actions button { border:1px solid var(--border); background:var(--surface2); color:var(--text); border-radius:8px; padding:8px 12px; font-size:13px; cursor:pointer; }
+.disabled-actions button:hover { border-color:var(--text2); }
+.status-box { border:1px solid var(--border); border-radius:8px; background:var(--bg); padding:10px 12px; font-size:12px; line-height:1.6; color:var(--text2); white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div class="sub-page">
+  <div class="top-bar">
+    <button class="back-btn" onclick="location.href='/'">⬅</button>
+    <h2>摄像头监控</h2>
+  </div>
+  <div class="page-content">
+    <section class="disabled-panel">
+      <div class="disabled-title">旧本地摄像头监控已下线</div>
+      <div class="disabled-text">
+        当前云端版本不再打开本机摄像头，也不会通过 [CAM_CHECK] 触发截图分析。
+        后续如果重新加入摄像头，会作为 Sentinel evidence adapter 接入，而不是复用旧的 camera 接口。
+      </div>
+      <div class="status-box" id="cameraStatus">正在读取状态...</div>
+      <div class="disabled-actions">
+        <button onclick="location.href='/monitor-logs'">查看哨兵日志</button>
+        <button onclick="refreshStatus()">刷新状态</button>
+      </div>
+    </section>
+  </div>
+</div>
+<script src="/static/common.js?v=20260905-brand"></script>
+<script src="/static/web_push.js?v=20260905-brand"></script>
+<script>
+connectCommonWS();
+
+async function refreshStatus() {
+  try {
+    const cam = await api("GET", "/api/cam/status");
+    const sentinel = await api("GET", "/api/sentinel/status");
+    $("cameraStatus").textContent =
+      `camera: ${cam.error || "disabled"}\n` +
+      `sentinel: ${sentinel.monitoring ? "running" : "stopped"}\n` +
+      `next_check_in: ${sentinel.next_check_in || 0}s`;
+  } catch (e) {
+    $("cameraStatus").textContent = "状态读取失败";
+  }
+}
+
+refreshStatus();
+</script>
+</body>
+</html>

@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<script src="/static/brand_compat.js?v=20260905-brand"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>设备 - Obsidian Vow</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1714">
+<style>
+  .device-toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+  .device-summary { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:12px; }
+  .summary-item { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px; text-align:center; }
+  .summary-label { color:var(--text2); font-size:12px; }
+  .summary-value { margin-top:4px; font-size:20px; font-weight:700; background:linear-gradient(180deg, var(--text) 30%, var(--accent) 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+  .device-card { background:linear-gradient(135deg, var(--surface) 0%, rgba(42,36,32,0.95) 100%); border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:10px; }
+  .device-head { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+  .device-title { font-weight:700; font-size:15px; }
+  .device-sub { color:var(--text2); font-size:12px; margin-top:3px; word-break:break-all; }
+  .status-chip { display:inline-flex; align-items:center; gap:5px; border-radius:999px; padding:3px 8px; font-size:12px; border:1px solid var(--border); background:var(--surface2); color:var(--text2); white-space:nowrap; }
+  .status-chip.online { color:#7aad6a; background:rgba(122,173,106,0.12); border-color:rgba(122,173,106,0.3); }
+  .status-chip.offline { color:#d4943a; background:rgba(212,148,58,0.12); border-color:rgba(212,148,58,0.3); }
+  .status-chip.unknown { color:var(--text3); background:var(--surface2); }
+  .cap-row { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .cap-chip { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:3px 7px; color:var(--text2); font-size:11px; }
+  .device-meta { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; margin-top:10px; }
+  .meta-box { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px; min-width:0; }
+  .meta-k { color:var(--text3); font-size:11px; }
+  .meta-v { color:var(--text); font-size:13px; margin-top:3px; word-break:break-word; }
+  .action-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .mini-btn {
+    background:var(--surface2); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:7px 12px; cursor:pointer; font-size:13px;
+  }
+  .mini-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .mini-btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .mini-btn:disabled { opacity:.55; cursor:not-allowed; }
+  .log-panel { margin-top:16px; }
+  .log-list { display:flex; flex-direction:column; gap:8px; }
+  .log-item { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px; }
+  .log-item.ok { border-color:#b7e0c0; }
+  .log-item.fail { border-color:#f6c79e; }
+  .log-line { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+  .log-title { font-weight:600; font-size:13px; }
+  .log-detail { color:var(--text2); font-size:12px; margin-top:5px; word-break:break-all; line-height:1.45; }
+  .empty { color:var(--text3); text-align:center; padding:24px 8px; font-size:14px; }
+  @media (max-width: 420px) {
+    .device-summary { grid-template-columns:1fr; }
+    .device-meta { grid-template-columns:1fr; }
+    .device-head { flex-direction:column; }
+  }
+</style>
+</head>
+<body>
+<div class="sub-page">
+  <div class="top-bar">
+    <button class="back-btn" onclick="location.href='/'">⬅</button>
+    <h2>设备</h2>
+  </div>
+  <div class="page-content">
+    <div class="device-toolbar">
+      <div>
+        <div class="summary-label">DeviceService</div>
+        <div class="device-sub" id="deviceUpdatedAt">等待刷新</div>
+      </div>
+      <button class="mini-btn primary" id="refreshBtn" onclick="loadDevices(true)">刷新</button>
+    </div>
+
+    <div class="device-summary">
+      <div class="summary-item">
+        <div class="summary-label">总数</div>
+        <div class="summary-value" id="deviceCount">-</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-label">在线</div>
+        <div class="summary-value" id="deviceOnline">-</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-label">Driver</div>
+        <div class="summary-value" id="deviceDrivers">-</div>
+      </div>
+    </div>
+
+    <div id="deviceList">
+      <div class="empty">加载中...</div>
+    </div>
+
+    <div class="log-panel">
+      <div class="device-toolbar" style="margin-bottom:8px">
+        <div class="card-title">命令结果</div>
+        <button class="mini-btn" onclick="clearCommandLog()">清空</button>
+      </div>
+      <div id="commandLog" class="log-list">
+        <div class="empty">还没有执行记录</div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/static/common.js?v=20260905-brand"></script>
+<script src="/static/web_push.js?v=20260905-brand"></script>
+<script>
+connectCommonWS();
+
+let _devices = [];
+let _busyCommands = new Set();
+let _commandLog = [];
+let _pollTimer = null;
+
+function statusLabel(status) {
+  const map = { online: '在线', offline: '离线', unknown: '未知' };
+  return map[status] || status || '未知';
+}
+
+function formatTime(ts) {
+  if (!ts) return '未上报';
+  const d = new Date(Number(ts) * 1000);
+  if (Number.isNaN(d.getTime())) return '时间异常';
+  return d.toLocaleString('zh-CN', { hour12:false });
+}
+
+function commandAccepted(result) {
+  return !!(result && (result.ok || result.status === 'queued'));
+}
+
+function ringConnectionText(device) {
+  const meta = device.metadata || {};
+  if (device.status === 'online' || meta.ble_connected) return '戒指已连接';
+  if (meta.connect_error) return '连接失败：' + meta.connect_error;
+  if (meta.phone_ws_online) return '手机在线，点击连接戒指';
+  return '手机 App 未上报，打开 App 后刷新';
+}
+
+function requestId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'req_' + Date.now() + '_' + Math.random().toString(16).slice(2);
+}
+
+function escAttr(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+async function loadDevices(manual) {
+  const btn = $('refreshBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const payload = await api('GET', '/api/devices');
+    _devices = Array.isArray(payload.devices) ? payload.devices : [];
+    renderDeviceSummary(payload.count ?? _devices.length);
+    renderDeviceList();
+    $('deviceUpdatedAt').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12:false });
+    if (manual) showToast('已刷新设备状态');
+  } catch (e) {
+    $('deviceList').innerHTML = '<div class="empty">设备状态获取失败</div>';
+    showToast('设备状态获取失败');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderDeviceSummary(count) {
+  const online = _devices.filter(d => d.status === 'online').length;
+  const drivers = new Set(_devices.map(d => d.driver_id || 'unknown'));
+  $('deviceCount').textContent = count;
+  $('deviceOnline').textContent = online;
+  $('deviceDrivers').textContent = drivers.size || 0;
+}
+
+function renderDeviceList() {
+  const box = $('deviceList');
+  if (!_devices.length) {
+    box.innerHTML = '<div class="empty">暂无设备</div>';
+    return;
+  }
+  box.innerHTML = _devices.map(device => {
+    const id = escHtml(device.device_id || '');
+    const rawId = escAttr(device.device_id || '');
+    const rawStatus = String(device.status || 'unknown');
+    const statusClass = ['online', 'offline', 'unknown'].includes(rawStatus) ? rawStatus : 'unknown';
+    const capabilities = (device.capabilities || []).map(cap => `<span class="cap-chip">${escHtml(cap)}</span>`).join('');
+    const caps = device.capabilities || [];
+    const isRing = device.driver_id === 'smart_ring' || caps.includes('ring.touch');
+    const canPulse = caps.includes('notify.pulse');
+    const batteryValue = Number(device.battery);
+    const battery = device.battery == null || Number.isNaN(batteryValue) ? '未知' : `${batteryValue}%`;
+    const busyPing = _busyCommands.has(`${device.device_id}:ping`);
+    const busyPulse = _busyCommands.has(`${device.device_id}:pulse`);
+    const busyConnect = _busyCommands.has(`${device.device_id}:connect`);
+    const busyTouch = _busyCommands.has(`${device.device_id}:touch`);
+    const sourceText = isRing ? ringConnectionText(device) : 'DeviceService';
+    return `
+      <div class="device-card">
+        <div class="device-head">
+          <div>
+            <div class="device-title">${escHtml(device.name || device.device_id || '未知设备')}</div>
+            <div class="device-sub">${id} · ${escHtml(device.kind || 'unknown')}</div>
+          </div>
+          <span class="status-chip ${statusClass}">${escHtml(statusLabel(device.status))}</span>
+        </div>
+        <div class="device-meta">
+          <div class="meta-box"><div class="meta-k">Driver</div><div class="meta-v">${escHtml(device.driver_id || 'unknown')}</div></div>
+          <div class="meta-box"><div class="meta-k">电量</div><div class="meta-v">${escHtml(battery)}</div></div>
+          <div class="meta-box"><div class="meta-k">Last seen</div><div class="meta-v">${escHtml(formatTime(device.last_seen_at))}</div></div>
+          <div class="meta-box"><div class="meta-k">连接状态</div><div class="meta-v">${escHtml(sourceText)}</div></div>
+        </div>
+        <div class="cap-row">${capabilities || '<span class="cap-chip">无能力声明</span>'}</div>
+        <div class="action-row">
+          <button class="mini-btn" onclick="runDeviceCommand('${rawId}', 'ping')" ${busyPing ? 'disabled' : ''}>Ping</button>
+          <button class="mini-btn" onclick="runDeviceCommand('${rawId}', 'pulse', {duration_ms: 300})" ${(!canPulse || busyPulse) ? 'disabled' : ''}>Pulse</button>
+          ${isRing ? `<button class="mini-btn primary" onclick="runDeviceCommand('${rawId}', 'connect')" ${busyConnect ? 'disabled' : ''}>连接戒指</button>` : ''}
+          ${isRing ? `<button class="mini-btn" onclick="runRingTouchTest('${rawId}')" ${(device.status !== 'online' || busyTouch) ? 'disabled' : ''}>测试轻触</button>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function runRingTouchTest(deviceId) {
+  return runDeviceCommand(deviceId, 'touch', {
+    touch: '设备页测试轻触一下',
+    reason: '手动测试智能戒指连接',
+    haptics: { taps: 1, interval_ms: 2000 }
+  });
+}
+
+async function runDeviceCommand(deviceId, command, params) {
+  const key = `${deviceId}:${command}`;
+  _busyCommands.add(key);
+  renderDeviceList();
+  try {
+    const result = await api('POST', `/api/devices/${encodeURIComponent(deviceId)}/commands`, {
+      command,
+      params: params || {},
+      request_id: requestId()
+    });
+    pushCommandLog(result);
+    showToast(commandAccepted(result) ? '设备命令已投递' : '设备命令失败');
+  } catch (e) {
+    pushCommandLog({ ok:false, device_id:deviceId, command, status:'failed', message:'request_failed' });
+    showToast('设备命令请求失败');
+  } finally {
+    _busyCommands.delete(key);
+    renderDeviceList();
+    loadDevices(false);
+  }
+}
+
+function pushCommandLog(result) {
+  _commandLog.unshift({ ...result, at: Date.now() });
+  _commandLog = _commandLog.slice(0, 20);
+  renderCommandLog();
+}
+
+function renderCommandLog() {
+  const box = $('commandLog');
+  if (!_commandLog.length) {
+    box.innerHTML = '<div class="empty">还没有执行记录</div>';
+    return;
+  }
+  box.innerHTML = _commandLog.map(item => `
+    <div class="log-item ${commandAccepted(item) ? 'ok' : 'fail'}">
+      <div class="log-line">
+        <div class="log-title">${escHtml(item.device_id || '-')} · ${escHtml(item.command || '-')}</div>
+        <span class="status-chip ${commandAccepted(item) ? 'online' : 'offline'}">${escHtml(item.status || 'unknown')}</span>
+      </div>
+      <div class="log-detail">
+        ${new Date(item.at).toLocaleTimeString('zh-CN', { hour12:false })} · ${escHtml(item.message || '')}
+        ${item.audit_event_id ? ` · audit: ${escHtml(item.audit_event_id)}` : ''}
+      </div>
+      ${item.result ? `<div class="log-detail">${escHtml(JSON.stringify(item.result))}</div>` : ''}
+    </div>`).join('');
+}
+
+function clearCommandLog() {
+  _commandLog = [];
+  renderCommandLog();
+}
+
+function startDevicePolling() {
+  clearInterval(_pollTimer);
+  _pollTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') loadDevices(false);
+  }, 15000);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') loadDevices(false);
+});
+
+loadDevices(false);
+startDevicePolling();
+</script>
+</body>
+</html>

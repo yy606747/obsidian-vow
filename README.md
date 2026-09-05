@@ -75,7 +75,7 @@ Pending Recall 把这次检索拆到两轮之间：
 
 它用同轮完整性换掉一次昂贵的 Core 调用，也接受“这件事晚了一轮才想起来”。如果话题已经变化，selector 可以什么都不选。
 
-代码入口：[`memory_v2`](aion-chat/app/memory_v2/)、[`memory_v3`](aion-chat/app/memory_v3/)、[`working_model`](aion-chat/app/working_model/)、[`vows`](aion-chat/app/vows/) 和 [`memory_context.py`](aion-chat/app/chat/memory_context.py)。
+代码入口：[`memory_v2`](obsidian-chat/app/memory_v2/)、[`memory_v3`](obsidian-chat/app/memory_v3/)、[`working_model`](obsidian-chat/app/working_model/)、[`vows`](obsidian-chat/app/vows/) 和 [`memory_context.py`](obsidian-chat/app/chat/memory_context.py)。
 
 Memory 做到这里，companion 已经能记得，也能改变对这段关系的理解。可如果每次参与都要等伴侣先打开聊天框，这份理解最终还是只能留在聊天回复里。Harness 是从这里接下去的。
 
@@ -120,7 +120,7 @@ Function calling 在这里仍有明确的位置：对支持它的模型，它可
 
 修复时删掉了重复的布尔权限源。现在 prompt 中的能力快照与执行网关都读取活跃会话和实时设备状态；实际执行前还会再次核对 session id、control epoch、owner 和在线状态，覆盖模型生成期间断连的情况。
 
-代码入口：[`chat`](aion-chat/app/chat/)、[`turn_profiles.py`](aion-chat/app/chat/turn_profiles.py)、[`tools`](aion-chat/app/tools/)、[`sentinel`](aion-chat/app/sentinel/) 和 [`self_wake`](aion-chat/app/self_wake/)。
+代码入口：[`chat`](obsidian-chat/app/chat/)、[`turn_profiles.py`](obsidian-chat/app/chat/turn_profiles.py)、[`tools`](obsidian-chat/app/tools/)、[`sentinel`](obsidian-chat/app/sentinel/) 和 [`self_wake`](obsidian-chat/app/self_wake/)。
 
 让意图能落地以后，问题又往前走了一步：它什么时候该出现？只看聊天历史，很难知道伴侣此刻是在通勤、工作、休息，还是已经离开设备。可如果为了补齐当前状态就一直开着摄像头，又看得太多了。普适计算这一条线就是从这里长出来的。
 
@@ -139,7 +139,7 @@ Context Delivery 先统一来源、新鲜度、数量上限和缺失状态，再
 
 这部分没有 Memory 成熟。最小信号集合尚未确定，个人基线和信号子集消融也没有完成。跨设备证据管道已经搭起来，但这些弱信号本身仍然敏感，隐私与判断质量之间的曲线也还不知道长什么样。
 
-代码入口：[`AionApp`](AionApp/)、[`pc_agent`](pc_agent/)、[`context_delivery`](aion-chat/app/context_delivery/)、[`daily_signals`](aion-chat/app/daily_signals/) 和 [`presence`](aion-chat/app/presence/)。
+代码入口：[`ObsidianApp`](ObsidianApp/)、[`pc_agent`](pc_agent/)、[`context_delivery`](obsidian-chat/app/context_delivery/)、[`daily_signals`](obsidian-chat/app/daily_signals/) 和 [`presence`](obsidian-chat/app/presence/)。
 
 到这里，三条线又接回了一起：Memory 带来这段关系走到这里的历史，也影响 Core 此刻想以什么姿态靠近；普适计算带来当下；Harness 让 Core 基于两边形成的想法先有地方表达，再逐步落到现实，并把实际结果带进后续上下文。一次回复或行动变成新的共同经历，后来的理解再从这些经历里继续生长。
 
@@ -180,14 +180,16 @@ Obsidian Vow 从 AionsHome 的 `1fdb8cd` 基线 fork 而来，并非从零实现
 
 ## 跑起来
 
+已有安装可先运行 `python scripts/migrate_project_names.py` 预览改名迁移，再加 `--apply` 执行。脚本保留运行数据，并在修改环境变量前备份原配置；旧登录、浏览器偏好和 Android 设备身份由兼容入口延续。
+
 推荐使用 Linux amd64 与 Python 3.11；当前依赖锁和容器基础镜像按此组合验收：
 
 ```bash
 cp .env.example .env
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r aion-chat/requirements-dev.txt
-python aion-chat/main.py
+python -m pip install -r obsidian-chat/requirements-dev.txt
+python obsidian-chat/main.py
 ```
 
 打开 <http://127.0.0.1:18080/>。只查看界面和本地数据模型不需要 provider key；模型调用和 embedding 需要配置 provider。
@@ -196,7 +198,7 @@ python aion-chat/main.py
 
 ```bash
 cp .env.example .env
-docker compose -f aion-chat/docker-compose.yml up --build
+docker compose -f obsidian-chat/docker-compose.yml up --build
 ```
 
 工程核心检查使用临时数据，禁用真实网络与自主后台任务：
@@ -218,14 +220,14 @@ python scripts/check_backend.py \
   tests/test_public_defaults.py
 ```
 
-运行时数据写入 `aion-chat/data/`，该目录已被 Git 忽略。
+运行时数据写入 `obsidian-chat/data/`，该目录已被 Git 忽略。
 
 ## 仓库结构
 
 ```text
 .
-├── aion-chat/          FastAPI runtime、PWA、Memory、Harness 与测试
-├── AionApp/            Android 客户端与传感桥
+├── obsidian-chat/      FastAPI runtime、PWA、Memory、Harness 与测试
+├── ObsidianApp/        Android 客户端与传感桥
 ├── pc_agent/           Windows 上下文与 desktop-presence agent
 ├── cloudflare-worker/  可选的 provider proxy
 ├── docs/               长期运行记录与补充说明

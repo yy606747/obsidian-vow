@@ -75,7 +75,7 @@ Pending Recall moves the search across turns:
 
 It trades same-turn completeness for one fewer expensive Core call and accepts that some memories arrive one turn late. If the conversation has moved on, the selector may choose nothing.
 
-Key paths: [`memory_v2`](aion-chat/app/memory_v2/), [`memory_v3`](aion-chat/app/memory_v3/), [`working_model`](aion-chat/app/working_model/), [`vows`](aion-chat/app/vows/), and [`memory_context.py`](aion-chat/app/chat/memory_context.py).
+Key paths: [`memory_v2`](obsidian-chat/app/memory_v2/), [`memory_v3`](obsidian-chat/app/memory_v3/), [`working_model`](obsidian-chat/app/working_model/), [`vows`](obsidian-chat/app/vows/), and [`memory_context.py`](obsidian-chat/app/chat/memory_context.py).
 
 At this point, the companion can remember and revise its understanding of the relationship. But if every form of participation still waits for the partner to open a chat window, that understanding remains trapped in chat replies. The harness picks up from here.
 
@@ -120,7 +120,7 @@ During the incident window, the Core produced 13 device commands; all 13 were re
 
 The fix removed the duplicate boolean authority. Prompt-time capability snapshots and the execution gateway now read from the active session and live device state. Before execution, the runtime checks the session id, control epoch, owner, and online state again to cover disconnects during model generation.
 
-Key paths: [`chat`](aion-chat/app/chat/), [`turn_profiles.py`](aion-chat/app/chat/turn_profiles.py), [`tools`](aion-chat/app/tools/), [`sentinel`](aion-chat/app/sentinel/), and [`self_wake`](aion-chat/app/self_wake/).
+Key paths: [`chat`](obsidian-chat/app/chat/), [`turn_profiles.py`](obsidian-chat/app/chat/turn_profiles.py), [`tools`](obsidian-chat/app/tools/), [`sentinel`](obsidian-chat/app/sentinel/), and [`self_wake`](obsidian-chat/app/self_wake/).
 
 Once intent could reach the outside world, the next question was when the companion should appear. Chat history alone cannot tell whether the partner is commuting, working, resting, or away from a device. Keeping a camera open just to fill in the present would reveal too much. That is where ubiquitous computing grew from.
 
@@ -139,7 +139,7 @@ Context Delivery normalizes provenance, freshness, count limits, and missing sta
 
 This part is less mature than Memory. The project has not found a minimal signal set or completed personal baselines and signal-subset ablation. The cross-device evidence path exists, but the signals remain sensitive and the privacy–quality curve is still unknown.
 
-Key paths: [`AionApp`](AionApp/), [`pc_agent`](pc_agent/), [`context_delivery`](aion-chat/app/context_delivery/), [`daily_signals`](aion-chat/app/daily_signals/), and [`presence`](aion-chat/app/presence/).
+Key paths: [`ObsidianApp`](ObsidianApp/), [`pc_agent`](pc_agent/), [`context_delivery`](obsidian-chat/app/context_delivery/), [`daily_signals`](obsidian-chat/app/daily_signals/), and [`presence`](obsidian-chat/app/presence/).
 
 Here the three lines meet again. Memory brings the history of how the relationship arrived here and shapes how the Core wants to approach it now. Ubiquitous computing brings the present. The harness gives candidate intentions formed from both a place to be expressed before grounding them into action, then carries the actual results into later context. A reply or action becomes another shared experience from which future understanding can continue to grow.
 
@@ -174,14 +174,16 @@ The upstream project provided a complete application seed. Obsidian Vow's work i
 
 ## Run
 
+For existing installations, preview `python scripts/migrate_project_names.py`, then add `--apply`. The migration preserves runtime data and backs up environment configuration; compatibility entry points retain existing logins, browser preferences, and Android device identity.
+
 Python 3.11 is recommended:
 
 ```bash
 cp .env.example .env
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r aion-chat/requirements-dev.txt
-python aion-chat/main.py
+python -m pip install -r obsidian-chat/requirements-dev.txt
+python obsidian-chat/main.py
 ```
 
 Open <http://127.0.0.1:18080/>. Provider keys are optional for inspecting the UI and local data model; model calls and embeddings require a configured provider.
@@ -190,13 +192,13 @@ Docker is also supported:
 
 ```bash
 cp .env.example .env
-docker compose -f aion-chat/docker-compose.yml up --build
+docker compose -f obsidian-chat/docker-compose.yml up --build
 ```
 
 Focused contract tests:
 
 ```bash
-cd aion-chat
+cd obsidian-chat
 python -m pytest -q \
   tests/test_memory_v2_recall_rules.py \
   tests/test_memory_v3_readout.py \
@@ -207,14 +209,14 @@ python -m pytest -q \
   tests/test_public_defaults.py
 ```
 
-Runtime data is written under `aion-chat/data/`, which is ignored by Git.
+Runtime data is written under `obsidian-chat/data/`, which is ignored by Git.
 
 ## Repository map
 
 ```text
 .
-├── aion-chat/          FastAPI runtime, PWA, Memory, Harness, and tests
-├── AionApp/            Android client and sensor bridge
+├── obsidian-chat/      FastAPI runtime, PWA, Memory, Harness, and tests
+├── ObsidianApp/        Android client and sensor bridge
 ├── pc_agent/           Windows context and desktop-presence agent
 ├── cloudflare-worker/  Optional provider proxy
 ├── docs/               Sanitized production notes and supporting material

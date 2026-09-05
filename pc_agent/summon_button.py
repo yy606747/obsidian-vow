@@ -26,9 +26,9 @@ WM_HOTKEY = 0x0312
 # the saved state depend on it; the cat is smaller and the rest is glow room.
 #
 # The mark and its whole visual language come from the product's own launcher
-# icon (AionApp/.../ic_launcher_foreground.png): a dark silhouette with a warm
+# icon (ObsidianApp/.../ic_launcher_foreground.png): a dark silhouette with a warm
 # rim light and an outward bloom, not a shaded solid. Colours are the web UI's
-# tokens (aion-chat/static/common.css:3-17) — --accent #d4943a for the light,
+# tokens (obsidian-chat/static/common.css:3-17) — --accent #d4943a for the light,
 # --accent-glow for the bloom, and a body just above --bg #1a1714. The launcher
 # icon's own pair of cats turns to mush below ~40 px, so this is one cat drawn
 # for this size rather than that artwork scaled down.

@@ -85,9 +85,9 @@ def main() -> int:
     if not 2 <= args.dimensions <= 4096:
         parser.error("向量维数需在 2～4096 之间")
     if args.worker:
-        if os.environ.get("AION_TEST_MODE") != "1" or not os.environ.get("AION_DATA_DIR"):
+        if os.environ.get("OBSIDIAN_TEST_MODE") != "1" or not os.environ.get("OBSIDIAN_DATA_DIR"):
             parser.error("子进程必须由隔离入口启动")
-        sys.path.insert(0, str(ROOT / "aion-chat"))
+        sys.path.insert(0, str(ROOT / "obsidian-chat"))
         import runtime_safety
         runtime_safety.install_test_network_guard()
         print(json.dumps(asyncio.run(measure(args.rows, args.dimensions)), ensure_ascii=False))

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<script src="/static/brand_compat.js?v=20260905-brand"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>心语 - Obsidian Vow</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1714">
+<style>
+.hw-list { flex:1; overflow-y:auto; max-height:calc(100dvh - 120px); padding:4px 0; }
+.hw-empty { padding:60px 24px; text-align:center; color:var(--text3); font-size:14px; line-height:2; }
+.hw-card {
+  position: relative;
+  background: linear-gradient(135deg, var(--surface) 0%, rgba(42,36,32,0.95) 100%);
+  border: 1px solid var(--border);
+  border-left: 2px solid rgba(212,148,58,0.25);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  transition: box-shadow 0.3s, border-color 0.3s, transform 0.2s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.hw-card:hover {
+  box-shadow: 0 4px 20px rgba(212,148,58,0.1), 0 2px 8px rgba(0,0,0,0.2);
+  border-left-color: var(--accent);
+  transform: translateX(2px);
+}
+.hw-time { font-size: 11px; color: var(--text3); font-family: monospace; margin-bottom: 6px; }
+.hw-content { font-size: 14px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.hw-del {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s;
+}
+.hw-card:hover .hw-del { opacity: 1; }
+.hw-del:hover { color: var(--danger); }
+.hw-load-more {
+  display: block;
+  margin: 12px auto;
+  padding: 8px 24px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.hw-load-more:hover { background: var(--border); }
+.hw-stats { text-align: center; font-size: 12px; color: var(--text3); padding: 8px 0; }
+</style>
+</head>
+<body>
+<div class="sub-page">
+  <div class="top-bar">
+    <button class="back-btn" onclick="location.href='/'">⬅</button>
+    <h2>💭 心语</h2>
+  </div>
+  <div class="page-content">
+    <div class="hw-list" id="hwList">
+      <div class="hw-empty">💭 还没有心语记录<br>当 AI 有特别的内心想法时，会悄悄记在这里</div>
+    </div>
+  </div>
+</div>
+<script src="/static/common.js?v=20260905-brand"></script>
+<script src="/static/web_push.js?v=20260905-brand"></script>
+<script>
+const PAGE_SIZE = 20;
+let currentPage = 1;
+let totalItems = 0;
+let allItems = [];
+
+async function loadWhispers(page = 1, append = false) {
+  try {
+    const res = await api('GET', `/api/heart-whispers?page=${page}&page_size=${PAGE_SIZE}`);
+    totalItems = res.total;
+    if (append) {
+      allItems = allItems.concat(res.items);
+    } else {
+      allItems = res.items;
+    }
+    currentPage = page;
+    renderList();
+  } catch (e) {
+    console.error('加载心语失败:', e);
+  }
+}
+
+function renderList() {
+  const container = document.getElementById('hwList');
+  if (!allItems.length) {
+    container.innerHTML = '<div class="hw-empty">💭 还没有心语记录<br>当 AI 有特别的内心想法时，会悄悄记在这里</div>';
+    return;
+  }
+  let html = '';
+  for (const item of allItems) {
+    const d = new Date(item.created_at * 1000);
+    const timeStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    html += `<div class="hw-card" data-id="${item.id}">
+      <button class="hw-del" onclick="deleteWhisper('${item.id}')" title="删除">✕</button>
+      <div class="hw-time">💭 ${timeStr}</div>
+      <div class="hw-content">${escapeHtml(item.content)}</div>
+    </div>`;
+  }
+  html += `<div class="hw-stats">共 ${totalItems} 条心语</div>`;
+  if (allItems.length < totalItems) {
+    html += `<button class="hw-load-more" onclick="loadMore()">加载更多</button>`;
+  }
+  container.innerHTML = html;
+}
+
+function loadMore() {
+  loadWhispers(currentPage + 1, true);
+}
+
+async function deleteWhisper(id) {
+  if (!confirm('确定删除这条心语吗？')) return;
+  try {
+    await api('DELETE', `/api/heart-whispers/${id}`);
+    allItems = allItems.filter(i => i.id !== id);
+    totalItems--;
+    renderList();
+  } catch (e) {
+    console.error('删除失败:', e);
+  }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// WebSocket 实时推送新心语
+if (typeof connectWS === 'function') {
+  const origHandler = window._hwSyncHandler;
+  window.addEventListener('message', e => {});
+  // 监听 WS 消息
+  const _origWsOnMsg = null;
+  function hookWS() {
+    if (window._ws && window._ws.readyState === 1) {
+      const orig = window._ws.onmessage;
+      window._ws.onmessage = function(e) {
+        if (orig) orig.call(this, e);
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'heart_whisper' && msg.data) {
+            // 新心语：插入到列表顶部
+            allItems.unshift(msg.data);
+            totalItems++;
+            renderList();
+          }
+        } catch {}
+      };
+    } else {
+      setTimeout(hookWS, 500);
+    }
+  }
+  hookWS();
+}
+
+loadWhispers();
+</script>
+</body>
+</html>
