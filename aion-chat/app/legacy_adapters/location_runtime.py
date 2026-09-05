@@ -311,11 +311,12 @@ class LocationRuntime:
                 return
             loop = getattr(sentinel_runtime, "_loop", None)
             coro = sentinel_runtime._analyze_and_log()
+            from app.background_tasks import create_tracked_task, run_tracked_threadsafe
             if loop is not None and loop.is_running():
-                asyncio.run_coroutine_threadsafe(coro, loop)
+                run_tracked_threadsafe(coro, loop, name="location_sentinel_evaluation")
                 scheduler = "threadsafe"
             else:
-                asyncio.create_task(coro)
+                create_tracked_task(coro, name="location_sentinel_evaluation")
                 scheduler = "create_task"
             self.record_use_case_event({
                 "scope": "location:sentinel_trigger_requested",

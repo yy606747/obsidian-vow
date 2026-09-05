@@ -13,15 +13,16 @@ from fastapi.responses import StreamingResponse
 from ai_providers import stream_ai
 from camera import CAM_CHECK_CMD, CAMERA_DISABLED_REASON
 from database import get_db
-from music import get_audio_url, search_songs
 from routes.files import export_conversation
 from schedule import process_schedule_commands_with_results
 from ws import manager
 
 from app.background_tasks import create_tracked_task
+from app.turn_diagnostics import DiagnosticQueue, TurnDiagnostics, current_turn
 from app.control import control_command_gateway
 from app.devices import device_service
 from app.modes import mode_service
+from app.memory_v2.service import memory_service
 from app.memory_v3.pending_recall import pending_recall_service
 from app.memory_v3.repository import PendingRecallRepository
 from app.memory_v3.timeline import timeline_service
@@ -50,8 +51,6 @@ from .side_effects import (
     VOW_BLOCKED_TEXT,
     _maybe_auto_digest,
     _schedule_chunk_index_update,
-    _store_heart_whisper,
-    _store_remember_notes,
     _toy_sys_msg,
     perform_activity_check,
     perform_poi_check,
@@ -344,33 +343,6 @@ class _WebSearchIntentStreamFilter(PairedPrivateMarkerStreamFilter):
         super().__init__(WEB_SEARCH_INTENT_OPEN, WEB_SEARCH_INTENT_CLOSE)
 
 
-async def _execute_heart_whisper(intent: ToolIntent, context: ToolContext) -> dict | None:
-    content = str(intent.arguments.get("content") or "").strip()
-    if not context.msg_id:
-        raise ValueError("heart.whisper requires msg_id")
-    return await _store_heart_whisper(context.conv_id, context.msg_id, content)
-
-
-async def _execute_remember_note(intent: ToolIntent, context: ToolContext) -> dict:
-    content = str(intent.arguments.get("content") or "").strip()
-    if content:
-        await _store_remember_notes([content], context.conv_id)
-    return {"content": content, "stored": bool(content)}
-
-
-async def _execute_music_search(intent: ToolIntent, _context: ToolContext) -> dict:
-    query = str(intent.arguments.get("query") or "").strip()
-    if not query:
-        return {"query": query, "cards": []}
-    results = search_songs(query, limit=5)
-    if not results:
-        return {"query": query, "cards": []}
-    song = dict(results[0])
-    song["audio_url"] = get_audio_url(song["id"])
-    song["candidates"] = [dict(item) for item in results[1:4]]
-    return {"query": query, "cards": [song]}
-
-
 def _music_attachments(music_cards: list[dict]) -> list[dict]:
     return [
         {
@@ -383,13 +355,6 @@ def _music_attachments(music_cards: list[dict]) -> list[dict]:
     ]
 
 
-def _music_search_intents(postprocessed) -> list[ToolIntent]:
-    return [
-        intent for intent in getattr(postprocessed, "tool_intents", ())
-        if intent.tool_name == "music.search"
-    ]
-
-
 def _music_cards_from_results(results) -> list[dict]:
     cards: list[dict] = []
     for result in results:
@@ -398,64 +363,6 @@ def _music_cards_from_results(results) -> list[dict]:
         for card in result.result.get("cards", []) or []:
             cards.append(dict(card))
     return cards
-
-
-def _heart_whisper_intents(postprocessed) -> list[ToolIntent]:
-    heart_intents = [
-        intent for intent in getattr(postprocessed, "tool_intents", ())
-        if intent.tool_name == "heart.whisper"
-    ]
-    if heart_intents:
-        return heart_intents
-
-    fallback: list[ToolIntent] = []
-    for index, content in enumerate(getattr(postprocessed, "heart_whispers", ()) or (), 1):
-        content = str(content or "").strip()
-        if not content:
-            continue
-        fallback.append(ToolIntent(
-            id=f"stream_heart_{index:03d}",
-            tool_name="heart.whisper",
-            raw_text=f"[HEART:{content}]",
-            arguments={"content": content},
-            side_effect_level="write",
-            allowed_modes=("normal",),
-            metadata={
-                "legacy_marker": "HEART",
-                "command_group": "heart",
-                "source": "postprocess_result",
-            },
-        ))
-    return fallback
-
-
-def _remember_intents(postprocessed) -> list[ToolIntent]:
-    remember_intents = [
-        intent for intent in getattr(postprocessed, "tool_intents", ())
-        if intent.tool_name == "memory.remember"
-    ]
-    if remember_intents:
-        return remember_intents
-
-    fallback: list[ToolIntent] = []
-    for index, content in enumerate(getattr(postprocessed, "remember_notes", ()) or (), 1):
-        content = str(content or "").strip()
-        if not content:
-            continue
-        fallback.append(ToolIntent(
-            id=f"stream_remember_{index:03d}",
-            tool_name="memory.remember",
-            raw_text=f"[REMEMBER:{content}]",
-            arguments={"content": content},
-            side_effect_level="write",
-            allowed_modes=("normal",),
-            metadata={
-                "legacy_marker": "REMEMBER",
-                "command_group": "remember",
-                "source": "postprocess_result",
-            },
-        ))
-    return fallback
 
 
 def _toy_command_intents(postprocessed) -> list[ToolIntent]:
@@ -1192,6 +1099,7 @@ def _tool_context(
         memory_eval_mode=memory_eval_mode,
         metadata={
             "source": str(prompt_meta.get("prompt_source") or "send"),
+            "turn_id": prompt_meta.get("turn_id"),
             "source_chain": "main",
             "invocation_id": prompt_meta.get("invocation_id"),
             "current_user_message_id": prompt_meta.get("current_user_message_id"),
@@ -1286,9 +1194,11 @@ async def replace_message_and_freeze_vow_context(conv_id: str, message_id: str) 
                 message_id=message_id,
             )
             await db.execute("DELETE FROM messages WHERE id=?", (message_id,))
+            await memory_service.reconcile_conversation_chunks_in_tx(db, conv_id)
             active = await vow_repository.list_active(db)
             remaining = await ai_quota_remaining(db, now)
             await db.commit()
+            memory_service.invalidate_conversation_cache(conv_id)
         except BaseException:
             await db.rollback()
             raise
@@ -1315,11 +1225,18 @@ async def stream_chat_response(
     memory_eval_mode: bool = False,
 ) -> StreamingResponse:
     ai_msg_id = f"msg_{int(time.time()*1000)}"
+    trace = prompt_meta.pop("_turn_trace", None)
+    if not isinstance(trace, TurnDiagnostics):
+        trace = TurnDiagnostics(conv_id, str(prompt_meta.get("prompt_source") or "send"))
+    trace.model_key = model_key
+    trace.assistant_message_id = ai_msg_id
+    prompt_meta["turn_id"] = trace.turn_id
     usage_meta: dict = {}
-    queue: asyncio.Queue = asyncio.Queue()
+    queue: asyncio.Queue = DiagnosticQueue(trace)
     memory_v2_recall_debug = prompt_meta.get("memory_v2_recall")
 
     async def _bg_generate():
+        trace_token = current_turn.set(trace)
         full_text = ""
         raw_model_output = ""
         provider_error = ""
@@ -1357,7 +1274,7 @@ async def stream_chat_response(
                 prompt_meta=prompt_meta,
                 memory_eval_mode=memory_eval_mode,
             )
-            await queue.put({"id": ai_msg_id, "type": "start"})
+            await queue.put({"id": ai_msg_id, "type": "start", "turn_id": trace.turn_id})
             await tool_invocation_ledger.record_model_request(
                 tool_context,
                 invocation_id=model_invocation_id,
@@ -1368,8 +1285,11 @@ async def stream_chat_response(
                         prompt_meta.get("prompt_source") or "send"
                     ),
                     "temperature": temperature,
+                    "diagnostics": trace.snapshot(),
+                    "image_history": prompt_meta.get("image_history"),
                 },
             )
+            trace.start("model")
             try:
                 async for chunk in stream_ai(history, model_key, usage_meta, temperature):
                     chunk = str(chunk)
@@ -1420,6 +1340,8 @@ async def stream_chat_response(
                 error_text = f"\n[请求出错: {str(exc)}]"
                 full_text += error_text
                 await queue.put({"type": "chunk", "content": error_text})
+            finally:
+                trace.finish("model")
 
             full_text = strip_retry_marker(full_text)
             stripped = full_text.strip()
@@ -1436,7 +1358,7 @@ async def stream_chat_response(
                     "succeeded" if stripped else "unknown"
                 )),
                 error=provider_error,
-                metadata={"turn_outcome": turn_outcome},
+                metadata={"turn_outcome": turn_outcome, "diagnostics": trace.snapshot(usage_meta)},
             )
             if not buffering_structured_reply:
                 visible_tail = vow_filter.feed(
@@ -1762,6 +1684,8 @@ async def stream_chat_response(
                 "created_at": now2,
                 "attachments": music_atts,
             }
+            if full_text:
+                trace.visible()
             await manager.broadcast({"type": "msg_created", "data": ai_msg})
             if full_text:
                 await tool_invocation_ledger.record_visible_message(
@@ -1904,6 +1828,18 @@ async def stream_chat_response(
                 await queue.put(ms_data)
                 await manager.broadcast({"type": ms_data.get("type", "screen_check_pending"), "data": ms_data})
 
+            if not has_error:
+                image_execution = await execute_postprocessed_actions(
+                    postprocessed, profile=turn_profile, context=tool_context,
+                    only_capabilities=frozenset({"memory.view_image"}),
+                )
+                for image_result in _executed_payloads(image_execution.results_for("memory.view_image")):
+                    from app.image_memory.view import followup as image_view_followup
+                    create_tracked_task(
+                        image_view_followup(tool_context, image_result),
+                        name=f"image_view_followup:{conv_id}:{ai_msg_id}",
+                    )
+
             if music_cards:
                 music_data = {"type": "music", "msg_id": ai_msg_id, "cards": music_cards}
                 await queue.put(music_data)
@@ -1933,6 +1869,9 @@ async def stream_chat_response(
 
             debug_data = {
                 "type": "debug",
+                "turn_id": trace.turn_id,
+                "diagnostics": trace.snapshot(usage_meta),
+                "image_history": prompt_meta.get("image_history"),
                 "model": model_key,
                 "msg_id": ai_msg_id,
                 "recall_keywords": prompt_meta["recall_keywords"],
@@ -1970,6 +1909,9 @@ async def stream_chat_response(
             }
             await queue.put(debug_data)
             await manager.broadcast({"type": "debug", "data": debug_data})
+        except asyncio.CancelledError:
+            turn_outcome = "cancelled"
+            raise
         except Exception:
             if turn_outcome in {"succeeded", "invalid_output"}:
                 turn_outcome = "pipeline_failed"
@@ -2001,9 +1943,11 @@ async def stream_chat_response(
                         "memory_eval_mode": bool(memory_eval_mode),
                         "assistant_persisted": assistant_persisted,
                         "has_error": has_error,
+                        "diagnostics": trace.snapshot(usage_meta, finished=True),
                     },
                 )
             await queue.put({"type": "done"})
+            current_turn.reset(trace_token)
 
     create_tracked_task(_bg_generate(), name=f"chat_stream:{conv_id}:{ai_msg_id}")
 

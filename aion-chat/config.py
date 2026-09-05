@@ -7,14 +7,19 @@ from __future__ import annotations
 import json, time, re, os
 from pathlib import Path
 
+from runtime_safety import TEST_MODE, install_test_network_guard, resolve_data_dir
+
+install_test_network_guard()
+
 # ── 路径 ─────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
 PUBLIC_DIR = BASE_DIR.parent / "public"
-DATA_DIR = BASE_DIR / "data"
 
 # ── .env 加载（放最前面，让后续所有 SETTINGS / get_key 都能读到）──
 # 查找顺序：项目根 .env → aion-chat/.env。有 python-dotenv 就用，没有就手工读。
 def _load_dotenv_safe():
+    if TEST_MODE:
+        return
     candidates = [BASE_DIR.parent / ".env", BASE_DIR / ".env"]
     try:
         from dotenv import load_dotenv
@@ -42,6 +47,7 @@ def _load_dotenv_safe():
             return
 
 _load_dotenv_safe()
+DATA_DIR = resolve_data_dir(BASE_DIR)
 
 
 def _env(*names) -> str:
@@ -54,7 +60,7 @@ def _env(*names) -> str:
 
 
 
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "chat.db"
 UPLOADS_DIR = DATA_DIR / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
@@ -117,7 +123,7 @@ def load_settings():
     else:
         data = {"gemini_key": "", "siliconflow_key": "", "gemini_free_key": "", "aipro_key": "", "tavily_api_key": ""}
         txt = BASE_DIR.parent / "所需要的API.txt"
-        if txt.exists():
+        if not TEST_MODE and txt.exists():
             with open(txt, "r", encoding="utf-8") as f:
                 for line in f:
                     if "gemini-api" in line.lower():
@@ -406,6 +412,11 @@ def _ensure_endpoints_and_slots(data: dict) -> bool:
             data[PRESENCE_IMAGE_SLOT_MIGRATION_KEY] = True
             presence_image_migration_done = True
             changed = True
+    if "vision_summary" not in slots:
+        slots["vision_summary"] = {
+            "endpoint": "", "model": "glm-4.6v-flash", "enabled": False,
+        }
+        changed = True
     if "asr" not in slots:
         slots["asr"] = {
             "endpoint": default_ep,
@@ -529,6 +540,7 @@ def resolve_core_model(model_key: str) -> dict | None:
                 # Capability declarations are deliberately strict.  An omitted
                 # value must never make the chat chain guess that audio works.
                 "audio_input": um.get("audio_input") is True,
+                "image_input": um.get("image_input"),
             }
     return None
 

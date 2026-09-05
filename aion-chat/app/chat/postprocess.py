@@ -63,6 +63,7 @@ ALL_COMMANDS = frozenset({
     "schedule",
     "heart",
     "remember",
+    "view_image",
     "ring",
     "presence_draw",
     "presence_show",

@@ -513,6 +513,9 @@ def test_conflict_links_request_before_type_gate_and_reloads_labeled_source(tmp_
 
     async def writer_provider(messages):
         rendered = json.dumps(messages, ensure_ascii=False)
+        payload = json.loads(messages[-1]["content"])
+        assert "original_user_message" not in payload
+        assert "statement_source" not in payload
         assert "[誓约] 不伪造" in rendered
         assert "conversation_excerpt" in rendered
         assert "用户: 这次我想先自己想想。" in rendered

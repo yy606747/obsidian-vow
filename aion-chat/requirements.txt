@@ -1,20 +1,3 @@
-fastapi
-uvicorn[standard]
-httpx
-aiosqlite
-Pillow
-numpy
-pyncm==1.8.1
-pydantic
-python-multipart
-websockets
-psutil
-python-dotenv
-pywebpush==2.4.0
-requests
-rembg[cpu]==2.0.81
-
-# 服务器部署默认不装语音/视觉本地依赖：
-# - opencv-python：旧摄像头模块已移除
-# - sounddevice / webrtcvad-wheels：服务器无声卡，voice.py 会自动降级
-# - pywin32：仅 Windows
+# 顶层依赖在 requirements.in 维护，安装统一使用已验收的版本与校验值。
+--require-hashes
+-r requirements.lock

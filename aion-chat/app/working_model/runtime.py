@@ -699,6 +699,7 @@ async def run_working_model_pipeline(
         )
         return {"request": row, "deduplicated": False}
 
+    latest_user_message = None
     if value.source_kind == "reflection":
         gate_result = await run_reflection_type_gate(
             statement=value.statement,
@@ -858,6 +859,8 @@ async def run_working_model_pipeline(
             current_desire=desire_head["content"],
             statement=value.statement,
             source=value.source,
+            original_user_message=latest_user_message,
+            original_user_message_id=value.origin_user_message_id if latest_user_message is not None else None,
             provider=writer_provider,
         )
         writer_results.append(writer_result.to_dict())

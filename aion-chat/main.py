@@ -29,8 +29,10 @@ class _QuietCamFilter(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(_QuietCamFilter())
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from config import BASE_DIR, PUBLIC_DIR, UPLOADS_DIR, SCREENSHOTS_DIR, SETTINGS, load_ai_behavior
-from database import init_db
+from config import BASE_DIR, PUBLIC_DIR, UPLOADS_DIR, SCREENSHOTS_DIR, SETTINGS, TEST_MODE, load_ai_behavior
+from database import get_db, init_db
+from app.background_tasks import begin_task_lifecycle, create_tracked_task
+from app.lifecycle import RuntimeResources
 from ws import manager
 from app.devices import device_service
 from sentinel_runtime import sentinel_runtime
@@ -43,6 +45,7 @@ from app.daily_signals import reconcile_daily_signals, run_daily_signal_reconcil
 from app.daily_signals.config import daily_timezone_name
 
 from routes import chat, cam as cam_routes, files, settings, memories
+from routes import image_memory as image_memory_routes
 from routes import modes as modes_routes
 from routes import devices as devices_routes
 from routes import control as control_routes
@@ -86,10 +89,29 @@ def _should_send_ring_keepalive(device_type: str | None, metadata: dict) -> bool
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    resources = RuntimeResources()
+    app.state.runtime_resources = resources
+    app.state.ready = False
+    begin_task_lifecycle()
+    try:
+        async with _runtime_lifespan(app):
+            app.state.ready = True
+            yield
+    finally:
+        app.state.ready = False
+        await resources.shutdown(timeout=5.0)
+
+
+@asynccontextmanager
+async def _runtime_lifespan(app: FastAPI):
     from app.tools.registry import validate_tool_registry
 
     validate_tool_registry()
     await init_db()
+    if TEST_MODE:
+        # 隔离检查只初始化临时数据库，不重放任务、启动线程或执行清理。
+        yield
+        return
     from app.presence import sprite_library
 
     await sprite_library.ensure_seed_sprites()
@@ -117,13 +139,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[PCScreen] startup cleanup failed: {e}")
     loop = asyncio.get_event_loop()
+    resources = app.state.runtime_resources
     # 哨兵：文字 timeline 版，无需打开摄像头
+    resources.add_stop("sentinel", sentinel_runtime.stop_monitoring)
     sentinel_runtime.set_event_loop(loop)
     sentinel_runtime.start_monitoring()
     # 语音模块初始化
+    resources.add_stop("voice", voice.stop)
     voice.set_event_loop(loop)
     voice.set_ws_manager(manager)
     # 日程/闹铃模块初始化
+    resources.add_stop("schedule", schedule_mgr.stop)
     schedule_mgr.set_event_loop(loop)
     # 先补扫错过的闹铃再启动循环，避免启动瞬间一次性轰炸多个通知
     try:
@@ -135,10 +161,12 @@ async def lifespan(app: FastAPI):
 
     # 机会机制：Fibonacci 间隔的自由意志窗口
     if load_ai_behavior().get("opportunity_enabled", False):
+        resources.add_stop("opportunity", opportunity_runner.stop)
         opportunity_runner.start()
 
     # 看门狗：定期检查关键后台线程，挂了自动重启
     watchdog = Watchdog(poll_interval=30.0)
+    resources.add_stop("watchdog", watchdog.stop)
 
     def _voice_alive():
         # 只在用户开启了语音时才看护
@@ -173,8 +201,8 @@ async def lifespan(app: FastAPI):
     watchdog.register("voice", _voice_alive, _voice_restart)
     watchdog.register("sentinel", _sentinel_alive, _sentinel_restart)
     watchdog.register("schedule", _sched_alive, _sched_restart)
-    watchdog_task = asyncio.create_task(watchdog.run())
-    daily_signal_task = asyncio.create_task(run_daily_signal_reconcile_loop())
+    create_tracked_task(watchdog.run(), name="watchdog")
+    create_tracked_task(run_daily_signal_reconcile_loop(), name="daily_signals")
     async def _opportunity_loop():
         while True:
             await asyncio.sleep(10)
@@ -182,76 +210,65 @@ async def lifespan(app: FastAPI):
                 await opportunity_runner.maybe_fire()
             except Exception as e:
                 print(f"[Opportunity] loop error: {e}")
-    opportunity_task = asyncio.create_task(_opportunity_loop())
+    create_tracked_task(_opportunity_loop(), name="opportunity")
 
     from app.presence.night_round import night_round_scheduler
     from app.presence.summon import summon_coordinator
 
     await summon_coordinator.recover_after_restart()
     await night_round_scheduler.recover_after_restart()
-    night_round_task = asyncio.create_task(
-        night_round_scheduler.run_loop(poll_interval_sec=30.0)
+    create_tracked_task(
+        night_round_scheduler.run_loop(poll_interval_sec=30.0), name="presence_night_round",
     )
 
     from app.self_wake.service import run_scan_loop as run_self_wake_scan_loop
 
-    self_wake_task = asyncio.create_task(run_self_wake_scan_loop(interval_sec=10.0))
+    create_tracked_task(run_self_wake_scan_loop(interval_sec=10.0), name="self_wake_scan")
 
     from context_delivery_shadow_runtime import run_context_trigger_outcome_loop
 
-    context_trigger_outcome_task = asyncio.create_task(
-        run_context_trigger_outcome_loop()
+    create_tracked_task(
+        run_context_trigger_outcome_loop(), name="context_trigger_outcomes",
     )
 
     from app.memory_v3.card_generation import run_relational_card_generation_loop
 
-    relational_card_task = asyncio.create_task(
-        run_relational_card_generation_loop(interval_sec=300.0)
+    create_tracked_task(
+        run_relational_card_generation_loop(interval_sec=300.0), name="memory_relational_cards",
     )
 
     from app.presence import presence_service
 
-    presence_lease_task = asyncio.create_task(
-        presence_service.run_lease_cleanup_loop(interval_sec=5.0)
+    create_tracked_task(
+        presence_service.run_lease_cleanup_loop(interval_sec=5.0), name="presence_leases",
     )
 
     async def _screen_cleanup_loop():
         while True:
             await asyncio.sleep(900)
             cleanup_all_screen_files()
-    screen_cleanup_task = asyncio.create_task(_screen_cleanup_loop())
+    create_tracked_task(_screen_cleanup_loop(), name="screen_cleanup")
 
     yield
 
-    watchdog.stop()
-    watchdog_task.cancel()
-    daily_signal_task.cancel()
-    opportunity_runner.stop()
-    opportunity_task.cancel()
-    night_round_task.cancel()
-    try:
-        await night_round_task
-    except asyncio.CancelledError:
-        pass
-    self_wake_task.cancel()
-    try:
-        await self_wake_task
-    except asyncio.CancelledError:
-        pass
-    context_trigger_outcome_task.cancel()
-    try:
-        await context_trigger_outcome_task
-    except asyncio.CancelledError:
-        pass
-    relational_card_task.cancel()
-    presence_lease_task.cancel()
-    screen_cleanup_task.cancel()
-    schedule_mgr.stop()
-    voice.stop()
-    sentinel_runtime.stop_monitoring()
-
-
 app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/healthz", include_in_schema=False)
+async def healthz():
+    if not getattr(app.state, "ready", False):
+        return JSONResponse({"status": "not_ready"}, status_code=503)
+
+    async def check_database():
+        async with get_db(timeout=0.2, read_only=True) as db:
+            await db.execute("SELECT id FROM conversations LIMIT 1")
+
+    try:
+        await asyncio.wait_for(check_database(), timeout=1.0)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("健康检查数据库不可读：%s", type(exc).__name__)
+        return JSONResponse({"status": "unavailable"}, status_code=503)
+    return JSONResponse({"status": "ok"}, headers={"Cache-Control": "no-store"})
 
 
 # 静态资源缓存：页面保持短缓存，图片/CSS/JS 用较长缓存减少公网重复下载。
@@ -281,7 +298,7 @@ _AUTH_TOKEN = (os.environ.get("AION_AUTH_TOKEN") or "").strip()
 _AUTH_COOKIE = "aion_token"
 # 这些路径永远放行，避免 PWA / 静态页加载失败
 _AUTH_PUBLIC_PREFIXES = ("/static/", "/public/")
-_AUTH_PUBLIC_EXACT = {"/sw.js", "/manifest.json", "/favicon.ico", "/download-apk"}
+_AUTH_PUBLIC_EXACT = {"/sw.js", "/manifest.json", "/favicon.ico", "/download-apk", "/healthz"}
 
 
 def _safe_eq(a: str, b: str) -> bool:
@@ -342,6 +359,7 @@ app.include_router(cam_routes.router)
 app.include_router(files.router)
 app.include_router(settings.router)
 app.include_router(memories.router)
+app.include_router(image_memory_routes.router)
 app.include_router(modes_routes.router)
 app.include_router(devices_routes.router)
 app.include_router(control_routes.router)

@@ -248,7 +248,7 @@ def _truncate_json_snapshot(value: Any, max_bytes: int) -> tuple[str, bool, int]
 
 
 def _turn_id(context: ToolContext) -> str:
-    return str(context.request_id or context.msg_id or "").strip()
+    return str(context.metadata.get("turn_id") or context.request_id or context.msg_id or "").strip()
 
 
 def _invocation_id(context: ToolContext) -> str:
@@ -1033,6 +1033,23 @@ class ToolInvocationLedger:
                     error=error,
                     result=result,
                 )
+            return 0
+
+    async def record_diagnostic(
+        self, context: ToolContext, *, phase: str, outcome: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> int:
+        try:
+            if not _turn_id(context):
+                return 0
+            row = self._base_row(
+                event_key=f"diagnostic:{_turn_id(context)}:{uuid.uuid4().hex}",
+                context=context, stage="diagnostic",
+            )
+            row.update({"outcome": outcome, "metadata_json": _json({"phase": phase, **dict(metadata or {})})})
+            return await self._insert_rows([row])
+        except Exception:
+            self._record_failure("diagnostic write")
             return 0
 
     async def record_turn(

@@ -8,6 +8,7 @@ from app.chat import crud_routes
 from app.self_wake import repository as repository_module
 from app.self_wake.repository import SelfWakeRepository
 from app.self_wake.schema import init_self_wake_tables
+from app.memory_v3.schema import init_memory_v3_tables
 
 
 def _run(awaitable):
@@ -31,8 +32,20 @@ def _database(tmp_path, monkeypatch):
             await db.execute(
                 "CREATE TABLE messages "
                 "(id TEXT PRIMARY KEY, conv_id TEXT, role TEXT, content TEXT, "
-                "created_at REAL, attachments TEXT)"
+                "created_at REAL, attachments TEXT, "
+                "FOREIGN KEY (conv_id) REFERENCES conversations(id) ON DELETE CASCADE)"
             )
+            await db.execute(
+                "CREATE TABLE memory_chunks (id TEXT PRIMARY KEY, conv_id TEXT, "
+                "message_ids_json TEXT NOT NULL DEFAULT '[]', content TEXT, "
+                "created_at REAL, updated_at REAL, embedding BLOB, "
+                "keywords_json TEXT NOT NULL DEFAULT '[]', metadata_json TEXT NOT NULL DEFAULT '{}')"
+            )
+            await db.execute(
+                "CREATE TABLE memory_items (id TEXT PRIMARY KEY, legacy_memory_id TEXT, "
+                "metadata_json TEXT NOT NULL DEFAULT '{}')"
+            )
+            await init_memory_v3_tables(db)
             await db.execute(
                 "INSERT INTO conversations VALUES ('conv','title','m',0,0)"
             )

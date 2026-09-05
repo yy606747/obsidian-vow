@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from app.background_tasks import create_tracked_task
 import json
 import time
 from collections.abc import Iterable
@@ -140,13 +141,14 @@ def selection_prompt_items(selection: dict, candidates: list[dict]) -> list[dict
             {
                 "id": candidate_id,
                 "candidate_id": candidate_id,
-                "source_type": "chunk",
-                "kind": "raw_chunk",
+                "source_type": candidate.get("source_type", "chunk"),
+                "attachment_url": candidate.get("attachment_url"),
+                "kind": "image_observation" if candidate.get("source_type") == "image" else "raw_chunk",
                 "lane": "pending",
                 "readout_type": (
-                    "raw_full" if needs_raw else "relational_card" if has_card else "raw"
+                    "image_observation" if candidate.get("source_type") == "image" else "raw_full" if needs_raw else "relational_card" if has_card else "raw"
                 ),
-                "needs_raw_detail": needs_raw,
+                "needs_raw_detail": needs_raw and candidate.get("source_type") != "image",
                 "content": str(candidate.get("raw_content") or ""),
                 "raw_content": str(candidate.get("raw_content") or ""),
                 "preview": str(candidate.get("readout_text") or ""),
@@ -178,7 +180,7 @@ class PendingRecallService:
             existing = self._tasks.get(pending_id)
             if existing is not None and not existing.done():
                 return existing
-            task = asyncio.create_task(
+            task = create_tracked_task(
                 self._retrieve(pending_id),
                 name=f"pending_recall:{pending_id}",
             )
@@ -200,7 +202,7 @@ class PendingRecallService:
         async def start() -> None:
             await self._task_for(pending_id)
 
-        asyncio.create_task(start(), name=f"pending_recall_start:{pending_id}")
+        create_tracked_task(start(), name=f"pending_recall_start:{pending_id}")
 
     async def _retrieve(self, pending_id: str) -> None:
         row = await self.repository.get(pending_id)
@@ -225,6 +227,8 @@ class PendingRecallService:
                     as_of_ts=float(row.get("created_at") or now),
                     exclude_message_id=str(row.get("origin_assistant_message_id") or ""),
                     relational_cards_enabled=config["relational_cards_enabled"],
+                    full_corpus_enabled=config["pending_full_corpus_enabled"],
+                    ai_note_lane_enabled=config["ai_note_lane_enabled"],
                 ),
                 timeout=max(remaining, 0.001),
             )

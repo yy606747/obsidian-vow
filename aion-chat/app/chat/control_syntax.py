@@ -25,6 +25,7 @@ VALUE_MARKERS = {
         "HEART",
         "RING",
         "REMEMBER",
+        "VIEW_IMAGE",
         "VOW",
         "UPDATE_MODEL",
         "查看动态",

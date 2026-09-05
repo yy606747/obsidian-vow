@@ -172,9 +172,15 @@ Obsidian Vow 从 AionsHome 的 `1fdb8cd` 基线 fork 而来，并非从零实现
 
 上游提供了完整的应用种子。Obsidian Vow 的工作主要发生在关系状态、主动性、执行边界、跨设备上下文，以及这些机制向长期生产数据的迁移上。
 
+## 2026-09-05 工程更新
+
+本次补齐依赖锁、备份恢复、图片续聊、旧记忆检索、单轮诊断和后台任务收尾，并修复对应审查问题。认识更新现在同时接收来源原话，既定关系维护原则不变。
+
+图片描述、长期图片检索和按需重看已接入，但默认关闭。视觉摘要使用独立可配置槽位，不跟随主聊天模型，也不自动切换付费型号。设置、检查与回退方法见[工程更新说明](docs/engineering-update-2026-09-05.md)。
+
 ## 跑起来
 
-推荐使用 Python 3.11：
+推荐使用 Linux amd64 与 Python 3.11；当前依赖锁和容器基础镜像按此组合验收：
 
 ```bash
 cp .env.example .env
@@ -193,11 +199,16 @@ cp .env.example .env
 docker compose -f aion-chat/docker-compose.yml up --build
 ```
 
-聚焦契约测试：
+工程核心检查使用临时数据，禁用真实网络与自主后台任务：
 
 ```bash
-cd aion-chat
-python -m pytest -q \
+python scripts/check_backend.py
+```
+
+原有聚焦契约测试也可以通过同一入口运行：
+
+```bash
+python scripts/check_backend.py \
   tests/test_memory_v2_recall_rules.py \
   tests/test_memory_v3_readout.py \
   tests/test_control_gateway.py \

@@ -8,6 +8,7 @@ AI 模型调用：
 from __future__ import annotations
 
 import json, base64, mimetypes, traceback, asyncio, re, io, os, time
+import hashlib
 from pathlib import Path
 
 import httpx
@@ -188,6 +189,18 @@ def _openai_text_part(text: str, marker_style: str = "") -> dict:
     return part
 
 
+def _attachment_bytes(attachment, path: Path) -> bytes:
+    data = path.read_bytes()
+    expected = attachment.get("expected_sha256") if isinstance(attachment, dict) else None
+    if expected and hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("图片来源在请求编码前发生变化")
+    return data
+
+
+def _required_attachment(attachment) -> bool:
+    return isinstance(attachment, dict) and bool(attachment.get("expected_sha256"))
+
+
 def build_multimodal_messages(
     history: list,
     *,
@@ -208,9 +221,9 @@ def build_multimodal_messages(
                 fpath = UPLOADS_DIR / Path(url).name
                 if is_audio_attachment(att) and include_audio and not fpath.is_file():
                     raise FileNotFoundError(f"Audio attachment is unavailable: {Path(url).name}")
-                if fpath.exists():
+                if fpath.exists() or _required_attachment(att):
                     mime = attachment_mime_type(att) or mimetypes.guess_type(str(fpath))[0] or "image/jpeg"
-                    b64 = base64.b64encode(fpath.read_bytes()).decode()
+                    b64 = base64.b64encode(_attachment_bytes(att, fpath)).decode()
                     if is_audio_attachment(att):
                         if not include_audio:
                             continue
@@ -253,9 +266,9 @@ def build_gemini_contents(history: list, *, include_audio: bool = False):
                 fpath = UPLOADS_DIR / Path(url).name
                 if is_audio_attachment(att) and not fpath.is_file():
                     raise FileNotFoundError(f"Audio attachment is unavailable: {Path(url).name}")
-                if fpath.exists():
+                if fpath.exists() or _required_attachment(att):
                     mime = attachment_mime_type(att) or mimetypes.guess_type(str(fpath))[0] or "image/jpeg"
-                    b64 = base64.b64encode(fpath.read_bytes()).decode()
+                    b64 = base64.b64encode(_attachment_bytes(att, fpath)).decode()
                     parts.append({"inline_data": {"mime_type": mime, "data": b64}})
         contents.append({"role": role, "parts": parts if parts else [{"text": m["content"]}]})
     return contents
@@ -740,7 +753,7 @@ def _normalize_for_claude_like(messages: list) -> list:
 
 
 async def stream_ai(messages: list, model_key: str, meta: dict | None = None,
-                    temperature: float | None = None):
+                    temperature: float | None = None, *, retry_prohibited: bool = True):
     normalized = _normalize_for_claude_like(messages)
 
     cfg = resolve_core_model(model_key)
@@ -767,7 +780,7 @@ async def stream_ai(messages: list, model_key: str, meta: dict | None = None,
                 ep, cfg["model"], normalized, meta, temperature, **audio_kwargs
             ):
                 yield chunk
-            if meta and meta.pop("_prohibited", False):
+            if retry_prohibited and meta and meta.pop("_prohibited", False):
                 print(f"[Auto-retry] Gemini PROHIBITED_CONTENT, retrying...")
                 yield "\x00RETRY\x00"
                 async for chunk in provider_call(
@@ -794,7 +807,7 @@ async def stream_ai(messages: list, model_key: str, meta: dict | None = None,
             normalized, model, meta, temperature, **audio_kwargs
         ):
             yield chunk
-        if meta and meta.pop("_prohibited", False):
+        if retry_prohibited and meta and meta.pop("_prohibited", False):
             print(f"[Auto-retry] Gemini PROHIBITED_CONTENT, retrying...")
             yield "\x00RETRY\x00"
             async for chunk in call_gemini(
@@ -1072,7 +1085,8 @@ async def call_slot_chat(slot_name: str, messages: list,
                          max_tokens: int | None = None,
                          model_override: str | None = None,
                          response_schema: dict | None = None,
-                         thinking_budget: int | None = None) -> str:
+                         thinking_budget: int | None = None,
+                         slot_snapshot: dict | None = None) -> str:
     """非流式一次性调用（后台槽位用）。
     失败返回空字符串并在前端推 endpoint_error。
 
@@ -1080,7 +1094,7 @@ async def call_slot_chat(slot_name: str, messages: list,
     resolving the slot endpoint at execution time.  Existing callers keep the
     live slot model when it is omitted.
     """
-    slot = get_slot(slot_name)
+    slot = slot_snapshot if slot_snapshot is not None else get_slot(slot_name)
     if not slot:
         await _broadcast_endpoint_error(slot_name, "", "槽位未配置或端点丢失")
         return ""
@@ -1177,12 +1191,13 @@ def _sync_broadcast_error(slot_name: str, endpoint_id: str, error: str, **extra)
             data = {"slot": slot_name, "endpoint": endpoint_id,
                     "error": _redact(error)[:300]}
             data.update({k: v for k, v in extra.items() if v not in (None, "")})
-            asyncio.run_coroutine_threadsafe(
+            from app.background_tasks import run_tracked_threadsafe
+            run_tracked_threadsafe(
                 manager.broadcast({
                     "type": "endpoint_error",
                     "data": data,
                 }),
-                loop,
+                loop, name="endpoint_error_broadcast",
             )
     except Exception:
         pass

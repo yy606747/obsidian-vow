@@ -500,7 +500,7 @@ async def _fetch_pending_chunks(ids: list[str] | None = None, *, limit: int | No
         clauses.append(f"id IN ({placeholders})")
         params.extend(ids)
     sql = (
-        "SELECT id, content FROM memory_chunks "
+        "SELECT id, content, source_hash FROM memory_chunks "
         f"WHERE {' AND '.join(clauses)} "
         "ORDER BY updated_at ASC"
     )
@@ -537,15 +537,26 @@ async def embed_pending_chunks(
                 if not vector:
                     stats["embedding_failed"] += 1
                     continue
-                await db.execute(
-                    "UPDATE memory_chunks SET embedding=?, updated_at=updated_at WHERE id=? AND embedding IS NULL",
-                    (embedding.pack_embedding(vector), row["id"]),
+                cur = await db.execute(
+                    "UPDATE memory_chunks SET embedding=?, updated_at=updated_at "
+                    "WHERE id=? AND embedding IS NULL AND source_hash IS ? AND content=? "
+                    "AND status IN ('active','cold')",
+                    (embedding.pack_embedding(vector), row["id"], row["source_hash"], row["content"]),
                 )
-                stats["embedded"] += 1
+                stats["embedded" if cur.rowcount else "skipped"] += 1
             await db.commit()
         if sleep_seconds > 0 and start + batch_size < len(pending):
             await asyncio.sleep(float(sleep_seconds))
     return stats
+
+
+async def reconcile_conversation_chunks_in_tx(db, conv_id: str) -> dict:
+    """与消息修改共用事务对账；不提交事务，也不触发向量化或卡片生成。"""
+    messages = await _fetch_conversation_messages_in_db(db, conv_id)
+    desired = build_chunks_from_messages(messages)
+    return await _reconcile_chunks_in_tx(
+        db, conv_id, desired, retire_missing=True, now=time.time(),
+    )
 
 
 async def ensure_conversation_chunks(

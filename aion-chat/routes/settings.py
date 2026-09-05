@@ -26,6 +26,7 @@ from provider_status import (
     recent_provider_events, record_provider_event, summarize_provider_events,
 )
 from location_diagnostics import recent_location_events, summarize_location_events
+from app.chat.image_history import image_history_config
 
 router = APIRouter()
 SILICONFLOW_BASE = "https://api.siliconflow.cn/v1"
@@ -110,12 +111,18 @@ class SettingsUpdate(BaseModel):
     smart_ring_quiet_hours_enabled: Optional[bool] = None
     smart_ring_quiet_hours_start: Optional[str] = None
     smart_ring_quiet_hours_end: Optional[str] = None
+    image_history_user_turns: Optional[int] = None
+    image_history_max_images: Optional[int] = None
+    image_history_max_bytes: Optional[int] = None
+    image_memory_enabled: Optional[bool] = None
 
 @router.get("/api/settings")
 async def get_settings():
     """前端只拿掩码；真实 key 仅从环境变量 / settings.json 在后端使用。"""
     import os
     return {
+        **image_history_config(SETTINGS),
+        "image_memory_enabled": SETTINGS.get("image_memory_enabled") is True,
         "gemini_key_masked": _mask_key(SETTINGS.get("gemini_key", "")),
         "siliconflow_key_masked": _mask_key(SETTINGS.get("siliconflow_key", "")),
         "gemini_free_key_masked": _mask_key(SETTINGS.get("gemini_free_key", "")),
@@ -176,6 +183,17 @@ async def update_settings(body: SettingsUpdate):
         SETTINGS["smart_ring_quiet_hours_start"] = body.smart_ring_quiet_hours_start
     if body.smart_ring_quiet_hours_end is not None:
         SETTINGS["smart_ring_quiet_hours_end"] = body.smart_ring_quiet_hours_end
+    if body.image_memory_enabled is not None:
+        SETTINGS["image_memory_enabled"] = body.image_memory_enabled
+        if not body.image_memory_enabled:
+            from app.image_memory.service import cancel_scheduled_jobs
+            cancel_scheduled_jobs()
+        from app.memory_v2.hybrid_recall import clear_full_corpus_cache
+        clear_full_corpus_cache()
+    for name in image_history_config(SETTINGS):
+        value = getattr(body, name)
+        if value is not None:
+            SETTINGS[name] = image_history_config({name: value})[name]
     _ensure_endpoints_and_slots(SETTINGS)
     save_settings(SETTINGS)
     return {
@@ -493,6 +511,9 @@ async def put_slot(body: SlotUpdate):
     if body.extras:
         slot.update(body.extras)
     slots[body.name] = slot
+    if body.name == "vision_summary" and slot.get("enabled") is not True:
+        from app.image_memory.service import cancel_scheduled_jobs
+        cancel_scheduled_jobs()
     save_settings(SETTINGS)
     return {"ok": True}
 
@@ -506,6 +527,7 @@ class UserModelUpsert(BaseModel):
     endpoint: str
     model: str
     audio_input: bool = False
+    image_input: Optional[bool] = None
 
 @router.put("/api/user_models")
 async def put_user_model(body: UserModelUpsert):
@@ -514,6 +536,7 @@ async def put_user_model(body: UserModelUpsert):
         "endpoint": body.endpoint,
         "model": body.model,
         "audio_input": body.audio_input is True,
+        "image_input": body.image_input,
     }
     save_settings(SETTINGS)
     return {"ok": True}

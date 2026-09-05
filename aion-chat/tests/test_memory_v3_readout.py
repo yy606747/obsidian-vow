@@ -632,6 +632,7 @@ def test_candidate_window_saturation_is_visible_for_ordinary_and_pending(
             top_k=1,
             candidate_limit=1,
             as_of_ts=time.time() + 1,
+            full_corpus_enabled=False,
         )
     )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from app.background_tasks import create_tracked_task
 import logging
 import time
 from collections.abc import Collection, Mapping
@@ -290,7 +291,7 @@ class SelfWakeRunner:
         claimed = await self.repository.claim_due_batch()
         trigger = self._trigger_callable()
         for wake in claimed:
-            task = asyncio.create_task(
+            task = create_tracked_task(
                 trigger(wake),
                 name=f"self_wake:{wake.get('id')}",
             )

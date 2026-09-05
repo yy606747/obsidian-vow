@@ -19,6 +19,19 @@ OFFLINE_INPUTS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_gate_configuration(monkeypatch):
+    """研究检查显式提供合成槽位，不再依赖本机 settings.json。"""
+    monkeypatch.setattr(offline, "get_slot", lambda _name: {
+        "model": "deepseek-ai/DeepSeek-V4-Flash",
+        "endpoint": {
+            "id": "sf", "type": "openai", "base_url": "https://api.siliconflow.cn/v1",
+            "api_key": "synthetic-test-key",
+        },
+        "extras": {},
+    })
+
+
 async def _with_heartbeat(awaitable):
     async def heartbeat():
         while True:

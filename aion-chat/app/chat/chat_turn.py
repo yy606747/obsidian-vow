@@ -25,6 +25,7 @@ from app.presence.prompt_context import (
 from app.web_search import web_search_service
 from app.web_search.intent import strip_web_search_intent_markers, web_search_ability_block
 from config import load_ai_behavior
+from app.turn_diagnostics import mark_phase, trace_prompt
 
 from .history import build_handoff_note_block, prepare_chat_history
 from .memory_prompt import inject_memory_prompt, inject_working_model_prompt
@@ -213,18 +214,21 @@ def _mode_snapshot_for_context(
     )
 
 
+@trace_prompt("send")
 async def prepare_send_prompt(
     conv_id: str,
     body: MsgCreate,
     *,
     current_user_message_id: str = "",
 ) -> tuple[str, list[dict], dict]:
+    mark_phase("history")
     history_ctx = await prepare_chat_history(
         conv_id,
         context_limit=body.context_limit,
         attachment_policy="last_message",
         retracted=body.retracted,
     )
+    mark_phase("history", finished=True)
     history = history_ctx.history
     user_name, ai_name = resolve_worldbook_names(history_ctx.wb)
     cap_idx = history_ctx.cap_idx
@@ -474,6 +478,7 @@ async def prepare_send_prompt(
         ai_dom_mode=body.ai_dom_mode,
     )
     pending_recall = {"status": "skipped", "items": []}
+    mark_phase("retrieval")
     if (
         current_user_message_id
         and not body.fast_mode
@@ -503,6 +508,7 @@ async def prepare_send_prompt(
         visible_message_ids=getattr(history_ctx, "visible_message_ids", []),
         include_working_model=False,
     )
+    mark_phase("retrieval", finished=True)
     prompt_meta = _attach_mode_meta(
         prompt_meta,
         snapshot=mode_snapshot,
@@ -523,6 +529,7 @@ async def prepare_send_prompt(
         getattr(ability_prompt, "advertised_tools", ())
     )
     prompt_meta["current_user_message_id"] = current_user_message_id
+    prompt_meta["image_history"] = getattr(history_ctx, "image_history", {})
     prompt_meta["working_model_writer_identity"] = build_writer_identity_snapshot(
         history_ctx.wb,
         vow_block=vow_block,
@@ -538,6 +545,7 @@ async def prepare_send_prompt(
     return history_ctx.model_key, history, _attach_prompt_debug_meta(history, prompt_meta)
 
 
+@trace_prompt("regenerate")
 async def prepare_regenerate_prompt(
     conv_id: str,
     *,
@@ -563,11 +571,13 @@ async def prepare_regenerate_prompt(
     vow_snapshot: Optional[tuple[str, str]] = None,
     replaced_message_id: Optional[str] = None,
 ) -> tuple[str, list[dict], dict]:
+    mark_phase("history")
     history_ctx = await prepare_chat_history(
         conv_id,
         context_limit=context_limit,
         attachment_policy="last_user",
     )
+    mark_phase("history", finished=True)
     history = history_ctx.history
     user_name, ai_name = resolve_worldbook_names(history_ctx.wb)
     cap_idx = history_ctx.cap_idx
@@ -705,6 +715,7 @@ async def prepare_regenerate_prompt(
         whisper_mode=whisper_mode,
         ai_dom_mode=ai_dom_mode,
     )
+    mark_phase("retrieval")
     pending_replay = (
         await pending_recall_service.replay_for_assistant(replaced_message_id)
         if replaced_message_id
@@ -725,6 +736,7 @@ async def prepare_regenerate_prompt(
         visible_message_ids=getattr(history_ctx, "visible_message_ids", []),
         include_working_model=False,
     )
+    mark_phase("retrieval", finished=True)
     prompt_meta = _attach_mode_meta(
         prompt_meta,
         snapshot=mode_snapshot,
@@ -735,6 +747,7 @@ async def prepare_regenerate_prompt(
         getattr(ability_prompt, "advertised_tools", ())
     )
     prompt_meta["pending_recall"] = pending_replay
+    prompt_meta["image_history"] = getattr(history_ctx, "image_history", {})
     prompt_meta["current_user_message_id"] = (
         pending_replay.get("target_user_message_id")
         or getattr(history_ctx, "latest_user_message_id", None)

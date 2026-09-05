@@ -15,7 +15,7 @@ def test_schedule_v2_files_stay_small_and_within_declared_boundaries():
         "alarm_context.py": 280,  # 闹钟创建时可见上下文的不可变旁表
         "trigger.py": 600,  # 创建快照 + 三天时间线注入；仍以当前行数封顶
         "commands.py": 340,  # 闹钟创建时同步冻结上下文；仍以当前行数封顶
-        "manager.py": 120,
+        "manager.py": 128,
     }
     assert sorted(path.name for path in SCHEDULE_DIR.glob("*.py")) == sorted(files)
 
@@ -29,7 +29,7 @@ def test_schedule_v2_files_stay_small_and_within_declared_boundaries():
             "aiosqlite", "database",
         },
         "commands.py": {"__future__", "logging", "re", "time", "datetime", "config", "database", "ws"},
-        "manager.py": {"__future__", "asyncio", "logging", "threading", "time", "datetime", "ws"},
+        "manager.py": {"__future__", "asyncio", "logging", "threading", "time", "datetime", "ws", "app"},
         "trigger.py": {
             "__future__", "json", "logging", "time", "datetime", "aiosqlite", "ai_providers",
             "app", "config", "database", "music", "routes", "sentinel_runtime", "ws",

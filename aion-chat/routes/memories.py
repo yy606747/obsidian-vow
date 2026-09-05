@@ -55,6 +55,7 @@ class MemoryV3ConfigUpdate(BaseModel):
     ai_note_top_k: Optional[int] = None
     ai_note_max_items: Optional[int] = None
     pending_recall_enabled: Optional[bool] = None
+    pending_full_corpus_enabled: Optional[bool] = None
     pending_candidate_k: Optional[int] = None
     pending_candidate_pool_limit: Optional[int] = None
     pending_select_max: Optional[int] = None

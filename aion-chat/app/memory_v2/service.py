@@ -54,6 +54,15 @@ class MemoryService:
             hybrid_recall.invalidate_full_corpus_cache(notes=True)
         return result
 
+    async def reconcile_conversation_chunks_in_tx(self, db, conv_id: str) -> dict:
+        from app.image_memory.repository import reconcile_in_tx
+        await reconcile_in_tx(db, conv_id)
+        return await chunks.reconcile_conversation_chunks_in_tx(db, conv_id)
+
+    def invalidate_conversation_cache(self, conv_id: str) -> None:
+        """调用方在消息与索引事务提交后同步标脏。"""
+        hybrid_recall.invalidate_full_corpus_cache(chunk_conv_id=conv_id)
+
     async def ensure_conversation_chunks(self, conv_id: str, **kwargs) -> dict:
         result = await chunks.ensure_conversation_chunks(conv_id, **kwargs)
         if any(
@@ -419,6 +428,8 @@ class MemoryService:
             pending_items,
             top_k=runtime["top_k"],
         )
+        from app.image_memory.repository import valid_items
+        plan["selected"] = await valid_items(plan.get("selected") or [])
         result["summary"] = diagnostics.summarize_recall_plan(plan)
         if runtime["include_trace"]:
             result["trace"] = plan.get("trace") or diagnostics.build_recall_trace(

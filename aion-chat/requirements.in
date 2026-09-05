@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+httpx
+aiosqlite
+Pillow
+numpy
+pyncm==1.8.1
+pydantic
+python-multipart
+websockets
+psutil
+python-dotenv
+pywebpush==2.4.0
+rembg[cpu]==2.0.81
+# 服务器不安装本地声卡、旧摄像头和 Windows 专用依赖。

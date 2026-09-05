@@ -23,6 +23,7 @@ from app.mobile_screen import mobile_screen_service
 from config import WORKING_MODEL_PROMPT_MAX_CHARS, load_ai_behavior, load_worldbook
 from schedule import build_schedule_prompt, get_active_schedules
 from app.tools.prompt_renderers import render_registered_capabilities
+from app.image_memory.view import available as image_memory_available
 from app.tools.registry import (
     registered_tools_for_surface,
     validate_turn_advertisement,
@@ -736,6 +737,7 @@ async def build_send_ability_block(*, conv_id: str, body: Any, user_name: str, c
         ("pc.screen_check", pc_screen_available),
         ("mobile.screen_check", mobile_screen_available),
         ("device.ring_touch", ring_available),
+        ("memory.view_image", image_memory_available(model_key)),
     ):
         if not enabled:
             available_tools.discard(tool_name)
@@ -745,6 +747,7 @@ async def build_send_ability_block(*, conv_id: str, body: Any, user_name: str, c
         context={
             "user_name": user_name,
             "monitor_variant": "send",
+            "image_memory_available": image_memory_available(model_key),
             "activity_available": activity_available,
             "pc_screen_available": pc_screen_available,
             "mobile_screen_available": mobile_screen_available,
@@ -953,6 +956,7 @@ async def build_regenerate_ability_block(
         ("pc.screen_check", pc_screen_available),
         ("mobile.screen_check", mobile_screen_available),
         ("device.ring_touch", ring_available),
+        ("memory.view_image", image_memory_available(model_key)),
     ):
         if not enabled:
             available_tools.discard(tool_name)
@@ -962,6 +966,7 @@ async def build_regenerate_ability_block(
         context={
             "user_name": user_name,
             "monitor_variant": "regenerate",
+            "image_memory_available": image_memory_available(model_key),
             "activity_available": activity_available,
             "pc_screen_available": pc_screen_available,
             "mobile_screen_available": mobile_screen_available,

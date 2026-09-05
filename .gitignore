@@ -45,3 +45,7 @@ Thumbs.db
 
 # Private working notes
 README_DRAFT.zh-CN.md
+.codex-backups/
+.claude/
+.codex/
+.agents/

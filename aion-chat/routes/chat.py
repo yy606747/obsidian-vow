@@ -105,6 +105,8 @@ async def send_message(conv_id: str, body: MsgCreate):
     await manager.broadcast({"type": "msg_created", "data": user_msg})
     if not body.memory_eval_mode:
         _schedule_chunk_index_update(conv_id, reason="user_message")
+        from app.image_memory.service import schedule_message as schedule_image_memory
+        schedule_image_memory(msg_id)
 
     try:
         model_key, history, prompt_meta = await prepare_send_prompt(

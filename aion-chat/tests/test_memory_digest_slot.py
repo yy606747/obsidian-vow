@@ -55,6 +55,7 @@ def test_settings_migration_preserves_custom_relational_card_slot():
             },
             "presence_renderer": {"endpoint": "custom", "model": "renderer"},
             "presence_image": {"endpoint": "custom", "model": "image"},
+            "vision_summary": {"endpoint": "", "model": "glm-4.6v-flash", "enabled": False},
             "asr": {"endpoint": "custom", "model": "asr"},
         },
         "presence_image_slot_migration_v1": True,

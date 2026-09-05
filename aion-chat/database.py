@@ -3,6 +3,7 @@
 """
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import aiosqlite
 from config import (
@@ -216,6 +217,9 @@ async def init_db():
         from app.schedule.alarm_context import init_alarm_context_tables
 
         await init_alarm_context_tables(db)
+        from app.image_memory.repository import init_tables as init_image_memory_tables
+
+        await init_image_memory_tables(db)
         # ── 心语表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS heart_whispers (
@@ -235,10 +239,14 @@ async def init_db():
 
 
 @asynccontextmanager
-async def get_db(*, timeout: float | None = None):
+async def get_db(*, timeout: float | None = None, read_only: bool = False):
     """每次打开连接都设 synchronous=NORMAL（此 pragma 是 per-connection 的）。
     journal_mode=WAL 已在 init_db 持久化到 DB 文件，不用每次重设。"""
     connect_kwargs = {} if timeout is None else {"timeout": timeout}
-    async with aiosqlite.connect(DB_PATH, **connect_kwargs) as db:
+    target = DB_PATH
+    if read_only:
+        target = Path(DB_PATH).resolve().as_uri() + "?mode=ro"
+        connect_kwargs["uri"] = True
+    async with aiosqlite.connect(target, **connect_kwargs) as db:
         await db.execute("PRAGMA synchronous = NORMAL")
         yield db

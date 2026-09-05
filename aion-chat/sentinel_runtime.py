@@ -1133,7 +1133,8 @@ class SentinelRuntime:
                     print("[Sentinel] 静默时段，跳过")
                     continue
                 if self._loop:
-                    fut = asyncio.run_coroutine_threadsafe(self._analyze_and_log(), self._loop)
+                    from app.background_tasks import run_tracked_threadsafe
+                    fut = run_tracked_threadsafe(self._analyze_and_log(), self._loop, name="sentinel_analyze")
                     fut.add_done_callback(log_future_exception("sentinel_analyze"))
             except Exception as e:
                 print(f"[Sentinel] monitor_loop iter error: {e}")

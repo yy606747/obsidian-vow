@@ -346,12 +346,13 @@ class PCActivityTracker:
                     if title_changed and self._event_loop:
                         import asyncio
                         try:
-                            asyncio.run_coroutine_threadsafe(
+                            from app.background_tasks import run_tracked_threadsafe
+                            run_tracked_threadsafe(
                                 manager.broadcast({
                                     "type": "activity_log",
                                     "data": entry
                                 }),
-                                self._event_loop
+                                self._event_loop, name="activity_broadcast",
                             )
                         except Exception as be:
                             print(f"[PCActivity] ⚠ 广播失败: {be}")

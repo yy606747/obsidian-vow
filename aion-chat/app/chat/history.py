@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -15,6 +15,7 @@ from database import get_db
 
 from .commands import _SYSTEM_MSG_CONTEXT_KEYWORDS
 from .audio_input import audio_transcript_context
+from .image_history import restore_recent_images
 from .worldbook import build_worldbook_prefix, resolve_worldbook_names
 
 
@@ -38,6 +39,7 @@ class ChatHistoryContext:
     previous_turn_assistant_ids: tuple[str, ...] = ()
     previous_conversation_id: str | None = None
     previous_conversation_source: dict | None = None
+    image_history: dict = field(default_factory=dict)
 
 
 def build_handoff_note_block(
@@ -178,7 +180,7 @@ async def prepare_chat_history(
         )
 
     wb = load_worldbook()
-    user_name, _ai_name = resolve_worldbook_names(wb)
+    user_name, ai_name = resolve_worldbook_names(wb)
 
     history = []
     for row in ordered_rows:
@@ -186,7 +188,18 @@ async def prepare_chat_history(
         if msg is not None:
             history.append(msg)
 
+    original_attachments = {
+        str(message.get("id") or ""): list(message.get("attachments") or [])
+        for message in history
+    }
     _strip_history_attachments(history, attachment_policy)
+    image_meta = restore_recent_images(
+        history,
+        original_attachments=original_attachments,
+        real_user_ids=[str(ordered_rows[index]["id"]) for index in real_user_indexes],
+        user_name=user_name,
+        ai_name=ai_name,
+    )
 
     if retracted and history:
         history.insert(-1, {
@@ -235,4 +248,5 @@ async def prepare_chat_history(
         previous_turn_assistant_ids=previous_turn_assistant_ids,
         previous_conversation_id=previous_conv_id,
         previous_conversation_source=previous_source,
+        image_history=image_meta,
     )

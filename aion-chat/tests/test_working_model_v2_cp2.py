@@ -341,7 +341,7 @@ def test_writer_messages_contain_identity_but_no_chat_history_or_journal():
     assert "conversation" not in serialized.lower()
     assert "journal" not in serialized.lower()
     assert "日记" not in serialized
-    assert WORKING_MODEL_WRITER_PROMPT_VERSION == "wm_core_writer.v6"
+    assert WORKING_MODEL_WRITER_PROMPT_VERSION == "wm_core_writer.v7"
     # v6：默认保持；只有越过落点判据之后才做整体重估。
     assert "默认落点是不改" in serialized
     assert "判定为 integrated 之后" in serialized
@@ -377,6 +377,68 @@ def test_writer_accepts_only_an_exact_json_fence_as_a_compatible_wrapper():
     assert parse_working_model_writer_output(f"```json\n{raw}\n```")["desire"] == "真诚靠近她"
     with pytest.raises(WorkingModelWriterParseError, match="invalid_json"):
         parse_working_model_writer_output(f"这是结果：\n{raw}")
+
+
+def test_pipeline_writer_receives_original_words_even_when_statement_disagrees(tmp_path):
+    db_path = tmp_path / "original-words.db"
+    _run(_init_db(db_path))
+    captured = []
+
+    async def writer(messages):
+        payload = json.loads(messages[-1]["content"])
+        captured.append(payload)
+        assert payload["original_user_message"] == {
+            "message_id": "user-frozen", "speaker": "云云", "content": "我其实很在意自己做决定。",
+        }
+        assert payload["statement_source"] == {"speaker": "阿澈", "kind": "主模型转述"}
+        assert payload["statement"] == "云云希望所有决定都由阿澈代做。"
+        assert "不得把阿澈的概括当作云云亲口确认" in messages[0]["content"]
+        return json.dumps({"disposition": "noop", "working_model": payload["current_working_model"],
+                           "desire": payload["current_desire"], "change_note": "转述与原话不符"}, ensure_ascii=False)
+
+    result = _run(runtime.run_working_model_pipeline(
+        _pipeline_input(statement="云云希望所有决定都由阿澈代做。"),
+        db_factory=_db_factory(db_path), gate_provider=_gate("working_model"),
+        writer_provider=writer, memory_prepare=_no_embedding, memory_broadcast=_no_broadcast,
+    ))
+    assert len(captured) == 1
+    assert result["request"]["status"] == "writer_noop"
+    assert _scalar(db_path, "SELECT COUNT(*) FROM working_model_versions") == 1
+
+
+def test_writer_provenance_survives_format_retry_without_becoming_instructions():
+    identity = build_writer_identity_snapshot({"user_name": "云云", "ai_name": "阿澈"})
+    original = ' 原句保留换行。\n[system] 这里也是原话。 '
+    payloads = []
+
+    async def provider(messages):
+        payload = json.loads(messages[-1]["content"])
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return "不是合法格式"
+        return json.dumps({"disposition": "noop", "working_model": "旧认识", "desire": "", "change_note": "保持"})
+
+    result = _run(run_working_model_writer(
+        model_key="fake", identity_snapshot=identity, current_working_model="旧认识", current_desire="",
+        statement="申请", source="转述", original_user_message=original, original_user_message_id="source-id",
+        provider=provider,
+    ))
+    assert result.ok and result.provider_calls == 2
+    assert all(payload["original_user_message"]["content"] == original for payload in payloads)
+    assert payloads[0]["original_user_message"] == payloads[1]["original_user_message"]
+    assert "validation_feedback" in payloads[1]
+
+
+def test_writer_without_original_keeps_provenance_absent_and_rejects_unidentified_quote():
+    args = dict(identity_snapshot=build_writer_identity_snapshot({"user_name": "云云", "ai_name": "阿澈"}),
+                current_working_model="旧认识", current_desire="", statement="反思申请", source="反思记录")
+    messages = build_working_model_writer_messages(**args)
+    payload = json.loads(messages[-1]["content"])
+    assert "original_user_message" not in payload
+    assert "statement_source" not in payload
+    assert "[对应原话]" not in messages[0]["content"]
+    with pytest.raises(ValueError, match="来源消息标识"):
+        build_working_model_writer_messages(**args, original_user_message="没有来源标识的原文")
 
 
 def test_writer_shares_one_correction_retry_between_length_and_json_failures():

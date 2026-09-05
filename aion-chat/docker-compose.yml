@@ -1,5 +1,6 @@
 services:
   obsidian-vow:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: aion-chat/Dockerfile
@@ -16,7 +17,7 @@ services:
     volumes:
       - ./data:/app/data
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18080/static/home.html", "-o", "/dev/null"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18080/healthz', timeout=4).close()"]
       interval: 30s
       timeout: 5s
       retries: 3

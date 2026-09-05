@@ -30,6 +30,18 @@ def _assert_relationship_names(text: str) -> None:
     assert "用户信息" not in text
 
 
+def test_image_review_prompt_and_tool_use_runtime_names():
+    from app.image_memory.view import image_followup_prompt
+    from app.tools.prompt_renderers import _render_view_image
+
+    prompt = image_followup_prompt({"source_time": 1, "source_message_id": "photo", "attachment_url": "/uploads/photo.png"}, user_name=USER_NAME, ai_name=AI_NAME)
+    ability = _render_view_image("main_stable", {"image_memory_available": True, "user_name": USER_NAME, "ai_name": AI_NAME})
+    for text in (prompt, ability):
+        _assert_relationship_names(text)
+        assert AI_NAME in text
+        assert "对方" not in text and "TA" not in text
+
+
 def test_core_relationship_blocks_use_configured_names():
     worldbook = {
         "user_name": USER_NAME,
@@ -131,10 +143,15 @@ def test_writer_identity_uses_both_names_and_legacy_placeholders_do_not_leak():
         current_desire="认真陪着她。",
         statement="她希望问题被正面回答。",
         source="她刚才明确说不要绕开问题。",
+        original_user_message="不要绕开这个问题。",
+        original_user_message_id="source-message",
     )
     system_prompt = messages[0]["content"]
     _assert_relationship_names(system_prompt)
     assert AI_NAME in system_prompt
+    payload = json.loads(messages[-1]["content"])
+    assert payload["original_user_message"]["speaker"] == USER_NAME
+    assert payload["statement_source"]["speaker"] == AI_NAME
 
 
 def test_context_delivery_location_boundary_uses_configured_name():

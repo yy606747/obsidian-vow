@@ -137,6 +137,16 @@
           </label>
         </div>
       </div>
+      <div class="card">
+        <div class="card-title">图片续聊</div>
+        <div class="hint">本轮图片不占历史预算。历史图片数量设为 0 可关闭保留；不会增加模型调用次数。</div>
+        <label class="form-label">最近发言数（含本轮）</label>
+        <input class="form-input" type="number" id="imageHistoryTurns" min="0" max="100" step="1" value="4">
+        <label class="form-label">历史图片数量</label>
+        <input class="form-input" type="number" id="imageHistoryCount" min="0" max="32" step="1" value="4">
+        <label class="form-label">历史图片总大小（MiB）</label>
+        <input class="form-input" type="number" id="imageHistorySize" min="0" max="128" step="1" value="20">
+      </div>
       <div class="btn-row">
         <button class="btn-cancel" onclick="location.href='/'">取消</button>
         <button class="btn-save" onclick="saveBasic()">保存</button>
@@ -229,6 +239,23 @@
         <input class="form-input" id="presenceImageModel" placeholder="如 gemini-3.1-flash-image" style="font-family:monospace">
       </div>
 
+      <div class="card">
+        <div class="card-title">图片记忆与视觉摘要（vision_summary）</div>
+        <div class="card-sub">独立于主聊天模型，只发送图片和描述指令。默认关闭，不借用主模型或自动切换付费型号。建议使用智谱 glm-4.6v-flash；端点类型选 openai，地址为 https://open.bigmodel.cn/api/paas/v4。免费接口仍受账号与限流约束。</div>
+        <label class="form-label"><input type="checkbox" id="imageMemoryEnabled"> 启用图片记忆检索与按需重看</label>
+        <label class="form-label"><input type="checkbox" id="visionSummaryEnabled"> 为新增图片生成描述</label>
+        <label class="form-label">独立端点</label>
+        <select class="form-input" id="visionSummaryEp"></select>
+        <label class="form-label">摘要型号</label>
+        <input class="form-input" id="visionSummaryModel" placeholder="glm-4.6v-flash" style="font-family:monospace">
+        <div class="card-sub">历史图片只在手动提交来源消息编号后补做；失败不会中断聊天。关闭整项图片记忆不删除已有描述和原图。</div>
+        <label class="form-label">补做来源消息编号（多个用空格或逗号分隔，最多 100 个）</label>
+        <input class="form-input" id="imageBackfillIds" placeholder="msg_…">
+        <button class="btn-save" onclick="backfillImages()">补做这些消息中的图片</button>
+        <button class="btn-save" onclick="loadImageMemoryStatus()">查看处理状态</button>
+        <pre id="imageMemoryStatus" style="white-space:pre-wrap;max-height:260px;overflow:auto"></pre>
+      </div>
+
       <div class="btn-row" style="margin-bottom:20px">
         <button class="btn-save" onclick="saveSlots()">保存槽位</button>
       </div>
@@ -245,6 +272,9 @@
             <input type="checkbox" id="umAudioInput"> 原生音频输入
           </label>
           <button class="mini-btn primary" onclick="addUserModel()">+</button>
+          <label style="display:flex; align-items:center; gap:5px; white-space:nowrap; font-size:12px; color:var(--text2);">
+            <input type="checkbox" id="umImageInput"> 已确认支持图片输入（用于重看原图）
+          </label>
         </div>
       </div>
     </div>
@@ -302,6 +332,9 @@ document.querySelectorAll('.tab').forEach(t => {
   $("ringQuietToggle").checked = !!s.smart_ring_quiet_hours_enabled;
   $("ringQuietStart").value = s.smart_ring_quiet_hours_start || "00:00";
   $("ringQuietEnd").value = s.smart_ring_quiet_hours_end || "08:00";
+  $("imageHistoryTurns").value = s.image_history_user_turns ?? 4;
+  $("imageHistoryCount").value = s.image_history_max_images ?? 4;
+  $("imageHistorySize").value = (s.image_history_max_bytes ?? 20971520) / 1048576;
   renderRingTouchStatus(s);
 })();
 
@@ -337,7 +370,10 @@ async function saveBasic() {
     smart_ring_keep_connected: $("ringKeepConnectedToggle").checked,
     smart_ring_quiet_hours_enabled: $("ringQuietToggle").checked,
     smart_ring_quiet_hours_start: $("ringQuietStart").value,
-    smart_ring_quiet_hours_end: $("ringQuietEnd").value
+    smart_ring_quiet_hours_end: $("ringQuietEnd").value,
+    image_history_user_turns: Number($("imageHistoryTurns").value),
+    image_history_max_images: Number($("imageHistoryCount").value),
+    image_history_max_bytes: Math.round(Number($("imageHistorySize").value) * 1048576)
   });
   showToast("✅ 已保存（掩码值不会覆盖）");
 }
@@ -680,7 +716,7 @@ function refreshEpSelects() {
   const opts = _endpoints.map(e =>
     `<option value="${escAttr(e.id)}">${escHtml(e.name || e.id)} (${escHtml(e.type || 'openai')})</option>`
   ).join('');
-  ["sentinelEp", "memoryDigestEp", "asrEp", "presenceRendererEp", "presenceImageEp", "umEp"].forEach(id => {
+  ["sentinelEp", "memoryDigestEp", "asrEp", "presenceRendererEp", "presenceImageEp", "visionSummaryEp", "umEp"].forEach(id => {
     const el = $(id);
     if (!el) return;
     const prev = el.value;
@@ -696,6 +732,12 @@ async function loadSlots() {
   const asr = slots.asr || {};
   const presenceRenderer = slots.presence_renderer || {};
   const presenceImage = slots.presence_image || {};
+  const visionSummary = slots.vision_summary || {};
+  $("visionSummaryEp").value = visionSummary.endpoint || "";
+  $("visionSummaryModel").value = visionSummary.model || "glm-4.6v-flash";
+  $("visionSummaryEnabled").checked = visionSummary.enabled === true;
+  const imageSettings = await api("GET", "/api/settings");
+  $("imageMemoryEnabled").checked = imageSettings.image_memory_enabled === true;
   $("sentinelEp").value = sentinel.endpoint || "";
   $("sentinelModel").value = sentinel.model || "";
   $("memoryDigestEp").value = memoryDigest.endpoint || "";
@@ -736,7 +778,29 @@ async function saveSlots() {
     endpoint: $("presenceImageEp").value,
     model: $("presenceImageModel").value.trim(),
   });
+  await api("PUT", "/api/slots", {
+    name: "vision_summary", endpoint: $("visionSummaryEp").value,
+    model: $("visionSummaryModel").value.trim(),
+    extras: { enabled: $("visionSummaryEnabled").checked },
+  });
+  await api("PUT", "/api/settings", { image_memory_enabled: $("imageMemoryEnabled").checked });
   showToast("✅ 槽位已保存");
+}
+
+async function backfillImages() {
+  const ids = [...new Set($("imageBackfillIds").value.split(/[\s,，]+/).filter(Boolean))];
+  if (!ids.length || ids.length > 100) { showToast("请填写 1 至 100 个来源消息编号"); return; }
+  const result = await api("POST", "/api/image-memory/backfill", { message_ids: ids });
+  showToast(`已安排 ${(result.scheduled_message_ids || []).length} 条消息；未保存的开关不会生效`);
+  await loadImageMemoryStatus();
+}
+
+async function loadImageMemoryStatus() {
+  const result = await api("GET", "/api/image-memory");
+  const labels = { pending: "待处理", running: "处理中", ready: "已完成", deferred: "待手动补做", retired: "来源已失效" };
+  $("imageMemoryStatus").textContent = (result.items || []).map(item =>
+    `${item.message_id} · ${labels[item.status] || item.status} · ${item.model || "尚未调用"} · ${item.error_type || ""}`
+  ).join("\n") || "暂无图片描述记录";
 }
 
 async function loadUserModels() {
@@ -761,9 +825,10 @@ async function addUserModel() {
   const endpoint = $("umEp").value;
   const model = $("umModel").value.trim();
   const audioInput = $("umAudioInput").checked;
+  const imageInput = $("umImageInput").checked;
   if (!key || !endpoint || !model) { showToast("❌ 填完三项"); return; }
-  await api("PUT", "/api/user_models", { key, endpoint, model, audio_input: audioInput });
-  $("umKey").value = ""; $("umModel").value = ""; $("umAudioInput").checked = false;
+  await api("PUT", "/api/user_models", { key, endpoint, model, audio_input: audioInput, image_input: imageInput });
+  $("umKey").value = ""; $("umModel").value = ""; $("umAudioInput").checked = false; $("umImageInput").checked = false;
   showToast("✅ 已添加");
   await loadUserModels();
 }

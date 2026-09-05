@@ -120,9 +120,10 @@ class VoiceWakeup:
 
     def _broadcast_state(self, msg_type: str, data: dict):
         if self._loop and self._ws_manager:
-            asyncio.run_coroutine_threadsafe(
+            from app.background_tasks import run_tracked_threadsafe
+            run_tracked_threadsafe(
                 self._ws_manager.broadcast({"type": msg_type, "data": data}),
-                self._loop
+                self._loop, name="voice_broadcast",
             )
 
     # ── 音频工具 ──────────────────────────────────
@@ -233,8 +234,9 @@ class VoiceWakeup:
                     "enabled": True, "status": "ai_thinking",
                     "message": "AI 思考中..."
                 })
-            fut = asyncio.run_coroutine_threadsafe(
-                self._async_send(text), self._loop
+            from app.background_tasks import run_tracked_threadsafe
+            fut = run_tracked_threadsafe(
+                self._async_send(text), self._loop, name="voice_send",
             )
             fut.add_done_callback(log_future_exception("voice_send"))
 

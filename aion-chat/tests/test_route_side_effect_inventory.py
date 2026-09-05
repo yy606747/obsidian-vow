@@ -50,6 +50,10 @@ ROUTE_INVENTORY = {
         "classification": "legacy_service_mixed_mutable",
         "shadow_evidence": False,
     },
+    "image_memory.py": {
+        "classification": "service_backed_external_io_mutable",
+        "shadow_evidence": False,
+    },
     "modes.py": {
         "classification": "service_backed_readonly",
         "shadow_evidence": False,

@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 
 from ws import manager
+from app.background_tasks import run_tracked_threadsafe
 
 from . import store, trigger
 
@@ -74,7 +75,7 @@ class ScheduleManager:
                     log.warning("previous tick still in flight, skipping")
                 else:
                     self._tick_in_flight = True
-                    fut = asyncio.run_coroutine_threadsafe(self._tick_safe(), self._loop)
+                    fut = run_tracked_threadsafe(self._tick_safe(), self._loop, name="schedule_tick")
                     fut.add_done_callback(self._on_tick_done)
             except Exception as exc:
                 log.error("schedule loop error: %s", exc)

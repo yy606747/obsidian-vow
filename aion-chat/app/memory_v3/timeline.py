@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from app.background_tasks import create_tracked_task
 import json
 import re
 import time
@@ -527,7 +528,7 @@ class TimelineService:
             or self._task.done()
             or bool(getattr(self._task, "cancelling", lambda: 0)())
         ):
-            self._task = loop.create_task(
+            self._task = create_tracked_task(
                 self._run_refresh_loop(),
                 name="memory_recent_timeline",
             )

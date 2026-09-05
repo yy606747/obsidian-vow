@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from app.background_tasks import create_tracked_task
 from dataclasses import dataclass, field
 import json
 import logging
@@ -395,8 +396,12 @@ async def _fetch_chunks(limit: int | None, *, include_cards: bool = False) -> li
             params,
         )
         rows = await cur.fetchall()
-    result = [dict(row) for row in rows]
-    return _sort_rows_by_recency(result) if limit is None else result
+        from app.image_memory.repository import recall_rows as image_recall_rows
+        image_rows = await image_recall_rows(db)
+    result = [dict(row) for row in rows] + image_rows
+    if limit is None:
+        return _sort_rows_by_recency(result)
+    return _sort_rows_by_recency(result)[:limit] if image_rows else result
 
 
 async def _fetch_notes(
@@ -468,7 +473,9 @@ async def _fetch_chunks_for_conversations(
             params,
         )
         rows = await cur.fetchall()
-    return _sort_rows_by_recency([dict(row) for row in rows])
+        from app.image_memory.repository import recall_rows as image_recall_rows
+        image_rows = await image_recall_rows(db, normalized)
+    return _sort_rows_by_recency([dict(row) for row in rows] + image_rows)
 
 
 def _prepare_cached_rows(rows: list[dict]) -> list[dict]:
@@ -688,7 +695,7 @@ async def _full_corpus_candidates(
             and now >= entry.background_refresh_not_before
             and (refresh_task is None or refresh_task.done())
         ):
-            entry.background_refresh_task = asyncio.create_task(
+            entry.background_refresh_task = create_tracked_task(
                 _rebuild_full_corpus_cache_in_background(
                     key,
                     entry,
@@ -744,7 +751,7 @@ def _exclude_visible_sources(
     excluded = 0
     for row in rows:
         source_ids = set(_source_message_ids(row))
-        if source_ids & visible_message_ids:
+        if source_ids & visible_message_ids and row.get("source_type") != "image":
             excluded += 1
             continue
         eligible.append(row)
@@ -752,6 +759,8 @@ def _exclude_visible_sources(
 
 
 def _source_key(item: dict) -> str:
+    if item.get("source_type") == "image":
+        return "image:" + str(item.get("source_message_ids")) + ":" + str(item.get("attachment_url"))
     ids = item.get("source_message_ids") or []
     if ids:
         return "messages:" + ",".join(ids)
@@ -802,6 +811,8 @@ def _dedupe(items: list[dict]) -> list[dict]:
     for item in sorted(by_source.values(), key=lambda value: value["score"], reverse=True):
         duplicate_index = None
         for index, existing in enumerate(result):
+            if item.get("source_type") == "image" or existing.get("source_type") == "image":
+                continue
             if _content_similarity(item.get("content") or "", existing.get("content") or "") >= 0.82:
                 duplicate_index = index
                 break
@@ -879,6 +890,9 @@ def _score_chunk(
         "confidence": 1.0,
         "reason": "; ".join(["chunk", *(f"keyword:{hit}" for hit in hits[:4]), "cooldown" if penalty else ""]).strip("; "),
     }
+    if row.get("source_type") == "image":
+        item.update(source_type="image", kind="image_observation", readout_type="image_observation",
+                    attachment_url=row["attachment_url"])
     if use_card:
         item["preview"] = card_content
         item["reason"] = "; ".join(
@@ -1207,6 +1221,8 @@ async def wide_chunk_recall(
     as_of_ts: float,
     exclude_message_id: str | None = None,
     relational_cards_enabled: bool = False,
+    full_corpus_enabled: bool = True,
+    ai_note_lane_enabled: bool = False,
 ) -> list[dict]:
     """Return a raw-embedding candidate snapshot for pending recall.
 
@@ -1215,17 +1231,21 @@ async def wide_chunk_recall(
     readouts only; ranking always uses the source chunk embedding/content.
     """
     normalized_query = _one_line(query_text)
-    if not normalized_query:
+    if not normalized_query or int(top_k) <= 0:
         return []
-    rows = await _fetch_chunks(
-        max(int(candidate_limit), int(top_k)),
-        include_cards=bool(relational_cards_enabled),
-    )
-    _candidate_window_state(
-        "pending_chunks",
-        len(rows),
-        max(int(candidate_limit), int(top_k)),
-    )
+    chunk_matrix = None
+    if full_corpus_enabled:
+        entry = await _full_corpus_candidates(
+            include_cards=bool(relational_cards_enabled),
+            ai_note_lane_enabled=bool(ai_note_lane_enabled),
+        )
+        # 在下一次等待之前固定同一代记录与矩阵；并发更新不会混用两代。
+        rows = list(entry.chunks)
+        chunk_matrix = entry.chunk_matrix
+    else:
+        limit = max(int(candidate_limit), int(top_k))
+        rows = await _fetch_chunks(limit, include_cards=bool(relational_cards_enabled))
+        _candidate_window_state("pending_chunks", len(rows), limit)
     eligible: list[dict] = []
     for row in rows:
         metadata = _safe_json(row.get("metadata_json"), {})
@@ -1251,7 +1271,11 @@ async def wide_chunk_recall(
     if not query_embedding:
         raise RuntimeError("pending recall query embedding unavailable")
     terms = _terms(normalized_query, None)
-    similarities = _batch_similarities(eligible, query_embedding)
+    similarities = (
+        chunk_matrix.similarities(eligible, query_embedding)
+        if chunk_matrix is not None
+        else _batch_similarities(eligible, query_embedding)
+    )
     recent_usage = await _recent_usage([str(row["id"]) for row in eligible])
     scored = [
         _score_chunk(
@@ -1277,13 +1301,15 @@ async def wide_chunk_recall(
             {
                 "candidate_id": str(item["id"]),
                 "source_chunk_id": str(item["id"]),
+                "source_type": item.get("source_type", "chunk"),
+                "attachment_url": item.get("attachment_url"),
                 "source_hash": str(row.get("source_hash") or ""),
                 "source_message_ids": list(item.get("source_message_ids") or []),
                 "source_start_ts": item.get("source_start_ts"),
                 "source_end_ts": item.get("source_end_ts"),
                 "raw_content": raw_content,
                 "readout_text": readout_text,
-                "readout_type": "relational_card" if card_content else "raw_excerpt",
+                "readout_type": "image_observation" if item.get("source_type") == "image" else "relational_card" if card_content else "raw_excerpt",
                 "card_id": row.get("card_id"),
                 "card_version": row.get("card_version"),
                 "score": item.get("score"),

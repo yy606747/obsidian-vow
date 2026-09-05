@@ -31,6 +31,7 @@ DEFAULT_MEMORY_V3_CONFIG = {
     "ai_note_top_k": 3,
     "ai_note_max_items": 2,
     "pending_recall_enabled": False,
+    "pending_full_corpus_enabled": True,
     "pending_candidate_k": 20,
     "pending_candidate_pool_limit": 1000,
     "pending_select_max": 2,
@@ -92,6 +93,7 @@ def normalize_memory_v3_config(raw: dict | None = None) -> dict:
         "replace_auto_digest",
         "ai_note_lane_enabled",
         "pending_recall_enabled",
+        "pending_full_corpus_enabled",
         "timeline_enabled",
     ):
         config[key] = _as_bool(raw.get(key), config[key])

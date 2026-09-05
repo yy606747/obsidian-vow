@@ -1,5 +1,14 @@
 .git
+.codex-backups
+.claude
+.codex
+.agents
 .env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+**/encrypted.data
 .venv
 **/__pycache__
 **/*.pyc

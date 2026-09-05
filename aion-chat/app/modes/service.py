@@ -55,6 +55,8 @@ class ModeService:
     def capabilities_for_mode(self, mode: str | ChatMode | None) -> tuple[str, ...]:
         normalized = self.normalize_mode(mode)
         capabilities = MODE_CAPABILITIES.get(normalized, BASE_TOOL_CAPABILITIES)
+        if SETTINGS.get("image_memory_enabled") is True:
+            capabilities = (*capabilities, "memory.view_image")
         if ring_touch_enabled() and RING_TOUCH_CAPABILITY not in capabilities:
             return (*capabilities, RING_TOUCH_CAPABILITY)
         return capabilities

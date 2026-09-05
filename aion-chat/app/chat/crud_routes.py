@@ -14,6 +14,7 @@ from routes.files import export_conversation
 from ws import manager
 
 from app.vows.service import vow_service
+from app.memory_v2.service import memory_service
 from app.memory_v3.repository import PendingRecallRepository
 from app.web_search.repository import WebSearchRepository
 
@@ -87,7 +88,9 @@ async def delete_conversation(conv_id: str):
                 origin_ref=conv_id,
             )
             await db.execute("DELETE FROM conversations WHERE id=?", (conv_id,))
+            await memory_service.reconcile_conversation_chunks_in_tx(db, conv_id)
             await db.commit()
+            memory_service.invalidate_conversation_cache(conv_id)
         except BaseException:
             await db.rollback()
             return {"ok": False, "error": "delete_failed"}
@@ -166,7 +169,10 @@ async def delete_message(msg_id: str):
                     message_id=msg_id,
                 )
                 await db.execute("DELETE FROM messages WHERE id=?", (msg_id,))
+                await memory_service.reconcile_conversation_chunks_in_tx(db, conv_id)
             await db.commit()
+            if conv_id:
+                memory_service.invalidate_conversation_cache(conv_id)
         except BaseException:
             await db.rollback()
             return {"ok": False, "error": "delete_failed"}
@@ -183,7 +189,7 @@ async def update_message(msg_id: str, body: MsgUpdate):
     async with get_db() as db:
         db.row_factory = __import__('aiosqlite').Row
         await db.execute("BEGIN IMMEDIATE")
-        cur = await db.execute("SELECT role FROM messages WHERE id=?", (msg_id,))
+        cur = await db.execute("SELECT role, conv_id FROM messages WHERE id=?", (msg_id,))
         row = await cur.fetchone()
         if row is None:
             await db.rollback()
@@ -203,7 +209,9 @@ async def update_message(msg_id: str, body: MsgUpdate):
             message_id=msg_id,
         )
         await db.execute("UPDATE messages SET content=? WHERE id=?", (body.content, msg_id))
+        await memory_service.reconcile_conversation_chunks_in_tx(db, row["conv_id"])
         await db.commit()
+        memory_service.invalidate_conversation_cache(row["conv_id"])
         cur = await db.execute("SELECT * FROM messages WHERE id=?", (msg_id,))
         msg = await cur.fetchone()
         if msg:

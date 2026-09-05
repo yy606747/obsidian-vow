@@ -7,6 +7,8 @@ and returns auditable ``ToolResult`` objects.
 """
 
 from __future__ import annotations
+from app.turn_diagnostics import measure_phase
+from . import basic_actions
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -46,6 +48,7 @@ _EXECUTION_ORDER = (
     _SELF_WAKE_GROUP,
     "heart.whisper",
     "memory.remember",
+    "memory.view_image",
     "desktop.presence.show",
     "desktop.presence.draw",
     "device.toy",
@@ -164,10 +167,9 @@ async def _standard_bindings(
     allow_toy_fallback: bool,
     has_error: bool,
 ) -> dict[str, tuple[list[ToolIntent], ToolAdapter]]:
-    # Imported lazily because streaming owns the already-shipped adapters and
-    # itself imports this execution layer. At call time both modules are fully
-    # initialized; no second adapter implementation is introduced here.
+    # 本批只拆出基础三组；其余已上线的设备适配器仍延迟引用原实现。
     from . import streaming
+    from app.image_memory.view import execute_view_image
     from app.presence.renderer import execute_presence_show
     from app.presence.sprites import execute_presence_draw
     from app.self_wake.service import (
@@ -202,16 +204,20 @@ async def _standard_bindings(
 
     bindings: dict[str, tuple[list[ToolIntent], ToolAdapter]] = {
         "music.search": (
-            streaming._music_search_intents(postprocessed),
-            streaming._execute_music_search,
+            basic_actions._music_search_intents(postprocessed),
+            basic_actions._execute_music_search,
         ),
         "heart.whisper": (
-            streaming._heart_whisper_intents(postprocessed),
-            streaming._execute_heart_whisper,
+            basic_actions._heart_whisper_intents(postprocessed),
+            basic_actions._execute_heart_whisper,
+        ),
+        "memory.view_image": (
+            [intent for intent in postprocessed.tool_intents if intent.tool_name == "memory.view_image"],
+            execute_view_image,
         ),
         "memory.remember": (
-            streaming._remember_intents(postprocessed),
-            streaming._execute_remember_note,
+            basic_actions._remember_intents(postprocessed),
+            basic_actions._execute_remember_note,
         ),
         "desktop.presence.draw": (
             [
@@ -270,6 +276,7 @@ async def _standard_bindings(
     return bindings
 
 
+@measure_phase("tools")
 async def execute_postprocessed_actions(
     postprocessed: Any,
     *,
@@ -340,6 +347,11 @@ async def execute_postprocessed_actions(
         if self_wake_group and len(allowed) > 1:
             for extra in allowed[1:]:
                 results.append(_extra_self_wake_denied(extra))
+            allowed = allowed[:1]
+        if tool_name == "memory.view_image" and len(allowed) > 1:
+            results.extend(ToolResult.from_intent(
+                intent, status=ToolStatus.SKIPPED, error="one_image_view_per_turn",
+            ) for intent in allowed[1:])
             allowed = allowed[:1]
         if not allowed:
             continue

@@ -68,6 +68,7 @@ def test_settings_migration_preserves_a_custom_gate_slot(monkeypatch):
             },
             "presence_renderer": {"endpoint": "custom", "model": "renderer-e"},
             "presence_image": {"endpoint": "custom", "model": "image-f"},
+            "vision_summary": {"endpoint": "", "model": "glm-4.6v-flash", "enabled": False},
             "asr": {"endpoint": "custom", "model": "asr-d"},
         },
         "presence_image_slot_migration_v1": True,
@@ -522,6 +523,8 @@ def test_frozen_cp1_slice_is_an_exact_subset_of_the_spike_1_cases():
         repo_root
         / "docs/planning/checkpoints/working_model_v2/artifacts/CP1_FROZEN_CASES.json"
     )
+    if not source_path.exists() or not frozen_path.exists():
+        pytest.skip("原始研究及冻结原话不随公开仓库发布；完整私有版本保留此来源断言")
     source_bytes = source_path.read_bytes()
     source = json.loads(source_bytes)
     frozen = json.loads(frozen_path.read_text(encoding="utf-8"))

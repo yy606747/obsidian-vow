@@ -340,6 +340,14 @@ KNOWN_TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             feedback_timing="next_turn",
         ),
         ToolDefinition(
+            tool_name="memory.view_image",
+            description="按来源消息和附件重新查看原图，每轮至多一次补充回复。",
+            side_effect_level=SideEffectLevel.READ,
+            legacy_markers=("[VIEW_IMAGE:message_id|attachment_url]",),
+            prompt_orders=(("main_stable", 105),),
+            feedback_timing="same_turn",
+        ),
+        ToolDefinition(
             tool_name="memory.remember",
             description="Persist an assistant-proposed memory note.",
             side_effect_level=SideEffectLevel.WRITE,

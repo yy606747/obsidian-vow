@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.chat import side_effects, streaming
+from app.chat import basic_actions, side_effects, streaming
 from app.chat.postprocess import PostProcessResult
 from app.tools.schemas import ToolContext, ToolIntent, ToolResult, ToolStatus
 
@@ -48,6 +48,15 @@ async def _collect_sse(response):
             raw = raw.decode("utf-8")
         assert raw.startswith("data: ")
         events.append(json.loads(raw[len("data: "):].strip()))
+    # 检查中的 asyncio.run 会立即关闭循环，需像应用退出一样先收尾。
+    # 否则回复之后才启动的数据库工作线程会向已经关闭的循环回报。
+    from app.background_tasks import _BACKGROUND_TASKS, begin_task_lifecycle, shutdown_tracked_tasks
+    pending = {task for task in _BACKGROUND_TASKS
+               if not task.done() and task.get_loop() is asyncio.get_running_loop()}
+    if pending:
+        await asyncio.wait(pending, timeout=0.1)
+    await shutdown_tracked_tasks(timeout=1.0)
+    begin_task_lifecycle()
     return events
 
 
@@ -611,7 +620,7 @@ def test_stream_chat_response_eval_mode_strips_side_effects(monkeypatch):
         raise AssertionError("side effect should not run in memory_eval_mode")
 
     monkeypatch.setattr(streaming, "stream_ai", fake_stream_ai)
-    monkeypatch.setattr(streaming, "_store_remember_notes", fail_side_effect)
+    monkeypatch.setattr(basic_actions, "_store_remember_notes", fail_side_effect)
     monkeypatch.setattr(streaming, "_toy_sys_msg", fail_side_effect)
 
     async def run():
@@ -673,7 +682,7 @@ def test_stream_chat_response_heart_whisper_uses_tool_service(monkeypatch):
             ]
 
     monkeypatch.setattr(streaming, "stream_ai", fake_stream_ai)
-    monkeypatch.setattr(streaming, "_store_heart_whisper", fail_direct_store)
+    monkeypatch.setattr(basic_actions, "_store_heart_whisper", fail_direct_store)
     monkeypatch.setattr(streaming, "tool_service", FakeToolService())
 
     async def run():
@@ -733,7 +742,7 @@ def test_stream_chat_response_remember_uses_tool_service(monkeypatch):
             ]
 
     monkeypatch.setattr(streaming, "stream_ai", fake_stream_ai)
-    monkeypatch.setattr(streaming, "_store_remember_notes", fail_direct_store)
+    monkeypatch.setattr(basic_actions, "_store_remember_notes", fail_direct_store)
     monkeypatch.setattr(streaming, "tool_service", FakeToolService())
 
     async def run():
@@ -784,8 +793,8 @@ def test_stream_chat_response_music_uses_tool_service_adapter(monkeypatch):
         return f"https://music.test/{song_id}"
 
     monkeypatch.setattr(streaming, "stream_ai", fake_stream_ai)
-    monkeypatch.setattr(streaming, "search_songs", fake_search_songs)
-    monkeypatch.setattr(streaming, "get_audio_url", fake_get_audio_url)
+    monkeypatch.setattr(basic_actions, "search_songs", fake_search_songs)
+    monkeypatch.setattr(basic_actions, "get_audio_url", fake_get_audio_url)
 
     async def run():
         response = await streaming.stream_chat_response(
@@ -1234,8 +1243,8 @@ def test_stream_chat_response_emits_non_device_tool_event_shapes(monkeypatch):
 
     monkeypatch.setattr(streaming, "stream_ai", fake_stream_ai)
     monkeypatch.setattr(streaming, "_post_processor", FakePostProcessor())
-    monkeypatch.setattr(streaming, "_store_heart_whisper", fake_store_heart)
-    monkeypatch.setattr(streaming, "_store_remember_notes", fake_store_remember)
+    monkeypatch.setattr(basic_actions, "_store_heart_whisper", fake_store_heart)
+    monkeypatch.setattr(basic_actions, "_store_remember_notes", fake_store_remember)
     monkeypatch.setattr(streaming, "perform_poi_check", fake_poi)
     monkeypatch.setattr(streaming, "perform_activity_check", fake_activity)
 

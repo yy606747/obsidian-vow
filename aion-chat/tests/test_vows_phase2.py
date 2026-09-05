@@ -21,6 +21,7 @@ from app.tools.schemas import ToolContext
 from app.vows.schema import init_vow_tables
 from app.vows.service import VowReadError
 from app.web_search.schema import init_web_search_tables
+from app.memory_v3.schema import init_memory_v3_tables
 
 import opportunity as opportunity_mod
 
@@ -44,6 +45,17 @@ def _init_chat_db(tmp_path, name="phase2.db"):
             )
             await init_vow_tables(db)
             await init_web_search_tables(db)
+            await db.execute(
+                "CREATE TABLE memory_chunks (id TEXT PRIMARY KEY, conv_id TEXT, "
+                "message_ids_json TEXT NOT NULL DEFAULT '[]', content TEXT, "
+                "created_at REAL, updated_at REAL, embedding BLOB, "
+                "keywords_json TEXT NOT NULL DEFAULT '[]', metadata_json TEXT NOT NULL DEFAULT '{}')"
+            )
+            await db.execute(
+                "CREATE TABLE memory_items (id TEXT PRIMARY KEY, legacy_memory_id TEXT, "
+                "metadata_json TEXT NOT NULL DEFAULT '{}')"
+            )
+            await init_memory_v3_tables(db)
             await db.commit()
 
     asyncio.run(_init())

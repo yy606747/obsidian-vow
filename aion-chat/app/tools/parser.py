@@ -22,6 +22,7 @@ from app.chat.commands import (
     SELF_WAKE_CANCEL_TOKEN,
     SELF_WAKE_PATTERN,
     REMEMBER_CMD_PATTERN,
+    VIEW_IMAGE_PATTERN,
     SCREEN_CHECK_PATTERN,
     MOBILE_SCREEN_CHECK_PATTERN,
     TOY_CMD_PATTERN,
@@ -49,6 +50,7 @@ ALL_COMMAND_GROUPS = frozenset({
     "schedule",
     "heart",
     "remember",
+    "view_image",
     "ring",
     "presence_draw",
     "presence_show",
@@ -70,6 +72,7 @@ TOOL_COMMAND_GROUPS = {
     "schedule.list": "schedule",
     "heart.whisper": "heart",
     "memory.remember": "remember",
+    "memory.view_image": "view_image",
     "device.ring_touch": "ring",
     "desktop.presence.draw": "presence_draw",
     "desktop.presence.show": "presence_show",
@@ -107,6 +110,8 @@ STRUCTURED_ACTION_ALIASES = {
     "heart.whisper": "heart.whisper",
     "remember": "memory.remember",
     "memory.remember": "memory.remember",
+    "memory.view_image": "memory.view_image",
+    "view_image": "memory.view_image",
     "ring": "device.ring_touch",
     "ring_touch": "device.ring_touch",
     "device.ring_touch": "device.ring_touch",
@@ -223,6 +228,12 @@ def _structured_arguments(tool_name: str, action: Mapping[str, Any]) -> dict | N
     raw_args = action.get("arguments")
     args = dict(raw_args) if isinstance(raw_args, Mapping) else {}
 
+    if tool_name == "memory.view_image":
+        message_id = _one_line(args.get("message_id") or action.get("message_id"))
+        url = _one_line(args.get("attachment_url") or action.get("attachment_url"))
+        if not message_id or not url.startswith("/uploads/"):
+            return None
+        return {"message_id": message_id, "attachment_url": url}
     if tool_name == "device.toy":
         command = args.get("command") or action.get("command") or action.get("legacy_command") or action.get("value")
         if not _one_line(command):
@@ -584,6 +595,12 @@ def parse_tool_intents(
             command_group="heart",
             legacy_marker="HEART",
             argument_builder=lambda match: {"content": _one_line(match.group(1))},
+        ))
+    if "view_image" in enabled:
+        parsed.extend(_regex_commands(
+            raw_text, pattern=VIEW_IMAGE_PATTERN, tool_name="memory.view_image",
+            command_group="view_image", legacy_marker="VIEW_IMAGE",
+            argument_builder=lambda match: {"message_id": match.group(1), "attachment_url": match.group(2)},
         ))
     if "remember" in enabled:
         parsed.extend(_regex_commands(

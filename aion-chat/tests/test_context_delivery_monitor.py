@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from routes import settings
 
@@ -37,7 +38,7 @@ def test_monitor_shared_renderer_receives_configured_relationship_name(monkeypat
 
 
 def test_monitor_page_no_longer_renders_legacy_chat_status_payload():
-    page = (settings.TTS_CACHE_DIR.parent.parent / "static" / "monitor-logs.html")
+    page = Path(__file__).resolve().parents[1] / "static" / "monitor-logs.html"
     text = page.read_text(encoding="utf-8")
 
     assert 'api("GET", "/api/context_delivery/current")' in text
@@ -47,7 +48,7 @@ def test_monitor_page_no_longer_renders_legacy_chat_status_payload():
 
 
 def test_monitor_page_shows_matched_shadow_labels_without_interrupting_owner():
-    page = (settings.TTS_CACHE_DIR.parent.parent / "static" / "monitor-logs.html")
+    page = Path(__file__).resolve().parents[1] / "static" / "monitor-logs.html"
     text = page.read_text(encoding="utf-8")
 
     assert "/api/sentinel/context-trigger-shadow?limit=50" in text

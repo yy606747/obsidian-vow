@@ -20,6 +20,7 @@ SCREEN_CHECK_PATTERN = re.compile(r'\[SCREEN_CHECK:([^\]]+)\]')
 # 移动端截图：[MOBILE_SCREEN_CHECK:目标|原因]，目标可为设备名/类型/留空
 MOBILE_SCREEN_CHECK_PATTERN = re.compile(r'\[MOBILE_SCREEN_CHECK:([^\]]+)\]')
 REMEMBER_CMD_PATTERN = re.compile(r'\[REMEMBER:([^\]]+)\]')
+VIEW_IMAGE_PATTERN = re.compile(r'\[VIEW_IMAGE:([^|\]\s]+)\|([^\]\s]+)\]')
 PRESENCE_DRAW_PATTERN = re.compile(r'\[PRESENCE_DRAW:([^\]]+)\]')
 PRESENCE_SHOW_PATTERN = re.compile(r'\[PRESENCE_SHOW:([^\]]+)\]')
 SELF_WAKE_PATTERN = re.compile(r'\[SELF_WAKE:([^\]]+)\]')
@@ -71,6 +72,7 @@ def _strip_eval_side_effect_commands(text: str) -> str:
         HEART_CMD_PATTERN,
         RING_TOUCH_PATTERN,
         REMEMBER_CMD_PATTERN,
+        VIEW_IMAGE_PATTERN,
         PRESENCE_DRAW_PATTERN,
         PRESENCE_SHOW_PATTERN,
         SELF_WAKE_PATTERN,
