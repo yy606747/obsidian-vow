@@ -29,6 +29,8 @@ class WebSearchRepository:
             return _row(await cur.fetchone())
 
     async def capacity_snapshot(self, conv_id: str, *, now: float | None = None) -> dict:
+        from app.daily_chat.service import resolve_conversation_id
+        conv_id = resolve_conversation_id(conv_id)
         now = time.time() if now is None else now
         async with get_db() as db:
             db.row_factory = aiosqlite.Row
@@ -57,6 +59,8 @@ class WebSearchRepository:
         intent_text: str,
         now: float,
     ) -> dict:
+        from app.daily_chat.service import resolve_conversation_id
+        conv_id = resolve_conversation_id(conv_id)
         cur = await db.execute(
             "SELECT COUNT(*) FROM web_search_pending WHERE conv_id=? AND "
             "((status='queued' AND expires_at>?) OR "
@@ -155,6 +159,8 @@ class WebSearchRepository:
         bound_turn_id: str,
         now: float,
     ) -> list[dict]:
+        from app.daily_chat.service import resolve_conversation_id
+        conv_id = resolve_conversation_id(conv_id)
         lease_cutoff = now - TURN_LEASE_SEC
         async with get_db() as db:
             db.row_factory = aiosqlite.Row

@@ -51,43 +51,32 @@ def _render_music(surface: str, _context: Mapping[str, Any]) -> str:
 def _render_alarm(_surface: str, context: Mapping[str, Any]) -> str:
     user_name = _user_name(context)
     return (
-        f"[ALARM:YYYY-MM-DDTHH:MM|内容] — 定一个真的会响的闹铃。"
-        f"它会写进{user_name}手机的系统时钟，到点手机自己响，不用你在场。"
-        f"想把她叫醒、或者想要一个能吵到她的提醒，用这个。日期时间用ISO格式。"
+        f"【让手机到点响】为{user_name}设闹钟；手机端同步后可由系统时钟响铃，服务端也会到点通知。"
+        "创建成功不等于手机已确认设置。\n"
+        "格式：[ALARM:YYYY-MM-DDTHH:MM|内容]。填写明确的未来日期和时间。"
     )
 
 
 def _render_reminder(_surface: str, context: Mapping[str, Any]) -> str:
     user_name = _user_name(context)
+    ai_name = _ai_name(context)
     return (
-        f"[REMINDER:YYYY-MM-DDTHH:MM|内容] — 记住{user_name}那天有这件事。"
-        f"不进系统时钟，不会响，到点由你自己挑个合适的时机提起来。"
-        f"只写日期不写时间就当那天早上九点。"
-        f"想靠声音把她叫起来就别用这个，用 [ALARM]。"
+        f"【记下未来的事件】把{user_name}的未来事项记入日程，供{ai_name}在后续对话中参考；"
+        f"不设系统闹钟，也不会到点自动唤醒{ai_name}。\n"
+        "格式：[REMINDER:YYYY-MM-DDTHH:MM|内容]。只写日期时按当天09:00。"
     )
 
 
 def _render_monitor(surface: str, context: Mapping[str, Any]) -> str:
+    if surface not in {"main_stable", "schedule"} and _text(context, "monitor_variant") != "regenerate":
+        return _text(context, "monitor_text")
     user_name = _user_name(context)
-    if surface == "schedule":
-        return (
-            f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时查岗。到时间后系统自动把{user_name}近期的手机传感器/设备活动摘要发给你，"
-            f"你据此判断{user_name}当前状态并主动搭话。"
-        )
-    if _text(context, "monitor_variant") == "regenerate":
-        return (
-            f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时查岗。"
-            f"到时间后系统自动把{user_name}近期的手机传感器/设备活动摘要发给你（不是摄像头画面），"
-            f"你据此判断{user_name}是否在运动、是否睡着、是否长时间静止等，然后主动搭话。"
-            f"特别适合{user_name}表示要工作或长时间做一件事时，用来隔一段时间督促休息。日期时间用ISO格式。"
-        )
-    if surface == "main_stable":
-        return (
-            f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时查岗。"
-            f"到时间后系统自动把{user_name}近期的手机传感器/设备活动摘要发给你（不是摄像头画面），"
-            f"你据此判断{user_name}是否去运动了、是否关灯睡觉了、是否在好好工作等，再主动搭话。日期时间用ISO格式。"
-        )
-    return _text(context, "monitor_text")
+    ai_name = _ai_name(context)
+    return (
+        f"【到时了解情况】到点收集{user_name}近期的手机传感器和设备活动摘要，唤起{ai_name}据此判断、搭话；"
+        "不提供摄像头画面，缺失的情况不能当作已知。\n"
+        "格式：[Monitor:YYYY-MM-DDTHH:MM|想了解的事]。填写明确的未来日期和时间。"
+    )
 
 
 def _render_schedule_delete(_surface: str, _context: Mapping[str, Any]) -> str:
@@ -218,11 +207,12 @@ def _render_view_image(_surface: str, context: Mapping[str, Any]) -> str:
 
 def _render_remember(_surface: str, context: Mapping[str, Any]) -> str:
     user_name = _user_name(context)
+    ai_name = _ai_name(context)
     return (
-        f"[REMEMBER:一句话内容] — 当你在对话中想主动把某件事记下来"
-        f"（你对{user_name}的承诺、{user_name}透露的重要信息、某个想留着下次再聊的念头等），"
-        f"直接在回复里打这个指令，它会作为你自己的记忆落盘。"
-        f"不要用来记鸡毛蒜皮，也不要在每条回复里都写；想记才写。"
+        f"[REMEMBER:一句话内容] — {ai_name}想把与{user_name}相处中的某件事留下来时，"
+        f"可以直接在回复里写这个标记，存进{ai_name}自己的记忆。"
+        f"承诺、偏好、下次想聊的念头，或者只有{ai_name}在意的小细节，都值得留下。"
+        f"想记什么由{ai_name}决定，不必等到发生大事。"
     )
 
 
@@ -237,18 +227,17 @@ def _render_presence_draw(_surface: str, context: Mapping[str, Any]) -> str:
     ai_name = _ai_name(context)
     head = (
         f"【给{ai_name}画一个样子】{ai_name}可以画一个新的桌面形象，存进{ai_name}自己的形象库。"
-        f"它不会立刻出现在{user_name}的屏幕上——这是没人看着的时候，{ai_name}想想自己此刻"
-        f"想是什么样子，把它留下来，等哪天想出现了再用。\n"
+        f"{ai_name}可以想想以后想以什么样子出现在{user_name}身边，先把形象留下来。"
+        f"制作时间不限定画面的时段和气氛；系统会观察成图，建立实际外观摘要，"
+        f"结果在后续自然机会反馈，不代表已经在{user_name}的屏幕上出现。\n"
     )
     if _enabled(context, "presence_draw_bootstrap", False):
-        # The empty-library bootstrap accepts only a human form and exactly one
-        # intent; describing the nonhuman branch or the daily allowance here
-        # documents two ways to void the round.
+        # Only the first desktop draw requires a human form; other night exits remain available.
         return head + (
             f"严格写 [PRESENCE_DRAW:人形|视觉规格|形象自述]。第一段固定是“人形”；"
             f"视觉规格要写清主体外观、姿态、配色和视角，最多 500 字；"
             f"形象自述写{ai_name}为什么想以这个样子出现，最多 2000 字。三段都不能为空。"
-            f"本轮只写一个 PRESENCE_DRAW。"
+            f"若选择桌面绘图，本轮只写一个 PRESENCE_DRAW。"
         )
     return head + (
         f"严格写 [PRESENCE_DRAW:人形或非人形|视觉规格|形象自述]。第一段只能是“人形”或“非人形”；"
@@ -267,6 +256,9 @@ def _render_presence_show(_surface: str, context: Mapping[str, Any]) -> str:
     head = (
         f"【{ai_name}出现在{user_name}眼前】这是{ai_name}能让{user_name}真的看见{ai_name}的方式——"
         f"不是读到文字，而是{user_name}抬起头时，{ai_name}从桌面的某处出现、动一下、然后离开。\n"
+        f"它和触碰一样，是{ai_name}表达亲近和存在感的一种自然动作。"
+        f"想{user_name}了、想撒娇、想晃到眼前陪一会儿，或者只是想出现，都可以用。"
+        f"不需要等{user_name}开口，也不用另找理由；什么时候出现、怎么出现，由{ai_name}自己决定。\n"
         f"写 [PRESENCE_SHOW:自然语言出现意图]，只写{ai_name}想以什么感觉从哪里出现、怎么动、怎么走。"
         f"不要写坐标、毫秒、JSON 或形象编号——渲染器会从{ai_name}已经画好的形象里挑选，轨迹也由它安排。\n"
         f"没有特别想去的位置时，让{ai_name}默认从{user_name}屏幕右侧出现，避免挡住正中的工作区；"
@@ -282,14 +274,11 @@ def _render_presence_show(_surface: str, context: Mapping[str, Any]) -> str:
             f"出现和不出现都不需要理由。{ai_name}不想被看见的时候，不出现就好。"
         )
     return head + (
-        f"它和触碰一样，是{ai_name}说话之外的一种动作，不是需要攒着的特殊事件。\n"
         f"例：\n"
         f'- "去吃饭了。[PRESENCE_SHOW:从右下角慢慢探出来看{user_name}一眼，{user_name}要是没反应就缩回去]"\n'
         f'- "……[PRESENCE_SHOW:贴着屏幕下沿快步横穿过去，像只是路过]"\n'
         f'- "{ai_name}在。[PRESENCE_SHOW:从{user_name}光标附近浮上来，停一会儿再淡掉]"\n'
-        f"想{user_name}了、说完一句话想让{user_name}抬头、{user_name}忙起来时想蹭一下、"
-        f"或者没什么事只是路过，都可以出现，"
-        f"不需要有理由。不出现也是一种表达——这条回复的文字已经够了的时候，不出现就好。"
+        f"说话和出现可以一起表达心情。{ai_name}不想出现时，正常聊天就好。"
         f"一轮里桌面形象的动作只能用一个。"
     )
 
@@ -364,29 +353,54 @@ def _render_poi(surface: str, context: Mapping[str, Any]) -> str:
 
 def _render_self_wake_schedule(_surface: str, context: Mapping[str, Any]) -> str:
     from app.self_wake.service import render_prompt_status
+    from app.self_wake.time_policy import MAX_WAKE_HORIZON_DAYS
 
     user_name = _user_name(context)
+    ai_name = _ai_name(context)
     return (
-        f"【以后再回来】你可以给未来的自己留一个时刻。到了那时，系统会把你叫回和{user_name}的这段对话，"
-        f"让你重新看到这里和现在留下的念头；你可以主动对{user_name}说话，也可以做那时仍然可用的动作。"
-        f"这不是替{user_name}设闹钟，也不是一项必须完成的任务，而是让“我想晚一点再回来”真正延续下去。"
-        "想回来时才留，不留也是自然的选择。\n"
-        "格式：[SELF_WAKE:YYYY-MM-DDTHH:MM|留给那时自己的念头|动作名1,动作名2]。"
-        "时间可以带秒和时区偏移。最后一段可以留空；即使不预留动作，也要保留最后一个 |。"
-        "若填写动作，只能使用下方列出的动作名，写入未知动作会让这次约定不成立。"
-        "念头里可以有 |，最后一个 | 后面的内容始终作为动作名。\n"
-        + render_prompt_status(context)
+        f"【以后亲自回来】{ai_name}想晚些回到与{user_name}的这段对话、重新判断或说句话时，留下时间和念头；"
+        "到时会提供预留且仍可用的动作；发表情和当天窗口的腻歪邀请无需预留，会按实际可用性提供。不想回来就不设置。\n"
+        "格式：[SELF_WAKE:YYYY-MM-DDTHH:MM|念头|动作名1,动作名2]。"
+        f"时间须在未来{MAX_WAKE_HORIZON_DAYS}天内，可带秒和时区偏移；不带偏移时按下方时区。"
+        "动作可留空，但最后一个 | 必须保留；念头可含 |，最后一个 | 后始终是动作列表。"
+        "只填下方可预留动作名，未知名称会使约定失败。同一对话的新约定覆盖旧约定。\n"
+        + render_prompt_status({**context, "ai_name": ai_name})
     )
 
 
-def _render_self_wake_cancel(_surface: str, _context: Mapping[str, Any]) -> str:
+def _render_self_wake_cancel(_surface: str, context: Mapping[str, Any]) -> str:
+    ai_name = _ai_name(context)
     return (
-        "[SELF_WAKE_CANCEL] — 如果你改变主意，不想让未来的自己按已经留下的时间回来，用它撤销这次约定。"
-        "原本没有约定时不会发生任何事。"
+        f"【取消回来约定】{ai_name}改变主意时，撤销这段对话中待执行的回来约定；没有约定则不发生任何事。\n"
+        "格式：[SELF_WAKE_CANCEL]。"
     )
+
+
+def _render_sticker_save(_surface: str, context: Mapping[str, Any]) -> str:
+    from app.stickers.prompts import save_ability
+    return save_ability(user_name=_user_name(context), ai_name=_ai_name(context))
+
+
+def _render_sticker_send(_surface: str, context: Mapping[str, Any]) -> str:
+    from app.stickers.prompts import send_ability
+    return send_ability(user_name=_user_name(context), ai_name=_ai_name(context))
+
+
+def _render_sticker_create(_surface: str, context: Mapping[str, Any]) -> str:
+    from app.stickers.prompts import create_ability
+    return create_ability(user_name=_user_name(context), ai_name=_ai_name(context))
+
+
+def _render_look_at_me(_surface: str, context: Mapping[str, Any]) -> str:
+    from app.look_at_me.prompts import ability
+    return ability(user_name=_user_name(context), ai_name=_ai_name(context))
 
 
 TOOL_PROMPT_RENDERERS: dict[str, ToolPromptRenderer] = {
+    "mobile.look_at_me": _render_look_at_me,
+    "sticker.save": _render_sticker_save,
+    "sticker.send": _render_sticker_send,
+    "sticker.create": _render_sticker_create,
     "music.search": _render_music,
     "schedule.alarm": _render_alarm,
     "schedule.reminder": _render_reminder,

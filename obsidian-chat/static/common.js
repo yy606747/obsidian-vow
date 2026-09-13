@@ -2,53 +2,18 @@
 
 const $ = id => document.getElementById(id);
 
-// 在 iframe 子页面浮层中时，返回按钮改为关闭浮层回到聊天页
+// 子页面也从同一个入口返回小屋，父页面继续保留聊天状态。
 if (window.parent !== window) {
   document.addEventListener('DOMContentLoaded', () => {
     const backBtn = document.querySelector('.top-bar .back-btn');
-    if (backBtn) backBtn.onclick = () => window.parent.closeSubPage();
+    if (backBtn) backBtn.onclick = () => window.parent.VowUI.navigate('/');
   });
 }
 
-// 琥珀光场（轻量版：3 orbs + 4 sparks，省电）
-(function spawnAmbient() {
-  const orbs = document.createElement('div');
-  orbs.className = 'vow-orbs';
-  for (let i = 0; i < 3; i++) {
-    const o = document.createElement('div');
-    o.className = 'orb';
-    const sz = 30 + Math.random() * 40;
-    const duration = 18 + Math.random() * 18;
-    o.style.cssText = `left:${Math.random()*100}%;bottom:-5%;width:${sz}px;height:${sz}px;animation-duration:${duration}s;animation-delay:${-Math.random()*duration}s;`;
-    orbs.appendChild(o);
-  }
-  for (let i = 0; i < 4; i++) {
-    const s = document.createElement('div');
-    s.className = 'spark';
-    const sz = 2 + Math.random() * 4;
-    const duration = 12 + Math.random() * 14;
-    s.style.cssText = `left:${Math.random()*100}%;bottom:-3%;width:${sz}px;height:${sz}px;animation-duration:${duration}s;animation-delay:${-Math.random()*duration}s;`;
-    orbs.appendChild(s);
-  }
-  document.body.appendChild(orbs);
-
-  ['tr','bl'].forEach(pos => {
-    const h = document.createElement('div');
-    h.className = `vow-halo ${pos}`;
-    document.body.appendChild(h);
-  });
-
-  ['vow-streak','vow-vignette'].forEach(cls => {
-    const el = document.createElement('div');
-    el.className = cls;
-    document.body.appendChild(el);
-  });
-
-  // 页面不可见时暂停所有 CSS 动画，省电
-  document.addEventListener('visibilitychange', () => {
-    document.body.classList.toggle('vow-paused', document.hidden);
-  });
-})();
+// Pause remaining status animations when a page is hidden.
+document.addEventListener('visibilitychange', () => {
+  document.body.classList.toggle('vow-paused', document.hidden);
+});
 
 async function api(method, url, body) {
   const opts = { method, headers: {"Content-Type": "application/json"} };
@@ -99,7 +64,7 @@ function _setWsDot(state) {
     document.body.appendChild(dot);
   }
   const colors = {
-    open:       { bg: '#22c55e', glow: 'rgba(34,197,94,0.4)',  title: '已连接' },
+    open:       { bg: '#8b9b78', glow: 'rgba(139,155,120,0.12)', title: '已连接' },
     connecting: { bg: '#eab308', glow: 'rgba(234,179,8,0.5)',  title: '重连中...' },
     closed:     { bg: '#ef4444', glow: 'rgba(239,68,68,0.5)',  title: '连接断开' },
   };

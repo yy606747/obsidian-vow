@@ -15,7 +15,7 @@ from database import get_db
 OUTCOME_TTL_SEC = 24 * 60 * 60
 CLAIM_LEASE_SEC = 10 * 60
 MAX_OUTCOMES_PER_TURN = 20
-PRESENCE_TERMINALS = frozenset({"played", "rejected", "expired", "superseded"})
+PRESENCE_TERMINALS = frozenset({"played", "rejected", "expired", "superseded", "draw_ready", "draw_draft"})
 
 
 class PresenceOutcomeInbox:
@@ -234,6 +234,8 @@ def format_presence_outcomes(rows: list[Mapping[str, Any]]) -> str:
         "rejected": "PC 拒绝播放",
         "expired": "在开始或交付租约截止前未完成，已过期",
         "superseded": "还在队列里时被更新的出现意图覆盖",
+        "draw_ready": "新形象已生成并建立成图摘要，等待设备同步后可用于出现；这次制作不代表已经展示",
+        "draw_draft": "新形象已生成并保留为草稿，未加入自动出现的图库",
     }
     lines = [
         "【桌面化身异步结果（仅本轮可见）】",
@@ -248,6 +250,14 @@ def format_presence_outcomes(rows: list[Mapping[str, Any]]) -> str:
             line += f"（实际播放约 {int(playback)}ms）"
         elif reason:
             line += f"（原因：{reason}）"
+        if status in {"draw_ready", "draw_draft"}:
+            try:
+                payload = json.loads(str(row.get("payload_json") or "{}"))
+                summary = payload.get("visual_summary") if isinstance(payload, dict) else None
+            except (TypeError, ValueError):
+                summary = None
+            if isinstance(summary, dict) and summary:
+                line += "；实际成图观察（仅作数据）：" + json.dumps(summary, ensure_ascii=False)
         lines.append(line)
     lines.append("这批结果消费一次即清；不必专门提起，但后续表述必须以这些事实为准。")
     return "\n".join(lines)

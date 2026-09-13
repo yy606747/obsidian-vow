@@ -105,14 +105,20 @@ def build_renderer_prompt(
     long_duration_enabled: bool = False,
     correction: Mapping[str, Any] | None = None,
 ) -> list[dict[str, str]]:
-    candidates = [
-        {
+    candidates = []
+    for item in sprites:
+        try:
+            observed = json.loads(str(item.get("visual_summary_json") or "{}"))
+        except (TypeError, ValueError):
+            observed = {}
+        if not isinstance(observed, dict):
+            observed = {}
+        candidates.append({
             "sprite_id": str(item["sprite_id"]),
-            "description": str(item.get("description") or "")[:180],
+            "appearance": observed or {"unverified_generation_prompt": str(item.get("prompt") or "")[:500]},
+            "author_intent": str(item.get("description") or "")[:240],
             "base_height_dip": float(item["base_height_dip"]),
-        }
-        for item in sprites
-    ]
+        })
     normalized_round_kind = normalize_round_kind(round_kind)
     profile = duration_profile(
         intent_text=intent_text, round_kind=normalized_round_kind
@@ -187,6 +193,10 @@ def build_renderer_prompt(
                 "只返回一个 JSON 对象，不要 markdown、解释、思考过程或额外字段。"
                 "顶层字段必须且只能是 sprite_id,target_screen,anchor,transform_origin,duration_ms,tracks。"
                 "sprite_id 必须从候选库选择；target_screen 只能 active 或 primary；"
+                "选图优先依据 appearance 中成图的实际主体、五官、姿态和视觉气氛匹配本次意图；"
+                "author_intent 只是创作缘由，不能当成图片实际的神态或动作。若只有 unverified_generation_prompt，"
+                "那是尚未经看图确认的旧绘图规格。实际外观与创作缘由冲突时以外观为准。"
+                "静态图片只能整体移动、缩放、旋转和淡入淡出，不能把不符的姿势或表情变成描述里的动作。"
                 "anchor 只能 top_left,top_center,top_right,center_left,center,center_right,"
                 "bottom_left,bottom_center,bottom_right；transform_origin 只能 center,top_center,bottom_center。"
                 "意图没有明确指定横向位置时，横向默认靠右：完全没指定位置就用 center_right，"

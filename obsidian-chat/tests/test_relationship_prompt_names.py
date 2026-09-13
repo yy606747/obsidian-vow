@@ -2,9 +2,11 @@ import json
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from app.chat.history import build_handoff_note_block
 from app.chat.prompt_builder import build_aftercare_prompt_block
-from app.chat.worldbook import build_worldbook_prefix, resolve_worldbook_names
+from app.chat.worldbook import build_chat_presentation_block, build_worldbook_prefix, resolve_worldbook_names
 from app.context_delivery import ContextDeliveryProjection, CurrentContextItem
 from app.context_delivery.renderer import render_context_delivery_projection
 from app.memory_v2.prompt_block import build_v2_memory_prompt_block
@@ -21,6 +23,119 @@ from app.working_model.writer import (
 
 USER_NAME = "小栀"
 AI_NAME = "阿澈"
+
+
+@pytest.mark.parametrize('names', [(USER_NAME, AI_NAME), ('青禾', '临川')])
+def test_look_at_me_prompts_and_memory_use_runtime_names(names):
+    from app.look_at_me import prompts
+    from app.tools.prompt_renderers import render_registered_capabilities
+    user_name, ai_name = names
+    base = dict(expression='一起发会儿呆', duration_seconds=300, status='active',
+                expected_end_at=400, started_at=100, ended_at=400, actual_ms=300000,
+                expires_at=50, decision='accepted')
+    texts = [prompts.ability(user_name=user_name,ai_name=ai_name),
+             prompts.acceptance(user_name=user_name,ai_name=ai_name)]
+    for state in ({}, {'status':'finished','decision':'rejected','reject_reason':'开会'},
+                  {'status':'finished','decision':'timed_out'},
+                  {'status':'finished','outcome':'completed'},
+                  {'status':'finished','outcome':'ended_early','reason':'screen_off'},
+                  {'status':'finished','decision':None,'notified_at':1},
+                  {'status':'finished','decision':'accepted'}):
+        texts.append(prompts.fact({**base,**state},user_name=user_name,ai_name=ai_name,now=150,timezone='UTC'))
+    texts.append(prompts.memory({**base,'status':'finished','outcome':'completed'},user_name=user_name,ai_name=ai_name,timezone='UTC'))
+    for surface in ('main_stable','opportunity','self_wake','initiative','sentinel_v2'):
+        entries=render_registered_capabilities(surface,capabilities={'mobile.look_at_me'},context={'user_name':user_name,'ai_name':ai_name})
+        assert entries and user_name in entries[0][1] and ai_name in entries[0][1]
+    for text in texts:
+        assert ai_name in text
+        assert all(generic not in text for generic in ('用户','AI','对方','TA','你','她'))
+
+
+@pytest.mark.parametrize('names', [(USER_NAME, AI_NAME), ('青禾', '临川')])
+def test_autonomous_sticker_abilities_use_runtime_names(names):
+    from app.tools.prompt_renderers import render_registered_capabilities
+    for surface in ('main_stable', 'opportunity', 'self_wake', 'sentinel_v2', 'schedule'):
+        entries = render_registered_capabilities(surface, capabilities={'sticker.send'},
+            context={'user_name': names[0], 'ai_name': names[1]})
+        assert [key for key, _ in entries] == ['sticker.send']
+        text = entries[0][1]
+        assert names[0] in text and names[1] in text
+        assert all(generic not in text for generic in ('用户', 'AI', '对方', 'TA', '你', '她'))
+
+
+@pytest.mark.parametrize('names', [(USER_NAME, AI_NAME), ('青禾', '临川')])
+def test_human_sticker_and_photo_context_preserve_sender_across_days(names):
+    from app.stickers.prompts import history_note
+    from app.daily_chat.service import build_cross_day_background
+    attachments = ['/uploads/photo.png', {'type': 'sticker', 'url': '/uploads/cat.gif', 'summary': {'visual': '猫猫'}}]
+    note = history_note(attachments, user_name=names[0], ai_name=names[1], role='user')
+    background = build_cross_day_background([
+        {'role': 'user', 'content': '', 'created_at': 1, 'attachments': attachments},
+    ], user_name=names[0], ai_name=names[1], timezone='UTC')
+    for text in (note, background):
+        assert f'{names[0]}向{names[1]}发送的聊天表情' in text
+        assert '1 张普通图片' in text
+        assert all(generic not in text for generic in ('用户', 'AI', '对方', 'TA', '你', '她'))
+
+
+@pytest.mark.parametrize('names', [(USER_NAME, AI_NAME), ('青禾', '临川')])
+@pytest.mark.parametrize('explicit', [True, False])
+def test_sticker_capabilities_resolve_runtime_names(monkeypatch, names, explicit):
+    from app.chat import worldbook
+    from app.tools.prompt_renderers import render_registered_capabilities
+    monkeypatch.setattr(worldbook, 'load_worldbook_names', lambda: names)
+    context = {'user_name': names[0], 'ai_name': names[1]} if explicit else {}
+    entries = [*render_registered_capabilities('main_stable', capabilities={'sticker.save', 'sticker.send'}, context=context),
+               *render_registered_capabilities('opportunity', capabilities={'sticker.create'}, context=context)]
+    assert len(entries) == 3
+    for _name, text in entries:
+        assert names[0] in text and names[1] in text
+        assert all(generic not in text for generic in ('用户', 'AI', '对方', 'TA', '你', '她'))
+
+
+@pytest.mark.parametrize('names', [(USER_NAME, AI_NAME), ('青禾', '临川')])
+def test_cross_day_background_resolves_both_names(names):
+    from app.daily_chat.service import build_cross_day_background
+    text = build_cross_day_background([
+        {'role': 'user', 'content': '明天接着聊。', 'created_at': 1},
+        {'role': 'assistant', 'content': '好，记着呢。', 'created_at': 2},
+    ], user_name=names[0], ai_name=names[1], timezone='Asia/Shanghai')
+    assert names[0] in text and names[1] in text
+    assert all(generic not in text for generic in ('用户', 'AI', '对方', 'TA'))
+
+
+@pytest.mark.parametrize("use_context_names", [True, False])
+@pytest.mark.parametrize("names", [(USER_NAME, AI_NAME), ("星禾", "知遥")])
+def test_time_capability_and_status_names_are_resolved_at_runtime(monkeypatch, use_context_names, names):
+    from app.chat import worldbook
+    from app.self_wake.service import render_prompt_status
+    from app.tools.prompt_renderers import render_registered_capabilities
+
+    user_name, ai_name = names
+    monkeypatch.setattr(worldbook, "load_worldbook_names", lambda: names)
+    context = {
+        "self_wake_timezone": "UTC",
+        "self_wake_now_local": "2027-01-15T08:00+00:00",
+        "self_wake_status": {"pending": None},
+    }
+    if use_context_names:
+        context.update(user_name=user_name, ai_name=ai_name)
+
+    entries = []
+    for surface, capabilities in (
+        ("main_stable", {"schedule.alarm", "schedule.reminder", "schedule.monitor"}),
+        ("main_runtime", {"self_wake.schedule", "self_wake.cancel"}),
+        ("opportunity", {"self_wake.schedule", "self_wake.cancel"}),
+    ):
+        entries.extend(render_registered_capabilities(surface, capabilities=capabilities, context=context))
+    entries.append(("status", render_prompt_status(context)))
+    for name, text in entries:
+        if name not in {"self_wake.cancel", "status"}:
+            assert user_name in text
+        if name != "schedule.alarm":
+            assert ai_name in text
+        for generic in ("用户", "AI", "对方", "TA", "你", "她"):
+            assert generic not in text
 
 
 def _assert_relationship_names(text: str) -> None:
@@ -54,6 +169,7 @@ def test_core_relationship_blocks_use_configured_names():
     assert AI_NAME in prefix_text
 
     blocks = [
+        build_chat_presentation_block(user_name=USER_NAME, ai_name=AI_NAME),
         build_vow_block(
             [{"content": "说定的事要算数", "created_at": 1.0}],
             now=2.0,

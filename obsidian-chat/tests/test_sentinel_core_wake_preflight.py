@@ -125,7 +125,7 @@ def test_core_wake_preflight_builds_ready_trace_without_side_effects_or_raw_payl
     assert trace["visible_message_ids"] == ["m1", "m2"]
 
     core_request = trace["core_request"]
-    assert core_request["persona_message_count"] == 4
+    assert core_request["persona_message_count"] == 6  # two persona pairs + chat presentation
     assert core_request["history_message_count"] == 2
     assert core_request["messages"][0]["content"].startswith("[关于你自己：Arden]")
     assert core_request["messages"][2]["content"].startswith("[关于她]")

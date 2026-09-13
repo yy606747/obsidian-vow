@@ -33,49 +33,140 @@ const _typingMoodTexts = {
 };
 
 // ── 情绪光圈 ──
-function _applyMoodGlow(msgId) {
+const _moodClasses = ['mood-happy', 'mood-sad', 'mood-angry', 'mood-shy', 'mood-tender'];
+const _moodReducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let _moodTextCache = new Map();
+let _moodPulseFrame = null;
+let _moodPulseObserver = null;
+let _moodPulseStartedAt = null;
+let _lastMoodPulseKey = '';
+
+function _moodForMessage(message) {
+  if (!message || message.role !== 'assistant' || message.inherited || message.transient_error
+      || (typeof isErrorLikeAssistantMessage === 'function' && isErrorLikeAssistantMessage(message))) {
+    return 'neutral';
+  }
+  const cached = _moodTextCache.get(message.id);
+  if (cached && cached.content === message.content) return cached.mood;
+  const mood = _detectAiMood(cleanAssistantContent(message.content));
+  _moodTextCache.set(message.id, { content: message.content, mood });
+  return mood;
+}
+
+function _latestMoodMessage() {
+  for (let i = currentMessages.length - 1; i >= 0; i--) {
+    const message = currentMessages[i];
+    if (message.role === 'assistant' && !message.inherited) return message;
+  }
+  return null;
+}
+
+function _detachMoodPulse() {
+  _moodPulseFrame?.classList.remove('mood-pulse');
+  _moodPulseFrame?.style.removeProperty('--mood-pulse-delay');
+  _moodPulseFrame = null;
+  _moodPulseObserver?.disconnect();
+  _moodPulseObserver = null;
+}
+
+function _stopMoodPulse() {
+  _detachMoodPulse();
+  _moodPulseStartedAt = null;
+}
+
+function _pulseMoodGlow(msgId, mood, frame) {
+  const key = JSON.stringify([currentConvId, msgId, mood]);
+  const now = performance.now();
+  if (key !== _lastMoodPulseKey) {
+    _lastMoodPulseKey = key;
+    _stopMoodPulse();
+    _moodPulseStartedAt = now;
+  }
+  // Replacing the message DOM may resume an unfinished breath, never restart its budget.
+  if (_moodPulseStartedAt === null || now - _moodPulseStartedAt >= 5200) {
+    _stopMoodPulse();
+    return;
+  }
+  if (!frame || !_moodClasses.includes('mood-' + mood) || _moodReducedMotion.matches
+      || document.hidden || (typeof isChatForeground === 'function' && !isChatForeground())
+      || document.body.classList.contains('vow-covered')
+      || document.getElementById('subPageOverlay')?.classList.contains('show')) {
+    _stopMoodPulse();
+    return;
+  }
+  if (_moodPulseFrame === frame) return;
+  _detachMoodPulse();
+  _moodPulseFrame = frame;
+  frame.style.setProperty('--mood-pulse-delay', (-(now - _moodPulseStartedAt)) + 'ms');
+  frame.classList.add('mood-pulse');
+  frame.addEventListener('animationend', event => {
+    if (event.animationName === 'moodGlow' && _moodPulseFrame === frame) _stopMoodPulse();
+  }, { once: true });
+  // Observe only the one active ring; scrolling it away ends the effect.
+  if ('IntersectionObserver' in window) {
+    _moodPulseObserver = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.target === _moodPulseFrame && !entry.isIntersecting)) _stopMoodPulse();
+    }, { root: document.getElementById('messages') });
+    _moodPulseObserver.observe(frame);
+  }
+}
+
+function _applyMoodGlow(msgId, { pulse = true } = {}) {
+  if (pulse) {
+    _msgMoods[msgId] = _moodForMessage(currentMessages.find(message => message.id === msgId));
+  }
   const mood = _msgMoods[msgId];
-  if (!mood || mood === 'neutral') return;
   const row = document.getElementById('m_' + msgId);
   if (!row) return;
   const avatar = row.querySelector('.msg-avatar');
   if (!avatar) return;
-  avatar.classList.remove('mood-happy','mood-sad','mood-angry','mood-shy','mood-tender');
-  avatar.classList.add('mood-' + mood);
+  const frame = avatar.closest('.msg-avatar-frame');
+  avatar.classList.remove(..._moodClasses);
+  if (frame) delete frame.dataset.mood;
+  if (_moodClasses.includes('mood-' + mood)) {
+    avatar.classList.add('mood-' + mood);
+    if (frame) frame.dataset.mood = mood;
+  } else if (_moodPulseFrame === frame) {
+    _stopMoodPulse();
+  }
+  if (pulse && _latestMoodMessage()?.id === msgId) _pulseMoodGlow(msgId, mood, frame);
 }
 
-// ── 心语飘字 ──
-let _whisperTimer = null;
-async function _initWhisperFloat() {
-  try {
-    const r = await api("GET", "/api/heart-whispers?page=1&page_size=50");
-    // merge，而不是覆盖：WS 可能在 API 返回前先推了若干新心语进池
-    for (const it of (r.items || [])) {
-      if (it.content && !_whisperPool.includes(it.content)) _whisperPool.push(it.content);
-    }
-  } catch(e) {}
-  if (_whisperPool.length && !_whisperTimer) _scheduleNextWhisper();
+function _restoreMoodGlows() {
+  _detachMoodPulse();
+  const cache = new Map();
+  _msgMoods = Object.create(null);
+  for (const message of currentConvId ? currentMessages : []) {
+    if (message.role !== 'assistant' || message.inherited) continue;
+    _msgMoods[message.id] = _moodForMessage(message);
+    if (_moodTextCache.has(message.id)) cache.set(message.id, _moodTextCache.get(message.id));
+    _applyMoodGlow(message.id, { pulse: false });
+  }
+  // Keep only the messages in the current loaded window, including neutral results.
+  _moodTextCache = cache;
+  const latest = currentConvId ? _latestMoodMessage() : null;
+  if (!latest) {
+    _stopMoodPulse();
+    _lastMoodPulseKey = '';
+  } else if (latest.id !== streamingAiId || latest.persisted === true) {
+    _pulseMoodGlow(latest.id, _msgMoods[latest.id],
+      document.getElementById('m_' + latest.id)?.querySelector('.msg-avatar-frame'));
+  }
 }
-function _scheduleNextWhisper() {
-  const delay = 45000 + Math.random() * 60000; // 45~105 秒
-  _whisperTimer = setTimeout(_floatOneWhisper, delay);
-}
-function _floatOneWhisper() {
-  const el = $("messages");
-  if (!el || !_whisperPool.length || !currentConvId) { _scheduleNextWhisper(); return; }
-  let text = _whisperPool[Math.floor(Math.random() * _whisperPool.length)];
-  const maxLen = window.innerWidth < 480 ? 18 : 26;
-  if (text.length > maxLen) text = text.slice(0, maxLen) + '…';
-  const span = document.createElement('span');
-  span.className = 'whisper-float';
-  span.textContent = `"${text}"`;
-  // 随机水平位置：中心在 35~65%，配合 translateX(-50%) 在窄屏也不溢出
-  const leftPct = 35 + Math.random() * 30;
-  span.style.left = leftPct + '%';
-  span.style.bottom = '140px';
-  document.body.appendChild(span);
-  const removeSpan = () => { if (span.parentNode) span.remove(); };
-  span.addEventListener('animationend', removeSpan, { once: true });
-  setTimeout(removeSpan, 11000);
-  _scheduleNextWhisper();
-}
+
+_moodReducedMotion.addEventListener('change', () => {
+  if (_moodReducedMotion.matches) _stopMoodPulse();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) _stopMoodPulse();
+});
+window.addEventListener('pagehide', _stopMoodPulse);
+document.addEventListener('DOMContentLoaded', () => {
+  const cover = new MutationObserver(() => {
+    if (document.body.classList.contains('vow-covered')
+        || document.getElementById('subPageOverlay')?.classList.contains('show')) _stopMoodPulse();
+  });
+  cover.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  const overlay = document.getElementById('subPageOverlay');
+  if (overlay) cover.observe(overlay, { attributes: true, attributeFilter: ['class'] });
+}, { once: true });

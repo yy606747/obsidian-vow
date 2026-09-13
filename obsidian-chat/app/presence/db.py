@@ -31,6 +31,13 @@ async def init_presence_tables(db) -> None:
             "ALTER TABLE presence_sprites ADD COLUMN form TEXT NOT NULL "
             "DEFAULT 'unknown' CHECK(form IN ('unknown','human','nonhuman'))"
         )
+    for name, definition in (
+        ("visual_summary_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("visual_status", "TEXT NOT NULL DEFAULT 'legacy' CHECK(visual_status IN ('legacy','ready','draft','failed'))"),
+        ("visual_error", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if name not in sprite_columns:
+            await db.execute(f"ALTER TABLE presence_sprites ADD COLUMN {name} {definition}")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS presence_sprite_sync (
@@ -130,6 +137,13 @@ async def init_presence_tables(db) -> None:
         )
         """
     )
+    outcome_schema = await (await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='presence_outcomes'"
+    )).fetchone()
+    migrate_outcomes = bool(outcome_schema and "'draw_ready'" not in outcome_schema[0])
+    if migrate_outcomes:
+        await db.execute("ALTER TABLE presence_outcomes RENAME TO presence_outcomes_before_visuals")
+        await db.execute("DROP INDEX IF EXISTS idx_presence_outcomes_conv_state_time")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS presence_outcomes (
@@ -137,7 +151,7 @@ async def init_presence_tables(db) -> None:
             event_id TEXT NOT NULL,
             conv_id TEXT NOT NULL,
             presence_status TEXT NOT NULL CHECK(presence_status IN (
-                'played','rejected','expired','superseded'
+                'played','rejected','expired','superseded','draw_ready','draw_draft'
             )),
             reason TEXT NOT NULL DEFAULT '',
             actual_playback_ms INTEGER,
@@ -155,6 +169,9 @@ async def init_presence_tables(db) -> None:
         )
         """
     )
+    if migrate_outcomes:
+        await db.execute("INSERT INTO presence_outcomes SELECT * FROM presence_outcomes_before_visuals")
+        await db.execute("DROP TABLE presence_outcomes_before_visuals")
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_presence_intents_device_version "
         "ON presence_intents(device_id, intent_version DESC)"
@@ -196,6 +213,13 @@ async def init_presence_tables(db) -> None:
         "CREATE INDEX IF NOT EXISTS idx_summon_events_status_updated "
         "ON summon_events(status, updated_at)"
     )
+    night_schema = await (await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='presence_night_rounds'"
+    )).fetchone()
+    migrate_night = bool(night_schema and "'sticker'" not in night_schema[0])
+    if migrate_night:
+        await db.execute("ALTER TABLE presence_night_rounds RENAME TO presence_night_rounds_before_stickers")
+        await db.execute("DROP INDEX IF EXISTS idx_presence_night_rounds_started")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS presence_night_rounds (
@@ -203,7 +227,7 @@ async def init_presence_tables(db) -> None:
             timezone TEXT NOT NULL,
             status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
             branch TEXT CHECK(branch IS NULL OR branch IN (
-                'draw','reflect','none','invalid','provider_failed'
+                'draw','sticker','reflect','none','invalid','provider_failed'
             )),
             started_at REAL NOT NULL,
             finished_at REAL,
@@ -212,6 +236,9 @@ async def init_presence_tables(db) -> None:
         )
         """
     )
+    if migrate_night:
+        await db.execute("INSERT INTO presence_night_rounds SELECT * FROM presence_night_rounds_before_stickers")
+        await db.execute("DROP TABLE presence_night_rounds_before_stickers")
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_presence_night_rounds_started "
         "ON presence_night_rounds(started_at DESC)"

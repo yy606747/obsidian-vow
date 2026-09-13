@@ -1,7 +1,12 @@
 """Legacy location helpers kept behind the Location V2 service boundary."""
 
 import json
+import logging
+import os
+import tempfile
 import time
+from copy import deepcopy
+from pathlib import Path
 
 import httpx
 
@@ -71,18 +76,42 @@ DEFAULT_LOCATION_STATUS = {
 
 
 def load_location_status() -> dict:
-    if LOCATION_STATUS_PATH.exists():
+    try:
         data = json.loads(LOCATION_STATUS_PATH.read_text(encoding="utf-8"))
-        for k, v in DEFAULT_LOCATION_STATUS.items():
-            data.setdefault(k, v)
-        return data
-    return dict(DEFAULT_LOCATION_STATUS)
+        if not isinstance(data, dict):
+            raise ValueError("location status must be a JSON object")
+    except FileNotFoundError:
+        data = {}
+    except (ValueError, UnicodeError) as exc:
+        # Keep the damaged file for diagnosis. A fresh heartbeat can replace it;
+        # reading it must not break Sentinel or invent a current location.
+        logging.getLogger(__name__).warning(
+            "Location status is invalid; using unknown state: %s", exc
+        )
+        data = {}
+    return {**deepcopy(DEFAULT_LOCATION_STATUS), **data}
 
 
 def save_location_status(data: dict):
-    LOCATION_STATUS_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    if not isinstance(data, dict):
+        raise ValueError("location status must be a JSON object")
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    temporary = None
+    try:
+        # Write and flush beside the target before replacing it. ENOSPC must
+        # leave the previous valid status intact, including failures on close.
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=LOCATION_STATUS_PATH.parent,
+            prefix=".location_status-", suffix=".tmp", delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, LOCATION_STATUS_PATH)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _record_amap_event(

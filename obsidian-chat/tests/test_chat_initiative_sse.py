@@ -351,3 +351,90 @@ def test_dom_initiative_without_toy_still_streams_text_chunks(monkeypatch):
 
     assert [event["type"] for event in events] == ["start", "chunk", "chunk"]
     assert [event["content"] for event in events[1:]] == ["先抱", "一下"]
+
+
+def _patch_invitation(monkeypatch, *, error=None):
+    from app.look_at_me import service
+    calls = []
+
+    async def is_current(_conv_id):
+        return True
+
+    async def inject(*_args, **_kwargs):
+        return {}
+
+    async def execute(intent, context, **_kwargs):
+        calls.append((intent.arguments, context.conv_id))
+        if error:
+            raise ValueError(error)
+        return {"ok": True, "id": "lam_test", "status": "queued"}
+
+    monkeypatch.setattr(service, "available", lambda: True)
+    monkeypatch.setattr(service, "is_current", is_current)
+    monkeypatch.setattr(service, "inject_context", inject)
+    monkeypatch.setattr(service, "execute_invitation", execute)
+    return calls
+
+
+@pytest.mark.parametrize("kind", ["dom", "whisper"])
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("body", ["", "先抱抱。"])
+def test_initiative_hides_invitation_and_executes_quoted_control_prose(monkeypatch, kind, structured, body):
+    executed, broadcasts, _, _ = _patch_initiative_io(monkeypatch)
+    calls = _patch_invitation(monkeypatch)
+    expression = "聊聊[OPPORTUNITY_NONE]和【OPPORTUNITY_REFLECT】的含义"
+    text = body + "【陪我：20｜" + expression + "】"
+    raw = json.dumps({"assistant_text": text, "actions": []}, ensure_ascii=False) if structured else text
+
+    async def core(*_args, **_kwargs):
+        # Split every marker head, separator, bracket and JSON delimiter.
+        for char in raw:
+            yield char
+
+    monkeypatch.setattr(initiative_routes, "stream_ai", core)
+
+    async def run():
+        route, request = ((initiative_routes.dom_initiative, DomInitiativeBody()) if kind == "dom"
+                          else (initiative_routes.whisper_initiative, WhisperInitiativeBody()))
+        return await _collect_sse(await route("conv_" + kind, request))
+
+    events = asyncio.run(run())
+    visible = "".join(event["content"] for event in events if event["type"] == "chunk")
+    assert visible == body
+    assert len(calls) == 1 and calls[0][0]["expression"] == expression
+    assert any(event["type"] == "look_at_me" for event in events)
+    assert any(event["type"] == "tool_delivery" for event in events) == (not body)
+    rows = [params for sql, params in executed if sql.startswith("INSERT INTO messages") and params[2] == "assistant"]
+    assert [row[3] for row in rows] == ([body] if body else [])
+    assert any(event["type"] == "msg_created" for event in broadcasts) == bool(body)
+
+
+@pytest.mark.parametrize("kind", ["dom", "whisper"])
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("body", ["", "先抱抱。"])
+def test_failed_initiative_invitation_terminates_empty_placeholder_and_keeps_body(monkeypatch, kind, structured, body):
+    executed, _, _, _ = _patch_initiative_io(monkeypatch)
+    calls = _patch_invitation(monkeypatch, error="device_busy:lam_other")
+    text = body + "【陪我：20｜想贴贴】"
+    raw = json.dumps({"assistant_text": text, "actions": []}, ensure_ascii=False) if structured else text
+
+    async def core(*_args, **_kwargs):
+        yield raw
+
+    monkeypatch.setattr(initiative_routes, "stream_ai", core)
+
+    async def run():
+        route, request = ((initiative_routes.dom_initiative, DomInitiativeBody()) if kind == "dom"
+                          else (initiative_routes.whisper_initiative, WhisperInitiativeBody()))
+        return await _collect_sse(await route("conv_" + kind, request))
+
+    events = asyncio.run(run())
+    assert len(calls) == 1
+    assert events[-1]["type"] == "tool_error"
+    assert events[-1]["id"] == events[0]["id"]
+    assert events[-1]["error"] == "device_busy:lam_other"
+    assert events[-1]["empty_reply"] == (not body)
+    assert not any(event["type"] in {"tool_delivery", "look_at_me"} for event in events)
+    assert "".join(event["content"] for event in events if event["type"] == "chunk") == body
+    rows = [params for sql, params in executed if sql.startswith("INSERT INTO messages") and params[2] == "assistant"]
+    assert [row[3] for row in rows] == ([body] if body else [])

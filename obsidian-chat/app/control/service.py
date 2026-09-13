@@ -71,6 +71,8 @@ class ControlSessionService:
         control_resource_id: str | None = None,
         safeword_set: bool = False,
     ) -> ControlSession:
+        from app.daily_chat.service import resolve_conversation_id
+        conv_id = resolve_conversation_id(conv_id)
         if kind == "tide":
             return await self._start_tide(
                 conv_id=conv_id,
@@ -243,6 +245,8 @@ class ControlSessionService:
         return await self._require_session(session_id)
 
     async def get_current(self, *, conv_id: str) -> ControlSession | None:
+        from app.daily_chat.service import resolve_conversation_id
+        conv_id = resolve_conversation_id(conv_id)
         async with self._get_db() as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -356,13 +360,16 @@ class ControlSessionService:
             return ControlSession.from_row(row) if row else None
 
     async def _recent_safety_tombstone(self, conv_id: str) -> ControlSession | None:
+        from app.daily_chat.service import conversation_scope_ids
+        scope = conversation_scope_ids(conv_id)
+        placeholders = ','.join('?' for _ in scope)
         cutoff = self._now() - SAFETY_TOMBSTONE_SECONDS
         async with self._get_db() as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                """
+                f"""
                 SELECT * FROM control_sessions
-                WHERE conv_id=?
+                WHERE conv_id IN ({placeholders})
                   AND status='ended'
                   AND close_reason IN ('panic','safeword','device_emergency_stop')
                   AND ended_at IS NOT NULL
@@ -370,7 +377,7 @@ class ControlSessionService:
                 ORDER BY ended_at DESC, started_at DESC
                 LIMIT 1
                 """,
-                (conv_id, cutoff),
+                (*scope, cutoff),
             )
             row = await cur.fetchone()
             return ControlSession.from_row(row) if row else None

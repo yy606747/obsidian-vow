@@ -39,6 +39,8 @@ from app.chat.streaming import (
     vow_blocked_response,
 )
 from app.vows.service import VowReadError
+from app.stickers.attachments import InvalidStickerAttachment
+from app.documents.service import InvalidDocument
 
 router = APIRouter()
 router.include_router(crud_router)
@@ -70,8 +72,20 @@ def _audio_preflight_response(model_key: str, attachments: list) -> JSONResponse
 
 @router.post("/api/conversations/{conv_id}/send")
 async def send_message(conv_id: str, body: MsgCreate):
+    from app.daily_chat.service import daily_chat
+
+    if daily_chat.state:
+        await daily_chat.ensure_current()
+        conv_id = daily_chat.resolve(conv_id)
+        await daily_chat.adopt(conv_id)
     try:
         body.attachments = normalize_chat_attachments(body.attachments)
+        from app.stickers.service import sticker_service
+        body.attachments = await sticker_service.resolve_outgoing(body.attachments)
+    except InvalidDocument as exc:
+        return _chat_audio_error('invalid_document', str(exc))
+    except InvalidStickerAttachment as exc:
+        return _chat_audio_error('invalid_sticker_attachment', str(exc))
     except InvalidAudioAttachment as exc:
         return _chat_audio_error("invalid_audio_attachment", str(exc))
 
@@ -154,6 +168,10 @@ async def regenerate_message(
     replaced_message_id: Optional[str] = None,
 ):
     # Gate before the regenerate transaction removes the previous answer.  A
+    from app.daily_chat.service import daily_chat, inherited_messages_in_tx
+    if daily_chat.state:
+        await daily_chat.ensure_current()
+        conv_id = daily_chat.resolve(conv_id)
     # model switch must never turn an existing voice message into transcript-only
     # input while the UI claims the model listened to it.
     async with get_db() as db:
@@ -166,6 +184,11 @@ async def regenerate_message(
             (conv_id,),
         )
         latest_user = await cur.fetchone()
+        if latest_user is None:
+            inherited = await inherited_messages_in_tx(db, conv_id)
+            previous_user = next((m for m in reversed(inherited) if m['role'] == 'user'), None)
+            if previous_user:
+                latest_user = (previous_user.get('attachments') or '[]',)
     latest_user_attachments = parse_attachments(latest_user[0] if latest_user else "[]")
     blocked = _audio_preflight_response(model_key, latest_user_attachments)
     if blocked is not None:

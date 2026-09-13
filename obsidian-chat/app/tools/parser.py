@@ -26,6 +26,7 @@ from app.chat.commands import (
     SCREEN_CHECK_PATTERN,
     MOBILE_SCREEN_CHECK_PATTERN,
     TOY_CMD_PATTERN,
+    STICKER_SAVE_PATTERN,
 )
 from camera import CAM_CHECK_CMD
 from schedule import (
@@ -55,9 +56,17 @@ ALL_COMMAND_GROUPS = frozenset({
     "presence_draw",
     "presence_show",
     "self_wake",
+    "look_at_me",
+    "sticker_save",
+    "sticker_send",
+    "sticker_create",
 })
 
 TOOL_COMMAND_GROUPS = {
+    "mobile.look_at_me": "look_at_me",
+    "sticker.save": "sticker_save",
+    "sticker.send": "sticker_send",
+    "sticker.create": "sticker_create",
     "music.search": "music",
     "device.toy": "toy",
     "monitor.camera": "cam",
@@ -81,6 +90,7 @@ TOOL_COMMAND_GROUPS = {
 }
 
 STRUCTURED_ACTION_ALIASES = {
+    "mobile.look_at_me": "mobile.look_at_me",
     "music": "music.search",
     "music.search": "music.search",
     "toy": "device.toy",
@@ -471,6 +481,34 @@ def parse_tool_intents(
     raw_text = str(text or "")
     enabled = _enabled(enabled_commands)
     parsed: list[_ParsedCommand] = []
+
+    from app.chat.control_syntax import iter_value_control_markers
+    sticker_values = list(iter_value_control_markers(raw_text, names={"发图", "做表情", "陪我"}))
+    for marker in sticker_values:
+        if marker.name == "陪我":
+            if "look_at_me" in enabled and marker.complete:
+                from app.look_at_me.service import parse_expression
+                parsed.append(_ParsedCommand(
+                    start=marker.start, end=marker.end, tool_name="mobile.look_at_me",
+                    command_group="look_at_me", raw_text=raw_text[marker.start:marker.end],
+                    arguments=parse_expression(marker.payload), legacy_marker="陪我"))
+            continue
+        action = "send" if marker.name == "发图" else "create"
+        group = f"sticker_{action}"
+        if group in enabled and marker.complete and marker.payload.strip():
+            parsed.append(_ParsedCommand(
+                start=marker.start, end=marker.end, tool_name=f"sticker.{action}",
+                command_group=group, raw_text=raw_text[marker.start:marker.end],
+                arguments={"expression": marker.payload.strip()}, legacy_marker=action,
+            ))
+    # A quoted command inside a sticker description is data, not another tool call.
+    for marker in reversed(sticker_values):
+        raw_text = raw_text[:marker.start] + " " * (marker.end - marker.start) + raw_text[marker.end:]
+    if "sticker_save" in enabled:
+        parsed.extend(_regex_commands(
+            raw_text, pattern=STICKER_SAVE_PATTERN, tool_name="sticker.save",
+            command_group="sticker_save", legacy_marker="save", argument_builder=lambda _match: {},
+        ))
 
     if "music" in enabled:
         parsed.extend(_regex_commands(

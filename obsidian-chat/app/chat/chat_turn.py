@@ -18,6 +18,7 @@ from app.vows.service import vow_service
 from app.working_model.writer import build_writer_identity_snapshot
 from app.tools.feedback import build_previous_turn_feedback
 from app.presence.outcomes import presence_outcome_inbox
+from app.stickers.repository import sticker_repository
 from app.presence.prompt_context import (
     build_presence_identity_block,
     presence_identity_head,
@@ -239,6 +240,8 @@ async def prepare_send_prompt(
         ai_dom_mode=body.ai_dom_mode,
         control_context=control_context,
     )
+    from app.look_at_me.service import scoped_snapshot
+    mode_snapshot = await scoped_snapshot(mode_snapshot, conv_id)
     memory_v3_config = load_memory_v3_config()
 
     # 誓约常驻注入（§5.1）：vow block 先注入，之后才插入含 control/aftercare 的
@@ -275,6 +278,7 @@ async def prepare_send_prompt(
         conv_id=conv_id,
         body=body,
         user_name=user_name,
+        ai_name=ai_name,
         capabilities=mode_snapshot.capabilities,
         control_context=control_context,
         model_key=history_ctx.model_key,
@@ -394,6 +398,25 @@ async def prepare_send_prompt(
             "outcome_ids": list(claimed_outcomes.get("outcome_ids") or ()),
             "injected": bool(outcome_block),
         }
+    from app.look_at_me.service import inject_context as inject_look_at_me
+    look_at_me_meta = await inject_look_at_me(
+        history, conv_id=conv_id,
+        turn_id=f"send:{current_user_message_id}", user_name=user_name, ai_name=ai_name,
+    ) if current_user_message_id and not body.memory_eval_mode else {}
+    sticker_feedback_meta = {}
+    if current_user_message_id and not body.memory_eval_mode:
+        try:
+            sticker_feedback_meta = await sticker_repository.claim(
+                conv_id=conv_id, turn_id=f"send:{current_user_message_id}",
+                user_name=user_name, ai_name=ai_name,
+            )
+        except Exception:
+            sticker_feedback_meta = {}
+        if sticker_feedback_meta.get("block"):
+            inject_offset = insert_prompt_ack(
+                history, cap_idx=runtime_cap_idx, inject_offset=inject_offset,
+                content=sticker_feedback_meta["block"], ack=f"（{ai_name}记下了实际的表情处理结果。）",
+            )
     handoff_note = ""
     handoff_block = ""
     handoff_skip_reason: str | None = None
@@ -538,6 +561,10 @@ async def prepare_send_prompt(
     prompt_meta["memory_v3_config_snapshot"] = memory_v3_config
     prompt_meta["web_search"] = web_search_meta
     prompt_meta["presence_outcomes"] = presence_outcome_meta
+    prompt_meta["sticker_feedback"] = sticker_feedback_meta
+    prompt_meta["look_at_me"] = look_at_me_meta
+    prompt_meta["sticker_context"] = {"message": str(body.content or "")[:500]}
+    prompt_meta["sticker_names"] = {"user_name": user_name, "ai_name": ai_name}
     cache_layout["runtime_message_count"] = max(0, inject_offset - runtime_start_offset)
     cache_layout["runtime_insert_index"] = runtime_cap_idx + runtime_start_offset
     prompt_meta["cache_layout"] = cache_layout
@@ -606,6 +633,8 @@ async def prepare_regenerate_prompt(
         ai_dom_mode=ai_dom_mode,
         control_context=control_context,
     )
+    from app.look_at_me.service import scoped_snapshot
+    mode_snapshot = await scoped_snapshot(mode_snapshot, conv_id)
 
     # 誓约常驻注入（§5.1）：同 send，先于 ability block；读取失败由路由层 fail-closed。
     # 携带 replaced_message_id 的 regenerate 用撤约事务内冻结的 snapshot（§4.5），
@@ -641,6 +670,7 @@ async def prepare_regenerate_prompt(
     ability_prompt = await build_regenerate_ability_block(
         conv_id=conv_id,
         user_name=user_name,
+        ai_name=ai_name,
         ai_dom_mode=ai_dom_mode,
         safeword=safeword,
         dom_history=dom_history,
@@ -710,6 +740,31 @@ async def prepare_regenerate_prompt(
             content=str(web_search_replay["block"]),
             ack="（嗯，这些是当时已经拿到的资料。）",
         )
+    from app.look_at_me.service import inject_context as inject_look_at_me
+    look_at_me_meta = await inject_look_at_me(
+        history, conv_id=conv_id,
+        turn_id=f"regenerate:{getattr(history_ctx, 'latest_user_message_id', '')}",
+        user_name=user_name, ai_name=ai_name, replay_from=replaced_message_id or '',
+    )
+    sticker_feedback_meta = {}
+    try:
+        if replaced_message_id:
+            sticker_feedback_meta = await sticker_repository.replay(
+                replaced_message_id, user_name=user_name, ai_name=ai_name,
+            )
+        elif getattr(history_ctx, "latest_user_message_id", None):
+            # Retrying a transient error has no persisted answer to replace.
+            sticker_feedback_meta = await sticker_repository.claim(
+                conv_id=conv_id, turn_id=f"regenerate:{history_ctx.latest_user_message_id}",
+                user_name=user_name, ai_name=ai_name,
+            )
+    except Exception:
+        sticker_feedback_meta = {}
+    if sticker_feedback_meta.get("block"):
+        inject_offset = insert_prompt_ack(
+            history, cap_idx=runtime_cap_idx, inject_offset=inject_offset,
+            content=sticker_feedback_meta["block"], ack=f"（{ai_name}记下了实际的表情处理结果。）",
+        )
     memory_whisper_mode, memory_ai_dom_mode = _memory_mode_flags(
         snapshot=mode_snapshot,
         whisper_mode=whisper_mode,
@@ -747,6 +802,10 @@ async def prepare_regenerate_prompt(
         getattr(ability_prompt, "advertised_tools", ())
     )
     prompt_meta["pending_recall"] = pending_replay
+    prompt_meta["sticker_feedback"] = sticker_feedback_meta
+    prompt_meta["look_at_me"] = look_at_me_meta
+    prompt_meta["sticker_names"] = {"user_name": user_name, "ai_name": ai_name}
+    prompt_meta["sticker_context"] = {"message": str(getattr(history_ctx, "latest_user_content", ""))[:500]}
     prompt_meta["image_history"] = getattr(history_ctx, "image_history", {})
     prompt_meta["current_user_message_id"] = (
         pending_replay.get("target_user_message_id")

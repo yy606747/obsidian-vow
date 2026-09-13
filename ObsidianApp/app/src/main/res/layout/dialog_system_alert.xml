@@ -21,7 +21,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="◆ Obsidian Vow"
-            android:textColor="#75695d"
+            android:textColor="#d4943a"
+            android:letterSpacing="0.12"
             android:textSize="12sp" />
 
         <View

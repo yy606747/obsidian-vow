@@ -7,7 +7,7 @@ postprocess/streaming keep the current behavior.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import time
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
 
@@ -87,7 +87,9 @@ class ToolService:
         """
         adapter_map = {**self._adapters, **dict(adapters or {})}
         results: list[ToolResult] = []
+        from app.daily_chat.service import resolve_conversation_id
         for intent in tuple(intents or ()):
+            context = replace(context, conv_id=resolve_conversation_id(context.conv_id))
             policy_result = self._policy_result(intent, context=context)
             if policy_result is not None:
                 results.append(policy_result)

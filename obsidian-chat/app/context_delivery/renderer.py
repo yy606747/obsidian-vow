@@ -61,6 +61,7 @@ def render_context_delivery_projection(
         )),
         ("个人基线偏离：", [
             f"- {item.current_summary}；个人基线为{item.baseline_summary}（{item.sample_window}，覆盖率 {item.coverage:.0%}）。"
+            f"这只是设备记录差异，不能据此判断{owner_name}正在做什么。"
             for item in value.baseline_deviations[:MAX_BASELINE_DEVIATIONS]
         ]),
         ("数据可用性：", [

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:background="@drawable/screen_capture_card_bg" android:fillViewport="true">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="24dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="◆ OBSIDIAN VOW" android:textColor="#d4943a" android:textSize="12sp" android:letterSpacing="0.12" />
+        <TextView android:id="@+id/lookName" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="18dp" android:textColor="#c9bba8" android:textSize="14sp" />
+        <TextView android:id="@+id/lookExpression" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:textColor="#f3e7d5" android:textSize="21sp" android:lineSpacingExtra="5dp" />
+        <TextView android:id="@+id/lookDuration" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="18dp" android:textColor="#d4943a" android:textSize="16sp" />
+        <EditText android:id="@+id/lookReason" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="20dp" android:minHeight="48dp" android:hint="原因（可留空）"
+            android:textColor="#f3e7d5" android:textColorHint="#a79784" android:backgroundTint="#75695d"
+            android:inputType="textMultiLine" android:maxLines="3" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="20dp" android:orientation="horizontal">
+            <Button android:id="@+id/lookAccept" android:layout_width="0dp" android:layout_weight="1"
+                android:layout_height="48dp" android:background="@drawable/screen_capture_btn_allow" android:text="同意" android:textColor="#1a1714" />
+            <Button android:id="@+id/lookReject" android:layout_width="0dp" android:layout_weight="1"
+                android:layout_marginStart="12dp" android:layout_height="48dp" android:background="@drawable/screen_capture_btn_deny" android:text="拒绝" android:textColor="#c9bba8" />
+        </LinearLayout>
+        <TextView android:id="@+id/lookCountdown" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="14dp" android:gravity="end" android:textSize="12sp" android:textColor="#a79784" />
+    </LinearLayout>
+</ScrollView>

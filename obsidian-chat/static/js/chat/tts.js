@@ -90,6 +90,9 @@ async function refreshTTSVoices() {
 
 function ttsSpeak(text, msgId) {
   if (!ttsEnabled || !ttsVoiceId || !text || !text.trim()) return;
+  text = cleanAssistantContent(text);
+  if (window.ChatMarkdown) text = ChatMarkdown.plainText(text);
+  if (!text.trim()) return;
   // 通话中时通知语音模块 AI 开始说话
   if (voiceInCall) {
     notifyVoiceAiSpeaking(true);

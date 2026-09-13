@@ -17,6 +17,7 @@ from .commands import _SYSTEM_MSG_CONTEXT_KEYWORDS
 from .audio_input import audio_transcript_context
 from .image_history import restore_recent_images
 from .worldbook import build_worldbook_prefix, resolve_worldbook_names
+from app.documents.service import is_document
 
 
 AttachmentPolicy = Literal["last_message", "last_user"]
@@ -36,10 +37,12 @@ class ChatHistoryContext:
     prefix: list[dict]
     cap_idx: int
     latest_user_message_id: str | None = None
+    latest_user_content: str = ""
     previous_turn_assistant_ids: tuple[str, ...] = ()
     previous_conversation_id: str | None = None
     previous_conversation_source: dict | None = None
     image_history: dict = field(default_factory=dict)
+    cross_day_message_ids: tuple[str, ...] = ()
 
 
 def build_handoff_note_block(
@@ -104,7 +107,7 @@ def _normalize_history_row(row) -> dict | None:
 def _strip_history_attachments(history: list[dict], policy: AttachmentPolicy) -> None:
     if policy == "last_message":
         for msg in history[:-1]:
-            msg["attachments"] = []
+            msg["attachments"] = [item for item in msg.get('attachments', []) if is_document(item)]
         return
 
     last_user_idx = -1
@@ -114,7 +117,7 @@ def _strip_history_attachments(history: list[dict], policy: AttachmentPolicy) ->
             break
     for i, msg in enumerate(history):
         if i != last_user_idx:
-            msg["attachments"] = []
+            msg["attachments"] = [item for item in msg.get('attachments', []) if is_document(item)]
 
 
 async def prepare_chat_history(
@@ -126,6 +129,8 @@ async def prepare_chat_history(
 ) -> ChatHistoryContext:
     previous_conv_id: str | None = None
     previous_source: dict | None = None
+    from app.daily_chat.service import daily_chat, inherited_messages_in_tx
+    conv_id = daily_chat.resolve(conv_id)
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT model FROM conversations WHERE id=?", (conv_id,))
@@ -137,6 +142,7 @@ async def prepare_chat_history(
             (conv_id, context_limit),
         )
         rows = await cur.fetchall()
+        cross_day_messages = await inherited_messages_in_tx(db, conv_id)
 
         cur = await db.execute(
             "SELECT COUNT(*) AS count FROM messages WHERE conv_id=? AND role IN ('user','assistant')",
@@ -144,7 +150,7 @@ async def prepare_chat_history(
         )
         count_row = await cur.fetchone()
         current_message_count = int(count_row["count"] if count_row else 0)
-        if current_message_count <= PREVIOUS_CONVERSATION_CURRENT_MESSAGE_LIMIT:
+        if not cross_day_messages and current_message_count <= PREVIOUS_CONVERSATION_CURRENT_MESSAGE_LIMIT:
             # 按「用户最后一句话的时间」选最近的真实对话——绕开后台任务篡改 updated_at，
             # 也天然排除了没有用户消息的纯系统/后台对话。
             cur = await db.execute(
@@ -186,6 +192,10 @@ async def prepare_chat_history(
     for row in ordered_rows:
         msg = _normalize_history_row(row)
         if msg is not None:
+            from app.stickers.prompts import history_note
+            note = history_note(msg.get("attachments") or [], user_name=user_name, ai_name=ai_name, role=msg['role'])
+            if note:
+                msg["content"] = "\n".join((msg["content"], note))
             history.append(msg)
 
     original_attachments = {
@@ -208,14 +218,10 @@ async def prepare_chat_history(
             "attachments": [],
         })
 
-    latest_user_message_id = next(
-        (
-            str(message.get("id") or "")
-            for message in reversed(history)
-            if message.get("role") == "user" and str(message.get("id") or "")
-        ),
-        "",
-    )
+    # Trigger/system rows become protocol users above, but cannot be a save target.
+    latest_user_row = ordered_rows[real_user_indexes[-1]] if real_user_indexes else None
+    latest_user_message_id = str(latest_user_row["id"]) if latest_user_row else ""
+    latest_user_content = str(latest_user_row["content"] or "") if latest_user_row else ""
     recent_with_ids = [m for m in history if m["role"] in ("user", "assistant")][-8:]
     visible_message_ids = [
         str(message.get("id") or "")
@@ -233,6 +239,22 @@ async def prepare_chat_history(
         message.pop("id", None)
 
     prefix = build_worldbook_prefix(wb)
+    if cross_day_messages:
+        from app.daily_chat.service import build_cross_day_context
+
+        background = build_cross_day_context(
+            cross_day_messages, user_name=user_name, ai_name=ai_name,
+            timezone=daily_chat.state.get('timezone') or daily_chat.timezone(),
+            today_user_ids=[str(ordered_rows[index]['id']) for index in real_user_indexes],
+            image_budget=image_meta,
+        )
+        history = background + history
+        visible_message_ids = list(dict.fromkeys([row['id'] for row in cross_day_messages] + visible_message_ids))
+        if not latest_user_message_id:
+            latest_user_row = next((row for row in reversed(cross_day_messages) if row['role'] == 'user'), None)
+            if latest_user_row:
+                latest_user_message_id = latest_user_row['id']
+                latest_user_content = str(latest_user_row['content'] or '')
     if prefix:
         history = prefix + history
 
@@ -245,8 +267,10 @@ async def prepare_chat_history(
         prefix=prefix,
         cap_idx=len(prefix) if prefix else 0,
         latest_user_message_id=latest_user_message_id or None,
+        latest_user_content=latest_user_content,
         previous_turn_assistant_ids=previous_turn_assistant_ids,
         previous_conversation_id=previous_conv_id,
         previous_conversation_source=previous_source,
+        cross_day_message_ids=tuple(row['id'] for row in cross_day_messages),
         image_history=image_meta,
     )

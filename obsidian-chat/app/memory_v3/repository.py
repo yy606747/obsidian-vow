@@ -321,6 +321,8 @@ class PendingRecallRepository:
         return dict(row) if row else None
 
     async def active_for_conversation(self, conv_id: str) -> dict | None:
+        from app.daily_chat.service import resolve_conversation_id
+        conv_id = resolve_conversation_id(conv_id)
         async with get_db() as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -496,6 +498,8 @@ class PendingRecallRepository:
         created_at: float,
     ) -> str:
         pending_id = new_id("pending_recall")
+        from app.daily_chat.service import resolve_conversation_id
+        conv_id = resolve_conversation_id(conv_id)
         await db.execute(
             "UPDATE memory_pending_recalls "
             "SET status='superseded', candidate_json='[]', selected_json='[]', updated_at=? "

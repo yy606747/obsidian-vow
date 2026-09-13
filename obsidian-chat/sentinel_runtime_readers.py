@@ -206,8 +206,11 @@ async def read_core_wake_execution_context(
 async def _read_latest_conversation(db_factory: Callable) -> dict[str, str] | None:
     async with db_factory() as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT id, model FROM conversations ORDER BY updated_at DESC LIMIT 1")
-        row = await cur.fetchone()
+        from app.daily_chat.service import active_conversation_in_tx
+        row = await active_conversation_in_tx(db)
+        if row is None:
+            cur = await db.execute("SELECT id, model FROM conversations ORDER BY updated_at DESC LIMIT 1")
+            row = await cur.fetchone()
     if not row:
         return None
     conv_id = _required_text(_row_get(row, "id", 0), key="conversation.id")
@@ -253,8 +256,11 @@ async def _read_recent_messages_for_conversation(
 async def _read_recent_chat(db_factory: Callable, *, limit: int) -> list[dict[str, str]]:
     async with db_factory() as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT id FROM conversations ORDER BY updated_at DESC LIMIT 1")
-        conv = await cur.fetchone()
+        from app.daily_chat.service import active_conversation_in_tx
+        conv = await active_conversation_in_tx(db)
+        if conv is None:
+            cur = await db.execute("SELECT id FROM conversations ORDER BY updated_at DESC LIMIT 1")
+            conv = await cur.fetchone()
         if not conv:
             return []
         conv_id = _row_get(conv, "id", 0)

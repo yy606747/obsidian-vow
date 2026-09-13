@@ -269,6 +269,12 @@ function _buildTokenHtml(u) {
     parts.push(`<span class="tok-label">输入:</span><span class="tok-value">${u.prompt_tokens || 0}</span>`);
     parts.push(`<span class="tok-label">输出:</span><span class="tok-value">${u.completion_tokens || 0}</span>`);
     parts.push(`<span class="tok-label">总计:</span><span class="tok-value">${u.total_tokens || 0}</span>`);
+    if (u.reasoning_metrics_reported === true) {
+      parts.push(`<span class="tok-label">思考:</span><span class="tok-value tok-thinking">${Number(u.reasoning_tokens || 0)}</span>`);
+    }
+  }
+  if (u.billable_output_tokens != null) {
+    parts.push(`<span class="tok-label">计费输出（含思考）:</span><span class="tok-value">${Number(u.billable_output_tokens)}</span>`);
   }
   return '🔤 ' + parts.join(' ');
 }

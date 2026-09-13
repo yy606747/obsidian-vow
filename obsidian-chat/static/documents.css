@@ -1,0 +1,38 @@
+.document-card { display: flex; align-items: center; gap: 12px; width: 300px; max-width: 100%; padding: 14px; border: 1px solid #c3b48a42; border-radius: 10px; background: linear-gradient(135deg, #34404499, #26313a99); color: #eae5da; text-align: left; cursor: pointer; }
+.msg-attachments .document-card { margin-top: 8px; }
+.document-card:focus-visible, .document-reader button:focus-visible { outline: 2px solid #d3b77d; outline-offset: 2px; }
+.document-card:hover { border-color: #cdb58177; background-color: #c6a96d0b; }
+.document-icon { display: grid; place-items: center; gap: 3px; flex: 0 0 32px; color: #e0c693; }
+.document-icon .vow-icon { width: 27px; height: 27px; }
+.document-icon small { font: 8px/1.2 ui-monospace, monospace; letter-spacing: .06em; }
+.document-details { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 5px; }
+.document-details strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: inherit; font-weight: 500; font-size: 14px; line-height: 1.5; }
+.document-details > span { color: #b6babc; font-size: 11px; line-height: 1.5; }
+.document-details .document-warning { color: #d5b777; }
+.document-open-icon { color: #baab8c; flex: 0 0 15px; }
+.document-open-icon .vow-icon { width: 15px; height: 15px; }
+.preview-item.document-preview { width: min(300px, 100%); height: auto; border: 0; background: none; overflow: visible; flex-shrink: 0; }
+.document-preview .document-card { padding-right: 26px; }
+.document-progress { display: grid; gap: 4px; flex: 0 0 min(260px, 90%); max-width: 100%; padding: 12px 16px; border: 1px dashed #bdac784a; border-radius: 10px; color: #d7cbae; }
+.document-progress > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.document-progress small { color: #a9b4b9; font-size: 11px; }
+.document-reader { width: min(760px, calc(100vw - 24px)); max-width: none; height: min(820px, calc(100dvh - 48px)); max-height: none; margin: auto; padding: 0; border: 1px solid #c9b27a55; border-radius: 16px; background: #1d2832; color: #e9e5db; box-shadow: 0 24px 80px #0007; }
+.document-reader[open] { display: flex; flex-direction: column; }
+.document-reader::backdrop { background: #091018ba; }
+.document-reader header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px 22px 17px; border-bottom: 1px solid #c2b18329; }
+.document-reader header > div { min-width: 0; }
+.document-reader h2 { margin: 0 0 7px; font-size: 17px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.document-reader header p { margin: 0; color: #aebac1; font-size: 12px; }
+.document-reader button { min-width: 36px; height: 36px; border: 1px solid #c2b18333; border-radius: 8px; background: transparent; color: #d5cbb8; cursor: pointer; }
+.document-reader-body { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; padding: 22px; }
+.document-reader pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.95 system-ui, sans-serif; color: #deddd7; tab-size: 4; }
+.document-reader-warning { margin: 0 0 18px; padding: 10px 12px; border-left: 2px solid #c9a761; color: #dec99b; background: #c9a76108; font-size: 12px; line-height: 1.7; }
+.document-reader footer { display: flex; justify-content: space-between; gap: 16px; padding: 14px 22px; border-top: 1px solid #c2b18329; font-size: 12px; }
+.document-reader footer span { color: #9eabb4; }
+.document-reader footer a { color: #e3c88f; text-decoration: none; }
+@media (max-width: 480px) {
+  .document-card { width: 270px; gap: 9px; padding: 12px; }
+  .document-reader header, .document-reader-body { padding: 16px; }
+  .document-reader footer { padding: 12px 16px; }
+  .document-reader pre { font-size: 14px; }
+}

@@ -47,6 +47,7 @@ from app.daily_signals.config import daily_timezone_name
 
 from routes import chat, cam as cam_routes, files, settings, memories
 from routes import image_memory as image_memory_routes
+from routes import stickers as sticker_routes
 from routes import modes as modes_routes
 from routes import devices as devices_routes
 from routes import control as control_routes
@@ -113,6 +114,13 @@ async def _runtime_lifespan(app: FastAPI):
         # 隔离检查只初始化临时数据库，不重放任务、启动线程或执行清理。
         yield
         return
+    from app.daily_chat.service import daily_chat
+
+    await daily_chat.ensure_current()
+    create_tracked_task(daily_chat.run_loop(), name="daily_chat")
+    from app.look_at_me.trigger import run_loop as look_at_me_loop, run_core_loop as look_at_me_core_loop
+    create_tracked_task(look_at_me_loop(), name="look_at_me")
+    create_tracked_task(look_at_me_core_loop(), name="look_at_me_core")
     from app.presence import sprite_library
 
     await sprite_library.ensure_seed_sprites()
@@ -365,11 +373,15 @@ app.mount("/screenshots", StaticFiles(directory=str(SCREENSHOTS_DIR)), name="scr
 
 # 路由
 app.include_router(chat.router)
+from app.daily_chat.routes import router as daily_chat_router
+
+app.include_router(daily_chat_router)
 app.include_router(cam_routes.router)
 app.include_router(files.router)
 app.include_router(settings.router)
 app.include_router(memories.router)
 app.include_router(image_memory_routes.router)
+app.include_router(sticker_routes.router)
 app.include_router(modes_routes.router)
 app.include_router(devices_routes.router)
 app.include_router(control_routes.router)
@@ -385,6 +397,8 @@ app.include_router(events_routes.router)
 app.include_router(avatars_routes.router)
 app.include_router(pc_screen_routes.router)
 app.include_router(mobile_screen_routes.router)
+from routes.look_at_me import router as look_at_me_router
+app.include_router(look_at_me_router)
 app.include_router(vows_routes.router)
 app.include_router(presence_routes.router)
 app.include_router(push_routes.router)

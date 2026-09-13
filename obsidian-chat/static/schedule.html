@@ -3,12 +3,12 @@
 <head>
 <script src="/static/brand_compat.js?v=20260905-brand"></script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>日程管理 - Obsidian Vow</title>
 <link rel="stylesheet" href="/static/common.css">
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#1a1714">
+<meta name="theme-color" content="#13151d">
 <style>
 .sch-list { border:1px solid var(--border); border-radius:10px; background:linear-gradient(180deg, var(--bg) 0%, rgba(26,23,20,0.95) 100%); padding:6px; max-height:calc(100dvh - 300px); overflow-y:auto; box-shadow: inset 0 1px 0 rgba(212,148,58,0.05); }
 .sch-item { display:flex; align-items:flex-start; gap:8px; padding:10px 10px; border-bottom:1px solid rgba(58,53,48,0.5); border-radius:8px; margin-bottom:2px; transition: background 0.2s; }
@@ -32,6 +32,10 @@
 .sch-add-row2 select { padding:6px 8px; border:1px solid var(--border); border-radius:8px; background:var(--surface2); color:var(--text); font-size:12px; flex-shrink:0; }
 .sch-add-row2 button { padding:8px 14px; border:none; border-radius:8px; background:var(--accent); color:#fff; font-size:13px; cursor:pointer; white-space:nowrap; flex-shrink:0; }
 </style>
+<link rel="stylesheet" href="/static/vow.css?v=20260913-enamel">
+<script src="/static/vow.js?v=20260913-gold-dust"></script>
+<link rel="stylesheet" href="/static/gold-dust.css?v=20260913-gold-dust">
+<script src="/static/gold-dust.js?v=20260913-gold-dust" defer></script>
 </head>
 <body>
 <div class="sub-page">
@@ -55,7 +59,7 @@
     </div>
   </div>
 </div>
-<script src="/static/common.js?v=20260905-brand"></script>
+<script src="/static/common.js?v=20260913-refined"></script>
 <script src="/static/web_push.js?v=20260905-brand"></script>
 <script>
 connectCommonWS(msg => {

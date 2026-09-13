@@ -1,4 +1,6 @@
 from app.schedule import prompt
+from app.tools.parser import parse_tool_intents
+from app.tools.prompt_renderers import render_registered_capabilities
 
 
 def test_single_alarm_prompt_and_system_message_match_legacy_shape():
@@ -54,4 +56,29 @@ def test_schedule_chain_capability_block_is_registry_generated_without_false_lis
         "schedule.reminder",
     )
     assert "[ALARM:" not in block
+    assert "[ALARM]" not in block
     assert "[SCHEDULE_LIST]" not in block
+
+
+def test_time_explanations_precede_formats_and_formats_use_existing_parser():
+    context = {"user_name": "小栀", "ai_name": "阿澈"}
+    tools = {"schedule.alarm", "schedule.reminder", "schedule.monitor"}
+    entries = dict(render_registered_capabilities("main_stable", capabilities=tools, context=context))
+    assert entries.keys() == tools
+    for name, text in entries.items():
+        explanation, output_format = text.split("\n格式：", 1)
+        assert explanation.startswith("【")
+        marker = output_format.split("。", 1)[0].replace("YYYY-MM-DDTHH:MM", "2027-01-15T09:00")
+        intents = parse_tool_intents(marker)
+        assert len(intents) == 1
+        assert intents[0].tool_name == name
+    assert "创建成功不等于手机已确认设置" in entries["schedule.alarm"]
+    assert "不会到点自动唤醒阿澈" in entries["schedule.reminder"]
+    assert "不提供摄像头画面" in entries["schedule.monitor"]
+    assert "缺失的情况不能当作已知" in entries["schedule.monitor"]
+    for surface, variant in (("schedule", ""), ("main_stable", "regenerate")):
+        shared = dict(render_registered_capabilities(
+            surface, capabilities=tools - {"schedule.alarm"},
+            context={**context, "monitor_variant": variant},
+        ))
+        assert shared == {name: entries[name] for name in tools - {"schedule.alarm"}}

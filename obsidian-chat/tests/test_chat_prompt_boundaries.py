@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 from contextlib import asynccontextmanager
 import sqlite3
 import time
@@ -111,11 +112,13 @@ def test_send_ability_block_filters_toy_by_capability(monkeypatch):
         conv_id="conv_prompt",
         body=body,
         user_name="用户A",
-        capabilities=("music.search", "memory.remember"),
+        capabilities=("music.search", "memory.remember", "mobile.look_at_me"),
     ))
 
     assert "[TOY:" not in block
-    assert "没有控制任何玩具或设备的能力" in block
+    assert "当前未启用玩具控制" in block
+    assert "没有控制任何玩具或设备的能力" not in block
+    assert "【陪我：" in block
     assert "[MUSIC:" in block
     assert "[REMEMBER:" in block
 
@@ -292,7 +295,7 @@ def test_send_ability_block_includes_toy_when_mode_capability_allows(monkeypatch
     ))
 
     assert "[TOY:1]" in block
-    assert "没有控制任何玩具或设备的能力" not in block
+    assert "当前未启用玩具控制" not in block
     assert "[MUSIC:" not in block
     assert "[REMEMBER:" not in block
 
@@ -318,7 +321,7 @@ def test_send_ability_block_aftercare_suppresses_control_prompt_even_with_device
         ),
     ))
 
-    assert "没有控制任何玩具或设备的能力" in block
+    assert "当前未启用玩具控制" in block
     assert "【安全停止后的照护】" in block
     assert "不要继续控制剧情" in block
     assert "也不要下任何玩具或设备指令" in block
@@ -670,7 +673,7 @@ def test_prepare_send_prompt_builds_ability_memory_and_debug_meta(monkeypatch):
             cap_idx=0,
         )
 
-    async def fake_build_send_ability_block(*, conv_id, body, user_name, capabilities, control_context, model_key):
+    async def fake_build_send_ability_block(*, conv_id, body, user_name, ai_name, capabilities, control_context, model_key):
         assert conv_id == "conv_send"
         assert body.content == "hello"
         assert user_name == "用户A"
@@ -1483,7 +1486,8 @@ def test_prepare_send_prompt_safety_tombstone_forces_normal_mode(monkeypatch):
     assert meta["safety_close_reason"] == "safeword"
 
 
-def test_prepare_regenerate_prompt_uses_last_user_attachment_policy(monkeypatch):
+@pytest.mark.parametrize('retry_feedback', [False, True])
+def test_prepare_regenerate_prompt_uses_last_user_attachment_policy(monkeypatch, retry_feedback):
     _patch_empty_vow_context(monkeypatch)
     _patch_no_control_context(monkeypatch)
 
@@ -1497,13 +1501,15 @@ def test_prepare_regenerate_prompt_uses_last_user_attachment_policy(monkeypatch)
             model_key="model_regen",
             history=history,
             actual_recent=history[-1:],
-            wb={"user_name": "用户B"},
+            wb={"user_name": "用户B", "ai_name": "知秋"},
             cap_idx=0,
+            latest_user_message_id="source" if retry_feedback else None,
         )
 
     async def fake_build_regenerate_ability_block(**kwargs):
         assert kwargs["conv_id"] == "conv_regen"
         assert kwargs["user_name"] == "用户B"
+        assert kwargs["ai_name"] == "知秋"
         assert kwargs["whisper_mode"] is True
         assert kwargs["ai_dom_mode"] is False
         assert kwargs["safeword"] == "safe"
@@ -1512,12 +1518,12 @@ def test_prepare_regenerate_prompt_uses_last_user_attachment_policy(monkeypatch)
 
     async def fake_inject_memory_prompt(history, **kwargs):
         assert kwargs["conv_id"] == "conv_regen"
-        assert kwargs["inject_offset"] == 2
+        assert kwargs["inject_offset"] == (4 if retry_feedback else 2)
         assert kwargs["fast_mode"] is True
         assert kwargs["whisper_mode"] is False
         assert kwargs["prompt_source"] == "regenerate"
         assert kwargs.get("current_user_content", "") == ""
-        return 2, {
+        return kwargs["inject_offset"], {
             "recall_keywords": "",
             "recall_query": "",
             "recall_topic": "",
@@ -1530,6 +1536,16 @@ def test_prepare_regenerate_prompt_uses_last_user_attachment_policy(monkeypatch)
     monkeypatch.setattr(chat_turn, "prepare_chat_history", fake_prepare_chat_history)
     monkeypatch.setattr(chat_turn, "build_regenerate_ability_block", fake_build_regenerate_ability_block)
     monkeypatch.setattr(chat_turn, "inject_memory_prompt", fake_inject_memory_prompt)
+
+    async def claim_sticker_feedback(**kwargs):
+        from app.stickers.prompts import feedback
+        assert retry_feedback
+        assert kwargs['conv_id'] == 'conv_regen' and kwargs['turn_id'] == 'regenerate:source'
+        return {'bound_turn_id': kwargs['turn_id'], 'block': feedback(
+            [{'action': 'send', 'status': 'miss', 'expression': '举着[OK]的牌子'}],
+            user_name=kwargs['user_name'], ai_name=kwargs['ai_name'])}
+
+    monkeypatch.setattr(chat_turn.sticker_repository, 'claim', claim_sticker_feedback)
 
     model_key, history, meta = asyncio.run(chat_turn.prepare_regenerate_prompt(
         "conv_regen",
@@ -1558,6 +1574,9 @@ def test_prepare_regenerate_prompt_uses_last_user_attachment_policy(monkeypatch)
     assert history[0]["content"] == "[系统能力] regen"
     assert history[1]["content"] == "（我知道自己现在能做什么。）"
     assert meta["prompt_count"] == len(history)
+    if retry_feedback:
+        assert meta['sticker_feedback']['bound_turn_id'] == 'regenerate:source'
+        assert any('举着[OK]的牌子' in message['content'] for message in history)
     assert meta["prompt_messages"][0]["content"] == "[系统能力] regen"
     assert meta["chat_mode"] == "normal"
     assert meta["mode_source"] == "legacy_disabled"

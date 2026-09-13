@@ -240,6 +240,32 @@ KNOWN_TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     definition.tool_name: definition
     for definition in (
         ToolDefinition(
+            tool_name="mobile.look_at_me", description="Invite companionship on the bound phone.",
+            allowed_modes=("look_at_me_enabled",), side_effect_level=SideEffectLevel.DEVICE,
+            legacy_markers=("【陪我：300｜自由表达】",),
+            prompt_orders=(("main_stable",108),("opportunity",76),("self_wake",76),("initiative",76),("sentinel_v2",76)),
+            feedback_timing="next_turn",
+        ),
+        ToolDefinition(
+            tool_name="sticker.save", description="Collect the image bound to this chat reply.",
+            allowed_modes=("sticker_enabled",),
+            side_effect_level=SideEffectLevel.WRITE, legacy_markers=("【偷图】",),
+            prompt_orders=(("main_stable", 106),),
+        ),
+        ToolDefinition(
+            tool_name="sticker.send", description="Match a free expression to one sticker or null.",
+            allowed_modes=("sticker_enabled",),
+            side_effect_level=SideEffectLevel.EXTERNAL, legacy_markers=("【发图：自由表达】",),
+            prompt_orders=(("main_stable", 107), ("opportunity", 74), ("self_wake", 74),
+                           ("sentinel_v2", 74), ("schedule", 74)),
+        ),
+        ToolDefinition(
+            tool_name="sticker.create", description="Create and collect a sticker during a silent night turn.",
+            allowed_modes=("sticker_enabled",),
+            side_effect_level=SideEffectLevel.EXTERNAL, legacy_markers=("【做表情：自由描述】",),
+            prompt_orders=(("opportunity", 75),),
+        ),
+        ToolDefinition(
             tool_name="music.search",
             description="Search a song and attach playable music cards.",
             side_effect_level=SideEffectLevel.EXTERNAL,

@@ -27,6 +27,8 @@ from app.memory_v3.pending_recall import pending_recall_service
 from app.memory_v3.repository import PendingRecallRepository
 from app.memory_v3.timeline import timeline_service
 from app.presence.outcomes import presence_outcome_inbox
+from app.stickers.repository import sticker_repository
+from app.stickers.chat import deliver as deliver_sticker, StickerDelivery
 from app.chat.private_markers import PairedPrivateMarkerStreamFilter
 from app.chat.control_syntax import ControlMarkerStreamFilter
 from app.web_search import web_search_service
@@ -1103,6 +1105,7 @@ def _tool_context(
             "source_chain": "main",
             "invocation_id": prompt_meta.get("invocation_id"),
             "current_user_message_id": prompt_meta.get("current_user_message_id"),
+            "sticker_context": dict(prompt_meta.get("sticker_context") or {}),
             "advertised_tools": tuple(
                 prompt_meta.get("advertised_tools") or ()
             ),
@@ -1236,13 +1239,20 @@ async def stream_chat_response(
     memory_v2_recall_debug = prompt_meta.get("memory_v2_recall")
 
     async def _bg_generate():
+        nonlocal conv_id
+        from dataclasses import replace
+        from app.daily_chat.service import daily_chat
+        conv_id = daily_chat.resolve(conv_id)
         trace_token = current_turn.set(trace)
         full_text = ""
         raw_model_output = ""
         provider_error = ""
         has_error = False
+        invitation_only = False
+        invitation_committed = False
         assistant_persisted = False
         presence_outcomes_consumed = 0
+        sticker_delivery = StickerDelivery()
         turn_outcome = "pipeline_failed"
         tool_context: ToolContext | None = None
         buffering_structured_reply: bool | None = None
@@ -1274,7 +1284,8 @@ async def stream_chat_response(
                 prompt_meta=prompt_meta,
                 memory_eval_mode=memory_eval_mode,
             )
-            await queue.put({"id": ai_msg_id, "type": "start", "turn_id": trace.turn_id})
+            await queue.put({"id": ai_msg_id, "type": "start", "turn_id": trace.turn_id, "conv_id": conv_id,
+                             "user_message_id": prompt_meta.get('current_user_message_id')})
             await tool_invocation_ledger.record_model_request(
                 tool_context,
                 invocation_id=model_invocation_id,
@@ -1345,7 +1356,7 @@ async def stream_chat_response(
 
             full_text = strip_retry_marker(full_text)
             stripped = full_text.strip()
-            if not has_error and looks_like_model_error_text(stripped):
+            if not has_error and stripped and looks_like_model_error_text(stripped):
                 has_error = True
                 turn_outcome = "provider_failed"
             elif not has_error:
@@ -1390,6 +1401,8 @@ async def stream_chat_response(
                 if visible_tail:
                     await queue.put({"type": "chunk", "content": visible_tail})
 
+            conv_id = daily_chat.resolve(conv_id)
+            tool_context = replace(tool_context, conv_id=conv_id)
             try:
                 try:
                     postprocessed = await _post_processor.process(
@@ -1493,8 +1506,47 @@ async def stream_chat_response(
                     ),
                 )
 
-            music_atts = _music_attachments(music_cards)
-            att_json = json.dumps(music_atts, ensure_ascii=False) if music_atts else ""
+            # Validate the source before deciding whether this turn has a delivery.
+            # The image model follow-up still waits for its parent message to commit.
+            pending_image_views = []
+            if not has_error:
+                image_execution = await execute_postprocessed_actions(
+                    postprocessed, profile=turn_profile, context=tool_context,
+                    only_capabilities=frozenset({"memory.view_image"}),
+                )
+                pending_image_views = _executed_payloads(image_execution.results_for("memory.view_image"))
+
+            invitation_delivery = []
+            if not has_error and not memory_eval_mode:
+                invitation_execution = await execute_postprocessed_actions(
+                    postprocessed, profile=turn_profile, context=tool_context,
+                    only_capabilities=frozenset({'mobile.look_at_me'}))
+                invitation_delivery = _executed_payloads(invitation_execution.results_for('mobile.look_at_me'))
+                for payload in invitation_delivery:
+                    await queue.put({'type':'look_at_me','data':payload})
+            message_atts = _music_attachments(music_cards)
+            if not has_error and not memory_eval_mode:
+                names = prompt_meta.get("sticker_names") or {}
+                fallback_user, fallback_ai = load_worldbook_names()
+                sticker_delivery = await deliver_sticker(
+                    postprocessed, profile=turn_profile, context=tool_context, history=history,
+                    model_key=model_key, temperature=temperature,
+                    user_name=names.get("user_name") or fallback_user,
+                    ai_name=names.get("ai_name") or fallback_ai,
+                    execute_actions=execute_postprocessed_actions, stream_model=stream_ai, processor=_post_processor,
+                    other_attachments=message_atts,
+                    pending_followup=bool(pending_image_views or invitation_delivery),
+                )
+                if sticker_delivery.supplement_text:
+                    full_text = sticker_delivery.supplement_text
+                    await queue.put({"type": "chunk", "content": full_text})
+                if sticker_delivery.failed:
+                    has_error = True
+                    turn_outcome = "provider_failed"
+                    full_text = "[请求出错: 表情未能发送，文字补答也未完成]"
+                    await queue.put({"type": "chunk", "content": full_text})
+            message_atts.extend(sticker_delivery.attachments)
+            att_json = json.dumps(message_atts, ensure_ascii=False) if message_atts else ""
 
             # ── 誓约提交编排（§4.3）：净化/准入 + vow 插入 + 确认/拒绝写入正文 +
             # assistant 消息落库，全部在 BEGIN IMMEDIATE 单事务内。
@@ -1504,13 +1556,30 @@ async def stream_chat_response(
                 vow_extract is not None and vow_extract.found
                 and not has_error and not memory_eval_mode
             )
+            # Vows produce confirmation/rejection below; validated image views
+            # need a persisted parent for their follow-up. Other empty turns fail.
+            if (not has_error and not full_text.strip() and not message_atts
+                    and not process_vow and not pending_image_views and not invitation_delivery):
+                has_error = True
+                turn_outcome = "invalid_output"
+                full_text = "[请求出错: 本轮没有可交付的文字或附件]"
+                await queue.put({"type": "chunk", "content": full_text})
+            invitation_only = bool(invitation_delivery and not full_text.strip()
+                                   and not message_atts and not process_vow and not pending_image_views)
+            if invitation_only:
+                from app.look_at_me.repository import repository as look_at_me_repository
+                async with get_db() as db2:
+                    await look_at_me_repository.finalize_in_tx(db2, prompt_meta.get('look_at_me') or {}, ai_msg_id)
+                    await db2.commit()
+                invitation_committed = True
+                await queue.put({'type':'tool_delivery','id':ai_msg_id,'tool':'mobile.look_at_me'})
             base_text = full_text
             vow_note = ""
             vow_committed = False
             created_pending_id = None
             created_web_search_id = None
             now2 = time.time()
-            if not has_error:
+            if not has_error and not invitation_only:
                 pending_meta = prompt_meta.get("pending_recall") or {}
                 selected_pending_id = (
                     str(pending_meta.get("pending_id") or "")
@@ -1579,6 +1648,13 @@ async def stream_chat_response(
                                         else ""
                                     ),
                                 )
+                                from app.look_at_me.repository import repository as look_at_me_repository
+                                await look_at_me_repository.finalize_in_tx(db2, prompt_meta.get('look_at_me') or {}, ai_msg_id)
+                                await sticker_repository.finalize_in_tx(
+                                    db2, turn_id=str((prompt_meta.get("sticker_feedback") or {}).get("bound_turn_id") or ""),
+                                    message_id=ai_msg_id, supplemented=sticker_delivery.supplemented_events,
+                                    replay_from=str((prompt_meta.get("sticker_feedback") or {}).get("replayed_from") or ""),
+                                )
                                 presence_outcomes_consumed = (
                                     await _consume_presence_outcomes_in_tx(
                                         db2,
@@ -1642,6 +1718,13 @@ async def stream_chat_response(
                                 else ""
                             ),
                         )
+                        from app.look_at_me.repository import repository as look_at_me_repository
+                        await look_at_me_repository.finalize_in_tx(db2, prompt_meta.get('look_at_me') or {}, ai_msg_id)
+                        await sticker_repository.finalize_in_tx(
+                            db2, turn_id=str((prompt_meta.get("sticker_feedback") or {}).get("bound_turn_id") or ""),
+                            message_id=ai_msg_id, supplemented=sticker_delivery.supplemented_events,
+                            replay_from=str((prompt_meta.get("sticker_feedback") or {}).get("replayed_from") or ""),
+                        )
                         presence_outcomes_consumed = (
                             await _consume_presence_outcomes_in_tx(
                                 db2,
@@ -1654,6 +1737,8 @@ async def stream_chat_response(
                         created_pending_id = pending_tx["created_pending_id"]
                         created_web_search_id = web_tx.get("search_id")
                 assistant_persisted = True
+                conv_id = await daily_chat.message_window(ai_msg_id, conv_id)
+                tool_context = replace(tool_context, conv_id=conv_id)
                 if not memory_eval_mode:
                     _schedule_working_model_pipeline_after_commit(
                         conv_id=conv_id,
@@ -1682,18 +1767,24 @@ async def stream_chat_response(
                 "role": "assistant",
                 "content": full_text,
                 "created_at": now2,
-                "attachments": music_atts,
+                "attachments": message_atts,
             }
-            if full_text:
+            if has_error:
+                ai_msg.update(transient_error=True, persisted=False, error_text=full_text)
+            if full_text or sticker_delivery.attachments:
                 trace.visible()
-            await manager.broadcast({"type": "msg_created", "data": ai_msg})
-            if full_text:
+            if not invitation_only:
+                await manager.broadcast({"type": "msg_created", "data": ai_msg})
+            if sticker_delivery.attachments:
+                await queue.put({"type": "message", "message": ai_msg})
+            if full_text or sticker_delivery.attachments:
                 await tool_invocation_ledger.record_visible_message(
                     tool_context,
                     invocation_id=model_invocation_id,
                     cleaned_content=full_text,
                     message_id=ai_msg_id,
-                    metadata={"persisted": assistant_persisted},
+                    metadata={"persisted": assistant_persisted,
+                              "sticker_ids": [item['id'] for item in sticker_delivery.attachments]},
                 )
             for schedule_result in schedule_execution.results_for("schedule.list"):
                 payload = dict(schedule_result.result or {})
@@ -1828,12 +1919,8 @@ async def stream_chat_response(
                 await queue.put(ms_data)
                 await manager.broadcast({"type": ms_data.get("type", "screen_check_pending"), "data": ms_data})
 
-            if not has_error:
-                image_execution = await execute_postprocessed_actions(
-                    postprocessed, profile=turn_profile, context=tool_context,
-                    only_capabilities=frozenset({"memory.view_image"}),
-                )
-                for image_result in _executed_payloads(image_execution.results_for("memory.view_image")):
+            if not has_error and assistant_persisted:
+                for image_result in pending_image_views:
                     from app.image_memory.view import followup as image_view_followup
                     create_tracked_task(
                         image_view_followup(tool_context, image_result),
@@ -1919,7 +2006,18 @@ async def stream_chat_response(
 
             traceback.print_exc()
         finally:
+            if not assistant_persisted and not invitation_committed:
+                from app.look_at_me.repository import repository as look_at_me_repository
+                await look_at_me_repository.settle(prompt_meta.get('look_at_me') or {})
             if not assistant_persisted:
+                try:
+                    sticker_feedback = prompt_meta.get("sticker_feedback") or {}
+                    await sticker_repository.release(
+                        str(sticker_feedback.get("bound_turn_id") or ""),
+                        replayed_from=str(sticker_feedback.get("replayed_from") or ""),
+                    )
+                except Exception:
+                    logger.exception("Sticker feedback claim release failed")
                 try:
                     await presence_outcome_inbox.release_claim(
                         bound_turn_id=str(

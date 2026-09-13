@@ -25,6 +25,7 @@ from .image_provider import (
     provider_configured,
 )
 from .schema import SpriteValidationError, inspect_transparent_png
+from .visuals import PresenceVisualSummarizer, parse_visual_summary, visual_disposition
 
 
 DEFAULT_DAILY_DRAW_LIMIT = 2
@@ -59,6 +60,7 @@ class SpriteLibrary:
         now: Callable[[], float] = time.time,
         timezone_name: str | None = None,
         daily_limit: int = DEFAULT_DAILY_DRAW_LIMIT,
+        summarizer: Any | None = None,
     ):
         self._get_db = get_db_factory
         self.storage_dir = storage_dir or DATA_DIR / "presence" / "sprites"
@@ -66,6 +68,7 @@ class SpriteLibrary:
         self._now = now
         self.timezone_name = timezone_name or DEFAULT_DRAW_TIMEZONE
         self.daily_limit = max(1, int(daily_limit))
+        self.summarizer = summarizer or PresenceVisualSummarizer()
 
     def _local_date(self, now: float | None = None) -> str:
         try:
@@ -123,6 +126,8 @@ class SpriteLibrary:
             self.provider, PresenceImageProvider
         ):
             return False
+        if isinstance(self.summarizer, PresenceVisualSummarizer) and not self.summarizer.configured():
+            return False
         return bool((await self.quota_snapshot())["remaining"])
 
     async def draw(
@@ -158,6 +163,7 @@ class SpriteLibrary:
         preflight = getattr(self.provider, "preflight", None)
         if callable(preflight):
             await preflight()
+        await self.summarizer.preflight()
         quota = await self.reserve_daily_draw()
         generate_with_metadata = getattr(
             self.provider,
@@ -177,6 +183,13 @@ class SpriteLibrary:
                 provider_type=type(self.provider).__name__,
             )
         sprite_id = f"{_slug(visual_prompt)}_{uuid.uuid4().hex[:8]}"
+        visual_summary = {}
+        try:
+            visual_summary = parse_visual_summary(await self.summarizer.summarize(generated.png))
+            visual_status, visual_error = visual_disposition(visual_summary, form=normalized_form)
+        except Exception:
+            # Preserve the finished PNG, but never auto-display an unobserved new asset.
+            visual_status, visual_error = "failed", "成图摘要未完成，图片已保留为草稿"
         result = await self.add_sprite(
             sprite_id=sprite_id,
             png=generated.png,
@@ -185,6 +198,9 @@ class SpriteLibrary:
             prompt=visual_prompt,
             provider=type(self.provider).__name__,
             base_height_dip=base_height_dip,
+            visual_summary=visual_summary,
+            visual_status=visual_status,
+            visual_error=visual_error,
         )
         result["quota"] = quota
         result["provider_type"] = generated.provider_type
@@ -193,6 +209,16 @@ class SpriteLibrary:
         if context is not None:
             metadata = getattr(context, "metadata", {}) or {}
             result["source_chain"] = str(metadata.get("source_chain") or "")
+            conv_id = str(getattr(context, "conv_id", "") or "")
+            if conv_id:
+                from .outcomes import PresenceOutcomeInbox
+
+                await PresenceOutcomeInbox(get_db_factory=self._get_db, now=self._now).record_terminal(
+                    event_id=f"draw:{sprite_id}", conv_id=conv_id,
+                    status="draw_ready" if visual_status == "ready" else "draw_draft",
+                    reason=visual_error,
+                    payload={"sprite_id": sprite_id, "visual_summary": visual_summary},
+                )
         return result
 
     async def add_sprite(
@@ -206,6 +232,9 @@ class SpriteLibrary:
         provider: str = "seed",
         base_height_dip: float = DEFAULT_BASE_HEIGHT_DIP,
         created_at: float | None = None,
+        visual_summary: dict[str, str] | None = None,
+        visual_status: str = "legacy",
+        visual_error: str = "",
     ) -> dict[str, Any]:
         sprite_id = str(sprite_id or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", sprite_id):
@@ -219,6 +248,13 @@ class SpriteLibrary:
         normalized_form = str(form or "").strip().lower()
         if normalized_form not in SPRITE_FORMS:
             raise SpriteLibraryError("presence_sprite_form_invalid")
+        if visual_status not in {"legacy", "ready", "draft", "failed"}:
+            raise SpriteLibraryError("presence_visual_status_invalid")
+        if visual_summary:
+            visual_summary = parse_visual_summary(visual_summary)
+        if visual_status in {"ready", "draft"} and not visual_summary:
+            raise SpriteLibraryError("presence_visual_summary_required")
+        active = int(visual_status in {"legacy", "ready"})
         inspection = inspect_transparent_png(bytes(png))
         hash_hex = inspection.sha256.removeprefix("sha256:")
         file_name = f"{hash_hex}.png"
@@ -234,8 +270,8 @@ class SpriteLibrary:
                     INSERT INTO presence_sprites(
                         sprite_id, sprite_hash, file_name, base_height_dip,
                         description, prompt, form, provider, width_px, height_px,
-                        active, archived, created_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,1,0,?)
+                        active, archived, created_at, visual_summary_json, visual_status, visual_error
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)
                     ON CONFLICT(sprite_id) DO NOTHING
                     """,
                     (
@@ -249,7 +285,11 @@ class SpriteLibrary:
                         str(provider or "")[:120],
                         inspection.width_px,
                         inspection.height_px,
+                        active,
                         now,
+                        json.dumps(visual_summary or {}, ensure_ascii=False),
+                        visual_status,
+                        visual_error,
                     ),
                 )
                 if cursor.rowcount != 1:
@@ -292,7 +332,7 @@ class SpriteLibrary:
                 raise
         return {
             "ok": True,
-            "status": "completed",
+            "status": "completed" if active else "draft",
             "sprite_id": sprite_id,
             "sprite_hash": inspection.sha256,
             "form": normalized_form,
@@ -300,13 +340,33 @@ class SpriteLibrary:
             "width_px": inspection.width_px,
             "height_px": inspection.height_px,
             "available_on_device": False,
+            "visual_summary": visual_summary or {},
+            "visual_status": visual_status,
+            "visual_error": visual_error,
         }
+
+    async def summarize_existing(self, sprite_id: str) -> dict[str, Any]:
+        """Backfill observations without changing an owner's existing curation."""
+        row = await self.get_sprite(sprite_id)
+        if row is None:
+            raise SpriteLibraryError("presence_sprite_not_found")
+        png, _ = await self.file_for_hash(row["sprite_hash"])
+        await self.summarizer.preflight()
+        summary = parse_visual_summary(await self.summarizer.summarize(png))
+        async with self._get_db() as db:
+            await db.execute(
+                "UPDATE presence_sprites SET visual_summary_json=? WHERE sprite_id=?",
+                (json.dumps(summary, ensure_ascii=False), sprite_id),
+            )
+            await db.commit()
+        return {**row, "visual_summary_json": json.dumps(summary, ensure_ascii=False)}
 
     async def _archive_overflow_in_tx(self, db) -> None:
         cursor = await db.execute(
             """
             SELECT sprite_id FROM presence_sprites
             WHERE provider<>'seed' AND form='human'
+              AND visual_status IN ('legacy','ready')
             ORDER BY created_at, sprite_id
             LIMIT 1
             """
@@ -379,7 +439,8 @@ class SpriteLibrary:
     async def has_non_seed_sprites(self) -> bool:
         async with self._get_db() as db:
             cursor = await db.execute(
-                "SELECT 1 FROM presence_sprites WHERE provider<>'seed' LIMIT 1"
+                "SELECT 1 FROM presence_sprites WHERE provider<>'seed' "
+                "AND visual_status IN ('legacy','ready') LIMIT 1"
             )
             return await cursor.fetchone() is not None
 
@@ -393,6 +454,7 @@ class SpriteLibrary:
                 JOIN presence_sprite_sync AS ss
                   ON ss.sprite_hash=s.sprite_hash AND ss.device_id=?
                 WHERE s.provider<>'seed' AND ss.status='synced'
+                  AND s.visual_status IN ('legacy','ready')
                 LIMIT 1
                 """,
                 (normalized_device,),
@@ -406,6 +468,7 @@ class SpriteLibrary:
                 """
                 SELECT * FROM presence_sprites
                 WHERE provider<>'seed' AND form='human'
+                  AND visual_status IN ('legacy','ready')
                 ORDER BY created_at, sprite_id
                 LIMIT 1
                 """
@@ -559,6 +622,7 @@ class SpriteLibrary:
                 """
                 SELECT s.sprite_id, s.sprite_hash, s.base_height_dip,
                        s.description, s.prompt, s.form, s.provider,
+                       s.visual_summary_json, s.visual_status,
                        s.width_px, s.height_px,
                        COALESCE(ss.status, 'pending') AS sync_status
                 FROM presence_sprites AS s

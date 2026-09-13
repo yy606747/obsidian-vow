@@ -12,4 +12,6 @@ psutil
 python-dotenv
 pywebpush==2.4.0
 rembg[cpu]==2.0.81
+pypdf==6.12.2
+python-docx==1.2.0
 # 服务器不安装本地声卡、旧摄像头和 Windows 专用依赖。

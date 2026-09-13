@@ -21,7 +21,7 @@ from app.self_wake.time_policy import owner_timezone_name
 
 DEFAULT_NIGHT_ROUND_TIMEZONE = "America/Los_Angeles"
 NIGHT_BRANCHES = frozenset(
-    {"draw", "reflect", "none", "invalid", "provider_failed"}
+    {"draw", "sticker", "reflect", "none", "invalid", "provider_failed"}
 )
 NIGHT_STATUSES = frozenset({"running", "completed", "failed"})
 _HHMM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -264,20 +264,6 @@ class NightRoundScheduler:
         )
         if window is None:
             return {"status": "gated", "reason": "outside_window"}
-
-        if self._sprite_state_resolver is None:
-            from app.presence import sprite_library
-
-            has_non_seed = await sprite_library.has_non_seed_sprites()
-            has_synced_non_seed = await sprite_library.has_synced_non_seed_sprites(
-                device_id="pc"
-            )
-        else:
-            sprite_state = dict(await self._sprite_state_resolver() or {})
-            has_non_seed = bool(sprite_state.get("has_non_seed"))
-            has_synced_non_seed = bool(sprite_state.get("has_synced_non_seed"))
-        if has_non_seed and not has_synced_non_seed:
-            return {"status": "gated", "reason": "presence_sprite_pending_sync"}
 
         if self._target_resolver is None:
             from opportunity import _resolve_target_conv

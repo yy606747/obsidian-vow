@@ -49,7 +49,16 @@ def _variant_transparent_png(index: int) -> bytes:
     return output.getvalue()
 
 
-async def _library(tmp_path, *, provider=None):
+class FakeVisualSummarizer:
+    async def preflight(self):
+        pass
+
+    async def summarize(self, _png):
+        return {"visual": "清楚的卡通人形", "face": "clear", "pose": "站立",
+                "palette": "紫色", "style": "Q版", "impression": "微笑"}
+
+
+async def _library(tmp_path, *, provider=None, summarizer=None):
     db_path = tmp_path / "presence.db"
 
     @asynccontextmanager
@@ -67,6 +76,7 @@ async def _library(tmp_path, *, provider=None):
         now=lambda: 1_776_600_000.0,
         timezone_name="UTC",
         daily_limit=2,
+        summarizer=summarizer or FakeVisualSummarizer(),
     )
 
 

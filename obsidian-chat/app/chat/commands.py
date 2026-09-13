@@ -45,6 +45,7 @@ POI_SEARCH_PATTERN = re.compile(r'\[POI_SEARCH:([^\]]+)\]')
 # 放宽匹配：兼容 [TOY:...] / [TOY：...] / 【TOY:...】 / 【TOY：...】。
 TOY_CMD_PATTERN = re.compile(r'[\[【]\s*TOY\s*[:：]\s*([^\]】]+)\s*[\]】]', re.IGNORECASE)
 RING_TOUCH_PATTERN = re.compile(r'\[RING:([^\]]+)\]')
+STICKER_SAVE_PATTERN = re.compile(r'\[偷图\]')
 
 _RETRY_SENTINEL = '\x00RETRY\x00'
 
@@ -62,6 +63,9 @@ def _strip_retry(text: str) -> str:
 
 def _strip_eval_side_effect_commands(text: str) -> str:
     """Live eval calls the real model, but must not execute tool side effects."""
+    from .control_syntax import iter_value_control_markers
+    for marker in reversed(list(iter_value_control_markers(text, names={"发图", "做表情"}))):
+        text = text[:marker.start] + text[marker.end:]
     for pattern in (
         MUSIC_CMD_PATTERN,
         TOY_CMD_PATTERN,
@@ -71,6 +75,7 @@ def _strip_eval_side_effect_commands(text: str) -> str:
         POI_SEARCH_PATTERN,
         HEART_CMD_PATTERN,
         RING_TOUCH_PATTERN,
+        STICKER_SAVE_PATTERN,
         REMEMBER_CMD_PATTERN,
         VIEW_IMAGE_PATTERN,
         PRESENCE_DRAW_PATTERN,

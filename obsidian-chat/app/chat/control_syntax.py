@@ -32,6 +32,9 @@ VALUE_MARKERS = {
         "PRESENCE_DRAW",
         "PRESENCE_SHOW",
         "SELF_WAKE",
+        "发图",
+        "做表情",
+        "陪我",
     )
 }
 
@@ -44,6 +47,7 @@ LITERAL_MARKERS = {
         "OPPORTUNITY_NONE",
         "OPPORTUNITY_REFLECT",
         "SELF_WAKE_NONE",
+        "偷图",
     )
 }
 
@@ -111,6 +115,36 @@ def _simple_value_end(text: str, start: int) -> int | None:
     return min(positions) if positions else None
 
 
+def _value_end(text: str, start: int, name: str) -> int | None:
+    return (_balanced_value_end(text, start) if name in {"VOW", "发图", "做表情", "陪我"}
+            else _simple_value_end(text, start))
+
+
+@dataclass(frozen=True)
+class ValueControlMarker:
+    start: int
+    end: int
+    name: str
+    payload: str
+    complete: bool
+
+
+def iter_value_control_markers(text: str, *, names: set[str]):
+    """Read top-level values with the same boundaries as the stream filter."""
+    index = 0
+    while index < len(text):
+        marker = _marker_at(text, index) if text[index] in "[【" else None
+        if marker is None:
+            index += 1
+            continue
+        head = _MARKER_HEAD.match(text, index)
+        name = _canonical_name(head.group("name"))
+        if name in names and head.group("colon") and not head.group("slash"):
+            end = _value_end(text, head.end(), name)
+            yield ValueControlMarker(index, marker.end, name, text[head.end():end], end is not None)
+        index = marker.end
+
+
 def _marker_at(text: str, start: int) -> _MarkerSpan | None:
     match = _MARKER_HEAD.match(text, start)
     if match is None:
@@ -141,11 +175,7 @@ def _marker_at(text: str, start: int) -> _MarkerSpan | None:
 
         if key not in VALUE_MARKERS:
             return None
-        value_end = (
-            _balanced_value_end(text, payload_start)
-            if key == "VOW"
-            else _simple_value_end(text, payload_start)
-        )
+        value_end = _value_end(text, payload_start, key)
         if value_end is None:
             return _MarkerSpan(len(text), f"[{name}:" + text[payload_start:])
         payload = text[payload_start:value_end]
@@ -270,7 +300,9 @@ __all__ = [
     "LITERAL_MARKERS",
     "PAIRED_MARKERS",
     "VALUE_MARKERS",
+    "ValueControlMarker",
     "canonicalize_control_markers",
     "contains_control_marker",
+    "iter_value_control_markers",
     "strip_control_markers",
 ]

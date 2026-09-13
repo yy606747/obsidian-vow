@@ -13,6 +13,21 @@ from urllib.parse import urlparse
 
 CACHE_BOUNDARY_KEY = "_prompt_cache_boundary"
 CACHE_SESSION_KEY = "_prompt_cache_session"
+USAGE_META_KEYS = (
+    "prompt_tokens", "completion_tokens", "total_tokens", "cache_read_tokens",
+    "cache_write_tokens", "cache_metrics_reported", "cache_hit",
+    "reasoning_tokens", "reasoning_metrics_reported", "billable_output_tokens",
+)
+
+
+def reset_usage_meta(meta: MutableMapping[str, Any] | None) -> MutableMapping[str, Any]:
+    """每次实际请求独立计数；重试不继承上次用量，未传统计字典也照常记账。"""
+    if meta is None:
+        meta = {}
+    for key in (*USAGE_META_KEYS, "raw", "finish_reason", "cache_adapter",
+                "cache_boundary_found", "cacheable_prefix_chars"):
+        meta.pop(key, None)
+    return meta
 
 
 def _non_negative_int(value: Any) -> int:
@@ -39,6 +54,9 @@ def normalize_usage(raw: Mapping[str, Any] | None, *, provider_type: str) -> dic
             (_non_negative_int(usage[name]) for name in cache_fields if name in usage),
             0,
         )
+        thoughts = usage.get("thoughtsTokenCount", usage.get("thoughts_token_count"))
+        output = usage.get("candidatesTokenCount", usage.get("candidates_token_count"))
+        reasoning = _non_negative_int(thoughts) if thoughts is not None else None
         return {
             "prompt_tokens": _non_negative_int(
                 usage.get("promptTokenCount", usage.get("prompt_token_count"))
@@ -51,7 +69,14 @@ def normalize_usage(raw: Mapping[str, Any] | None, *, provider_type: str) -> dic
             ),
             "cache_read_tokens": cache_read,
             "cache_write_tokens": 0,
-            "cache_metrics_reported": any(name in usage for name in cache_fields),
+            "cache_metrics_reported": any(usage.get(name) is not None for name in cache_fields),
+            "reasoning_tokens": reasoning,
+            "reasoning_metrics_reported": reasoning is not None,
+            # 保留 completion_tokens 的原有含义；新增计费输出，避免漏算思考。
+            "billable_output_tokens": (
+                _non_negative_int(output) + reasoning
+                if output is not None and reasoning is not None else None
+            ),
         }
 
     # Native Anthropic Messages usage.  OpenRouter's Chat Completions endpoint
@@ -82,6 +107,11 @@ def normalize_usage(raw: Mapping[str, Any] | None, *, provider_type: str) -> dic
             ),
             "cache_write_tokens": cache_write,
             "cache_metrics_reported": any(name in usage for name in anthropic_fields),
+            "reasoning_tokens": None,
+            "reasoning_metrics_reported": False,
+            "billable_output_tokens": (
+                completion_tokens if usage.get("output_tokens") is not None else None
+            ),
         }
 
     details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details")
@@ -97,17 +127,33 @@ def normalize_usage(raw: Mapping[str, Any] | None, *, provider_type: str) -> dic
     completion_tokens = _non_negative_int(
         usage.get("completion_tokens", usage.get("output_tokens"))
     )
+    output_details = usage.get("completion_tokens_details") or usage.get("output_tokens_details")
+    output_details = output_details if isinstance(output_details, Mapping) else {}
+    thoughts = output_details.get("reasoning_tokens")
+    reasoning = _non_negative_int(thoughts) if thoughts is not None else None
+    cache_read = details.get("cached_tokens", usage.get("prompt_cache_hit_tokens"))
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": _non_negative_int(
             usage.get("total_tokens", prompt_tokens + completion_tokens)
         ),
-        "cache_read_tokens": _non_negative_int(details.get("cached_tokens")),
+        "cache_read_tokens": _non_negative_int(cache_read),
         "cache_write_tokens": _non_negative_int(
             details.get("cache_write_tokens", details.get("cache_creation_tokens"))
         ),
-        "cache_metrics_reported": any(name in details for name in cache_fields),
+        "cache_metrics_reported": (
+            any(details.get(name) is not None for name in cache_fields)
+            or usage.get("prompt_cache_hit_tokens") is not None
+        ),
+        "reasoning_tokens": reasoning,
+        "reasoning_metrics_reported": reasoning is not None,
+        # 兼容协议的 completion_tokens 已含思考，不能再加 reasoning_tokens。
+        "billable_output_tokens": (
+            completion_tokens
+            if usage.get("completion_tokens", usage.get("output_tokens")) is not None
+            else None
+        ),
     }
 
 
@@ -119,11 +165,20 @@ def update_usage_meta(
 ) -> dict:
     """Update the debug/stream metadata and return the normalized values."""
 
-    normalized = normalize_usage(raw, provider_type=provider_type)
+    # 流式元数据是累计值，但不同帧可能只带部分字段；合并字段，不累加令牌数。
+    merged = dict((meta or {}).get("raw") or {})
+    for key, value in (raw or {}).items():
+        if value is None:
+            continue
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    normalized = normalize_usage(merged, provider_type=provider_type)
     if meta is not None:
         meta.update(normalized)
         meta["cache_hit"] = normalized["cache_read_tokens"] > 0
-        meta["raw"] = dict(raw or {})
+        meta["raw"] = merged
     return normalized
 
 
@@ -133,13 +188,7 @@ def provider_event_usage_meta(meta: Mapping[str, Any] | None) -> dict:
     if not isinstance(meta, Mapping):
         return {}
     keys = (
-        "prompt_tokens",
-        "completion_tokens",
-        "total_tokens",
-        "cache_read_tokens",
-        "cache_write_tokens",
-        "cache_metrics_reported",
-        "cache_hit",
+        *USAGE_META_KEYS,
         "cache_adapter",
         "cache_boundary_found",
         "cacheable_prefix_chars",

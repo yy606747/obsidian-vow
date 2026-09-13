@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import aiosqlite
 
 from database import get_db
+from app.daily_chat.service import conversation_scope_ids, resolve_conversation_id
 
 from .time_policy import (
     WAKE_EXPIRY_SECONDS,
@@ -122,8 +123,8 @@ class SelfWakeRepository:
 
                 cursor = await db.execute(
                     "SELECT id, wake_at, intent FROM self_wakes "
-                    "WHERE origin=? AND origin_ref=? AND state='pending'",
-                    (origin, origin_ref),
+                    f"WHERE origin=? AND origin_ref IN ({','.join('?' for _ in conversation_scope_ids(origin_ref))}) AND state='pending'",
+                    (origin, *conversation_scope_ids(origin_ref)),
                 )
                 replaced = _row(await cursor.fetchone())
                 if replaced is not None:
@@ -145,7 +146,7 @@ class SelfWakeRepository:
                         origin,
                         origin_ref,
                         source,
-                        conv_id,
+                        resolve_conversation_id(conv_id),
                         str(source_turn_id).strip(),
                         owner_timezone,
                         created_at,
@@ -185,8 +186,8 @@ class SelfWakeRepository:
             try:
                 cursor = await db.execute(
                     "SELECT id, wake_at, intent FROM self_wakes "
-                    "WHERE origin=? AND origin_ref=? AND state='pending'",
-                    (origin, origin_ref),
+                    f"WHERE origin=? AND origin_ref IN ({','.join('?' for _ in conversation_scope_ids(origin_ref))}) AND state='pending'",
+                    (origin, *conversation_scope_ids(origin_ref)),
                 )
                 cancelled = _row(await cursor.fetchone())
                 if cancelled is None:
@@ -308,9 +309,9 @@ class SelfWakeRepository:
         async with get_db() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT * FROM self_wakes WHERE origin=? AND origin_ref=? "
+                f"SELECT * FROM self_wakes WHERE origin=? AND origin_ref IN ({','.join('?' for _ in conversation_scope_ids(origin_ref))}) "
                 "AND state='pending' ORDER BY created_at DESC LIMIT 1",
-                (origin, origin_ref),
+                (origin, *conversation_scope_ids(origin_ref)),
             )
             pending = _row(await cursor.fetchone())
             if pending is not None:
@@ -327,14 +328,14 @@ class SelfWakeRepository:
             )
             used = int((await cursor.fetchone())[0])
             cursor = await db.execute(
-                "SELECT * FROM self_wakes WHERE origin=? AND origin_ref=? AND "
+                f"SELECT * FROM self_wakes WHERE origin=? AND origin_ref IN ({','.join('?' for _ in conversation_scope_ids(origin_ref))}) AND "
                 "((state='expired' AND close_reason IN "
                 "('daily_quota_exhausted','expired')) OR "
                 "(state='consumed' AND trigger_outcome='provider_failed')) AND "
                 "COALESCE(finished_at, closed_at, consumed_at, created_at)>=? "
                 "ORDER BY COALESCE(finished_at, closed_at, consumed_at, created_at) DESC "
                 "LIMIT 1",
-                (origin, origin_ref, current - PROMPT_FAILURE_LOOKBACK_SECONDS),
+                (origin, *conversation_scope_ids(origin_ref), current - PROMPT_FAILURE_LOOKBACK_SECONDS),
             )
             recent = _row(await cursor.fetchone())
         if recent is not None:

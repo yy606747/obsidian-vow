@@ -40,6 +40,8 @@ from app.presence.prompt_context import (
 )
 from app.tools.ledger import execution_outcome, tool_invocation_ledger
 from app.tools.prompt_renderers import render_registered_capabilities
+from app.stickers import autonomous as sticker_turn
+from app.stickers.chat import StickerDelivery
 from app.tools.registry import registered_tools_for_surface, validate_turn_advertisement
 from app.tools.schemas import ToolContext
 from app.vows.service import vow_service
@@ -191,6 +193,8 @@ async def prepare_self_wake_turn(
 ) -> PreparedSelfWakeTurn:
     current = time.time() if now is None else float(now)
     conv_id = str(wake.get("conv_id") or "").strip()
+    from app.daily_chat.service import resolve_conversation_id
+    conv_id = resolve_conversation_id(conv_id)
     if not conv_id:
         raise SelfWakeTriggerError("missing_conv_id")
     target = await _load_target(conv_id)
@@ -213,8 +217,13 @@ async def prepare_self_wake_turn(
         mobile_screen_target=mobile_screen_target,
         now=current,
     )
+    from app.look_at_me.service import is_current
+    if "mobile.look_at_me" in runtime and not await is_current(conv_id):
+        runtime = runtime - {'mobile.look_at_me'}
     registered = frozenset(registered_tools_for_surface("self_wake"))
     requested = _requested_capabilities(wake)
+    # Ordinary expression and companionship need no advance reservation.
+    requested = requested | (runtime & {'mobile.look_at_me', 'sticker.send'})
     effective = frozenset(
         requested & runtime & registered & SELF_WAKE_SURFACE_CAPABILITIES
     )
@@ -316,7 +325,8 @@ async def prepare_self_wake_turn(
                 "实际挂载能力：" + ("、".join(sorted(effective)) or "无") + "\n"
                 "当前不可用能力：" + ("、".join(sorted(unavailable)) or "无") + "\n"
                 "当时想做的事只是你自己安排的念头，不是她现在的状态，也压不过最近聊天里她亲口说的话。\n"
-                "照着当时的念头和眼下的真实情况自然决定；不要解释你为什么这时候出现。"
+                f"照着当时的念头和眼下的真实情况自然决定，想对{user_name}说的心情可以直接说；"
+                "不用解释后台的唤醒或调度流程。"
             ),
             "attachments": [],
         }
@@ -361,9 +371,12 @@ async def _persist_visible_message(
     msg_id: str,
     content: str,
     created_at: float,
+    sticker_delivery: StickerDelivery | None = None,
+    sticker_feedback: dict | None = None,
 ) -> bool:
     cleaned = str(content or "").strip()
-    if not cleaned:
+    attachments = sticker_delivery.attachments if sticker_delivery else []
+    if not cleaned and not attachments:
         return False
     try:
         async with get_db() as db:
@@ -372,8 +385,8 @@ async def _persist_visible_message(
                 await db.execute(
                     "INSERT INTO messages "
                     "(id,conv_id,role,content,created_at,attachments) "
-                    "VALUES (?,?, 'assistant', ?,?, '[]')",
-                    (msg_id, conv_id, cleaned, created_at),
+                    "VALUES (?,?, 'assistant', ?,?, ?)",
+                    (msg_id, conv_id, cleaned, created_at, json.dumps(attachments, ensure_ascii=False)),
                 )
                 cursor = await db.execute(
                     "UPDATE conversations SET updated_at=? WHERE id=?",
@@ -381,6 +394,8 @@ async def _persist_visible_message(
                 )
                 if int(cursor.rowcount or 0) != 1:
                     raise SelfWakeTriggerError("origin_not_found")
+                await sticker_turn.finalize_in_tx(db, feedback=sticker_feedback,
+                    message_id=msg_id, delivery=sticker_delivery)
                 await db.commit()
             except BaseException:
                 await db.rollback()
@@ -396,7 +411,7 @@ async def _persist_visible_message(
                 "role": "assistant",
                 "content": cleaned,
                 "created_at": created_at,
-                "attachments": [],
+                "attachments": attachments,
             },
         }
     )
@@ -409,7 +424,8 @@ async def _persist_visible_message(
 
 def _tool_succeeded(execution: ActionExecution) -> bool:
     return any(
-        execution_outcome(result) in {"succeeded", "dispatched", "pending"}
+        result.tool_name != 'sticker.send'
+        and execution_outcome(result) in {"succeeded", "dispatched", "pending"}
         for result in execution.results
     )
 
@@ -468,6 +484,8 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
             **details,
         }
 
+    look_at_me_meta = {}
+    sticker_feedback = {}
     try:
         try:
             prepared = await prepare_self_wake_turn(wake, now=started_at)
@@ -479,6 +497,16 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
                 error=f"{type(exc).__name__}:{exc}",
             )
 
+        from app.look_at_me.service import inject_context as inject_look_at_me
+        from app.chat.worldbook import load_worldbook_names
+        lam_user_name, lam_ai_name = load_worldbook_names()
+        look_at_me_meta = await inject_look_at_me(
+            prepared.messages, conv_id=conv_id, turn_id=msg_id,
+            user_name=lam_user_name, ai_name=lam_ai_name)
+        if prepared.profile.allows_tool('sticker.send'):
+            sticker_feedback = await sticker_turn.inject_feedback(
+                prepared.messages, conv_id=conv_id, turn_id=msg_id,
+                user_name=lam_user_name, ai_name=lam_ai_name)
         context = ToolContext(
             conv_id=conv_id,
             msg_id=msg_id,
@@ -489,6 +517,7 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
             metadata={
                 **dict(context.metadata),
                 "advertised_tools": prepared.advertised_tools,
+                "sticker_context": {'source': 'self_wake', 'message': str(wake.get('intent') or '')[:500]},
                 "effective_capabilities": tuple(
                     sorted(prepared.effective_capabilities)
                 ),
@@ -609,15 +638,28 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
         else:
             execution_error = ""
         await _broadcast_action_results(execution)
+        sticker_delivery = await sticker_turn.complete_delivery(
+            postprocessed, execution=execution, profile=prepared.profile,
+            context=context, history=prepared.messages,
+            user_name=lam_user_name, ai_name=lam_ai_name,
+            core_call=call_self_wake_core,
+            pending_followup=any(r.tool_name in {'pc.screen_check', 'mobile.screen_check', 'location.poi_search', 'mobile.look_at_me'}
+                                 for r in execution.executed))
+        if sticker_delivery.supplement_text:
+            visible_text = sticker_delivery.supplement_text
+        if sticker_delivery.failed:
+            execution_error = 'sticker_supplement_failed'
         tool_success = _tool_succeeded(execution)
         had_tool_intent = bool(postprocessed.tool_intents)
 
-        if visible_text:
+        if visible_text or sticker_delivery.attachments:
             assistant_persisted = await _persist_visible_message(
                 conv_id=conv_id,
                 msg_id=msg_id,
                 content=visible_text,
                 created_at=time.time(),
+                **({'sticker_delivery': sticker_delivery, 'sticker_feedback': sticker_feedback}
+                   if sticker_delivery.attachments or sticker_delivery.supplemented_events or sticker_feedback else {}),
             )
             if not assistant_persisted:
                 return await conclude("message_persist_failed")
@@ -653,6 +695,10 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return await conclude("trigger_failed", error=f"{type(exc).__name__}:{exc}")
     finally:
+        await sticker_turn.release_feedback(sticker_feedback)
+        from app.look_at_me.repository import repository as look_at_me_repository
+        await look_at_me_repository.settle(look_at_me_meta, message_id=msg_id,
+            success=final_outcome in {'succeeded','tool_only','none_explicit'})
         advertised = prepared.advertised_tools if prepared is not None else ()
         await tool_invocation_ledger.record_turn(
             context,

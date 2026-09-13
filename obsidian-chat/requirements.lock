@@ -54,6 +54,8 @@ lazy-loader==0.5 \
     --hash=sha256:ab0ea149e9c554d4ffeeb21105ac60bed7f3b4fd69b1d2360a4add51b170b005
 llvmlite==0.49.0 \
     --hash=sha256:a8c0fc9d624bdc30a3d2db11eb2fb98f80fb209d20b37604eda516cd9b699cf4
+lxml==6.1.1 \
+    --hash=sha256:18b73c339ae29b90fd2d06e58ebd555a751bde9cd6bbd36cc0281b9a2c94e9d8
 multidict==6.7.1 \
     --hash=sha256:439cbebd499f92e9aa6793016a8acaa161dfa749ae86d20960189f5398a19144
 networkx==3.6.1 \
@@ -90,6 +92,10 @@ pymatting==1.1.15 \
     --hash=sha256:1bd7f04651f1e02b390b88b84cf97c7f4c871ad8568945e4303746bf3ab48ecc
 pyncm==1.8.1 \
     --hash=sha256:9b3ac92c3e6c9a291cd3ac8fdb51f1d653f77cf078e9d1b5776b4018677cb893
+pypdf==6.12.2 \
+    --hash=sha256:67b2699357a1f3f4c945940ea80826349ee507c9e2577724a14b4941982c104d
+python-docx==1.2.0 \
+    --hash=sha256:3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7
 python-dotenv==1.2.2 \
     --hash=sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a
 python-multipart==0.0.28 \

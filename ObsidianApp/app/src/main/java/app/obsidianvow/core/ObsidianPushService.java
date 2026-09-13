@@ -95,6 +95,10 @@ public class ObsidianPushService extends Service {
     private static final int NOTIF_FOREGROUND = 1;
     private static final int NOTIF_MSG_BASE   = 1000;
     private static final String NOTIF_MSG_TAG_PREFIX = "ai_message:";
+    private static final String PREF_MESSAGES_SEEN_THROUGH = "messages_seen_through_ms";
+    private static final String EXTRA_MESSAGE_CONVERSATION = "message_conversation_id";
+    private static final String EXTRA_SYSTEM_EXPIRES_AT = "system_expires_elapsed_ms";
+    private static final Object MESSAGE_NOTIFICATION_LOCK = new Object();
     private static final String PREF_NATIVE_ALARM_IDS = "native_alarm_ids";
     private static final String PREF_NATIVE_ALARM_CANCEL_PREFIX = "native_alarm_cancel_";
     private static final String PREF_NATIVE_ALARM_SET_PREFIX = "native_alarm_set_";
@@ -108,6 +112,8 @@ public class ObsidianPushService extends Service {
     private static volatile ObsidianPushService activeInstance;
 
     private OkHttpClient client;
+    private LookAtMeController lookAtMe;
+    String lookAtMeHttpBase() { return httpBaseFromWs(); }
     private volatile WebSocket webSocket;
     private volatile String serverUrl;
     private volatile String authToken = "";
@@ -120,6 +126,7 @@ public class ObsidianPushService extends Service {
     private static final int MAX_RECONNECT_DELAY = 30000;
     private volatile boolean shouldRun = true;
     private volatile boolean isForegroundActive = false;
+    private volatile boolean isChatReady = false;
 
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
@@ -218,9 +225,19 @@ public class ObsidianPushService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null) {
             String action = intent.getStringExtra("action");
+            if ("look_at_me_end".equals(action)) {
+                if (lookAtMe != null) lookAtMe.finish("manual");
+                return START_STICKY;
+            }
+            if ("set_chat_ready".equals(action)) {
+                isChatReady = isForegroundActive && intent.getBooleanExtra("active", false);
+                return START_STICKY;
+            }
             if ("set_foreground".equals(action)) {
                 isForegroundActive = intent.getBooleanExtra("active", false);
+                isChatReady = isForegroundActive && intent.getBooleanExtra("chat_ready", false);
                 if (isForegroundActive) {
+                    releaseSystemHeadsUp();
                     stopMusic(); // WebView 接管，停止原生播放
                     new Handler(Looper.getMainLooper()).post(() -> {
                         retryPendingNativeAlarmCancellations();
@@ -278,6 +295,7 @@ public class ObsidianPushService extends Service {
         startActivityThread();
         startSensingThread();
         startScreenPollThread();
+        if (lookAtMe == null) lookAtMe = new LookAtMeController(this, client);
         return START_STICKY;
     }
 
@@ -288,6 +306,7 @@ public class ObsidianPushService extends Service {
     public void onDestroy() {
         Log.i(TAG, "=== onDestroy ===");
         shouldRun = false;
+        if (lookAtMe != null) { lookAtMe.close(); lookAtMe = null; }
         wsGeneration.incrementAndGet();
         if (heartbeatThread != null) heartbeatThread.interrupt();
         if (locationThread != null) locationThread.interrupt();
@@ -971,7 +990,7 @@ public class ObsidianPushService extends Service {
         KeyguardManager keyguardManager = getSystemService(KeyguardManager.class);
         boolean deviceLocked = keyguardManager != null && keyguardManager.isKeyguardLocked();
         boolean shouldNotify = MessageNotificationPolicy.shouldNotify(
-                isForegroundActive,
+                isForegroundActive && isChatReady,
                 screenInteractive,
                 deviceLocked
         );
@@ -1374,13 +1393,15 @@ public class ObsidianPushService extends Service {
 
         Log.i(TAG, "NOTIFY " + aiName + ": " + text);
 
-        Intent i = new Intent(this, LauncherActivity.class);
-        i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        Intent i = WebViewActivity.openChatIntent(this);
         i.setData(Uri.parse("obsidianvow://message/" + Uri.encode(messageId)));
         PendingIntent pi = PendingIntent.getActivity(this, messageId.hashCode(), i,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
+        Bundle extras = new Bundle();
+        extras.putString(EXTRA_MESSAGE_CONVERSATION, data.optString("conv_id", ""));
         Notification notification = new NotificationCompat.Builder(this, CH_MESSAGE)
+                .setColor(0xffd4943a).setSubText("◆ Obsidian Vow")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle(aiName)
                 .setContentText(text)
@@ -1390,27 +1411,40 @@ public class ObsidianPushService extends Service {
                 .setWhen(whenMs)
                 .setShowWhen(true)
                 .setAutoCancel(false)
+                .addExtras(extras)
                 // 部分厂商 ROM 会把 ongoing 消息归为常驻状态并从锁屏隐藏。
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .build();
 
-        nm.notify(NOTIF_MSG_TAG_PREFIX + messageId, NOTIF_MSG_BASE, notification);
+        synchronized (MESSAGE_NOTIFICATION_LOCK) {
+            long seenThrough = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE)
+                    .getLong(PREF_MESSAGES_SEEN_THROUGH, 0L);
+            // 前端补拉可能比原生推送更快；已读通知不能因晚到的同一事件重新出现。
+            if (whenMs <= seenThrough) return;
+            nm.notify(NOTIF_MSG_TAG_PREFIX + messageId, NOTIF_MSG_BASE, notification);
+        }
     }
 
     private void showTransientNotif(String ch, String title, String text, boolean high,
                                     boolean fullScreen, long timeoutMs) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            new Handler(Looper.getMainLooper()).post(
+                    () -> showTransientNotif(ch, title, text, high, fullScreen, timeoutMs));
+            return;
+        }
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
 
         Log.i(TAG, "NOTIFY " + title + ": " + text);
 
         int requestCode = notifCounter++;
-        Intent i = new Intent(this, LauncherActivity.class);
-        i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        Intent i = WebViewActivity.openChatIntent(this);
         PendingIntent pi = PendingIntent.getActivity(this, requestCode, i,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
+        Bundle extras = new Bundle();
+        extras.putLong(EXTRA_SYSTEM_EXPIRES_AT, SystemClock.elapsedRealtime() + timeoutMs);
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, ch)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle(title)
@@ -1422,13 +1456,16 @@ public class ObsidianPushService extends Service {
                 .setShowWhen(true)
                 .setAutoCancel(true)
                 .setTimeoutAfter(timeoutMs)
+                .setOnlyAlertOnce(true)
+                .addExtras(extras)
                 .setCategory(high ? NotificationCompat.CATEGORY_ALARM : NotificationCompat.CATEGORY_STATUS)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
 
         if (high) {
             b.setDefaults(NotificationCompat.DEFAULT_ALL);
         }
-        if (fullScreen) {
+        // 解锁使用手机时走普通横幅；只有锁屏/熄屏时才请求短暂的亮屏提示页。
+        if (fullScreen && shouldUseSystemFullScreen()) {
             Intent alertIntent = SystemAlertActivity.createIntent(this, title, text);
             alertIntent.setData(Uri.parse(
                     "obsidianvow://system-alert/" + requestCode + "/" + System.currentTimeMillis()));
@@ -1454,18 +1491,71 @@ public class ObsidianPushService extends Service {
         if (context == null || cutoffMs <= 0) return;
         NotificationManager nm = context.getSystemService(NotificationManager.class);
         if (nm == null) return;
-        int cleared = 0;
+        synchronized (MESSAGE_NOTIFICATION_LOCK) {
+            SharedPreferences prefs = context.getSharedPreferences(LauncherActivity.PREFS, Context.MODE_PRIVATE);
+            long seenThrough = Math.max(cutoffMs, prefs.getLong(PREF_MESSAGES_SEEN_THROUGH, 0L));
+            prefs.edit().putLong(PREF_MESSAGES_SEEN_THROUGH, seenThrough).apply();
+            int cleared = 0;
+            for (StatusBarNotification sbn : nm.getActiveNotifications()) {
+                Notification notification = sbn.getNotification();
+                String channelId = notification.getChannelId();
+                if (!CH_MESSAGE.equals(channelId) && !CH_MESSAGE_V2.equals(channelId)) continue;
+                if (notification.when <= seenThrough) {
+                    if (sbn.getTag() == null) nm.cancel(sbn.getId());
+                    else nm.cancel(sbn.getTag(), sbn.getId());
+                    cleared++;
+                }
+            }
+            Log.d(TAG, "cleared message notifications=" + cleared + " through=" + seenThrough);
+        }
+    }
+
+    public static String latestUnreadConversationId(Context context) {
+        NotificationManager nm = context.getSystemService(NotificationManager.class);
+        if (nm == null) return "";
+        String conversationId = "";
+        long latest = 0L;
         for (StatusBarNotification sbn : nm.getActiveNotifications()) {
             Notification notification = sbn.getNotification();
-            String channelId = notification.getChannelId();
-            if (!CH_MESSAGE.equals(channelId) && !CH_MESSAGE_V2.equals(channelId)) continue;
-            if (notification.when <= cutoffMs) {
-                if (sbn.getTag() == null) nm.cancel(sbn.getId());
-                else nm.cancel(sbn.getTag(), sbn.getId());
-                cleared++;
+            if (!CH_MESSAGE.equals(notification.getChannelId()) || notification.extras == null) continue;
+            String candidate = notification.extras.getString(EXTRA_MESSAGE_CONVERSATION, "");
+            if (!candidate.isEmpty() && notification.when >= latest) {
+                conversationId = candidate;
+                latest = notification.when;
             }
         }
-        Log.d(TAG, "cleared message notifications=" + cleared + " through=" + cutoffMs);
+        return conversationId;
+    }
+
+    private boolean shouldUseSystemFullScreen() {
+        PowerManager pm = getSystemService(PowerManager.class);
+        KeyguardManager km = getSystemService(KeyguardManager.class);
+        return SystemNotificationPolicy.shouldUseFullScreen(
+                pm == null || pm.isInteractive(), km != null && km.isKeyguardLocked());
+    }
+
+    private void releaseSystemHeadsUp() {
+        if (shouldUseSystemFullScreen()) return;
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        for (StatusBarNotification sbn : nm.getActiveNotifications()) {
+            Notification notification = sbn.getNotification();
+            if (!CH_ALARM.equals(notification.getChannelId()) || notification.fullScreenIntent == null) continue;
+            long expiresAt = notification.extras.getLong(EXTRA_SYSTEM_EXPIRES_AT, 0L);
+            long remaining = expiresAt > 0
+                    ? SystemNotificationPolicy.remainingLifetime(expiresAt, SystemClock.elapsedRealtime())
+                    : Math.max(0L, notification.getTimeoutAfter() - (System.currentTimeMillis() - sbn.getPostTime()));
+            if (remaining <= 0) {
+                nm.cancel(sbn.getTag(), sbn.getId());
+                continue;
+            }
+            Notification updated = Notification.Builder.recoverBuilder(this, notification)
+                    .setFullScreenIntent(null, false)
+                    .setOnlyAlertOnce(true)
+                    .setTimeoutAfter(remaining)
+                    .build();
+            nm.notify(sbn.getTag(), sbn.getId(), updated);
+        }
     }
 
     // ══════════════════════════════════════════════════════════
@@ -1495,8 +1585,7 @@ public class ObsidianPushService extends Service {
     }
 
     private Notification buildKeepAlive(String text) {
-        Intent i = new Intent(this, LauncherActivity.class);
-        i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        Intent i = WebViewActivity.openChatIntent(this);
         PendingIntent pi = PendingIntent.getActivity(this, 0, i,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, CH_KEEPALIVE)
@@ -1811,11 +1900,13 @@ public class ObsidianPushService extends Service {
                     case Intent.ACTION_SCREEN_ON:
                         Log.i(TAG, "📱 Screen ON");
                         screenOn = true;
+                        releaseSystemHeadsUp();
                         lastReportedApp = "__screen_on__";
                         new Thread(() -> postActivityToServer("screen_on"), "ScreenOn").start();
                         break;
                     case Intent.ACTION_USER_PRESENT:
                         Log.i(TAG, "🔓 User unlocked");
+                        releaseSystemHeadsUp();
                         // 解锁事件走 sensing 通道（社交脉搏的补充信号）
                         new Thread(() -> {
                             if (sensingReporter != null) sensingReporter.reportUnlock();

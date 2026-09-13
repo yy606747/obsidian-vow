@@ -58,8 +58,8 @@ def _control_spec_kwargs(context: ControlPromptContext, *, toy_enabled: bool) ->
 
 def _no_device_capability(user_name: str) -> str:
     return (
-        f"当前不处于可控制设备的状态。不要使用 [TOY:...] 指令，"
-        f"也不要暗示你能操控{user_name}身上的任何设备。"
+        "当前未启用玩具控制。不要使用 [TOY:...] 指令，"
+        f"也不要假装能操控{user_name}身上的玩具；其他能力按本轮列出的可用项使用。"
     )
 
 
@@ -125,7 +125,7 @@ def _dom_spec(body: DomInitiativeBody, *, user_name: str, conv_id: str, control_
         ability = _no_device_capability(user_name) + build_aftercare_prompt_block(control_context, user_name)
         event_block = (
             f"[系统事件·主动提醒] 当前不处于控制状态。主动说一句话（≤30字），"
-            f"不要使用 [TOY:...] 指令，不要声称能控制设备。保持你的人设语气。"
+            f"不要使用 [TOY:...] 指令，不要声称能控制玩具。保持你的人设语气。"
         )
         if control_context.aftercare_active:
             event_block = (
@@ -165,8 +165,8 @@ def _whisper_spec(body: WhisperInitiativeBody, *, user_name: str, control_contex
     else:
         ability = _no_device_capability(user_name) + build_aftercare_prompt_block(control_context, user_name)
         event_block = (
-            f"[系统事件·密语提醒] 当前不处于可控制设备的状态。主动说一句短消息（≤25字），"
-            f"不要使用 [TOY:...] 指令，不要声称能控制设备。"
+            f"[系统事件·密语提醒] 当前未启用玩具控制。主动说一句短消息（≤25字），"
+            f"不要使用 [TOY:...] 指令，不要声称能控制玩具。"
         )
         if control_context.aftercare_active:
             event_block = (

@@ -5,6 +5,14 @@ function fmtTime(ts) {
 }
 
 // ── 渲染 ──
+function chatErrorDisplay(errorText) {
+  const detail = String(errorText || "");
+  if (/empty_response|本轮没有可交付的文字或附件/.test(detail)) {
+    return '这次没有收到回复，点“重试”再试一次。';
+  }
+  return '这次回复没有完成，点“重试”再试一次。';
+}
+
 function renderModelSelect() {
   $("modelSelect").innerHTML = models.map(m =>
     `<option value="${escHtml(m.key)}">${escHtml(m.key)}${m.audio_input === true ? ' · 🎙' : ''}</option>`
@@ -26,20 +34,29 @@ function renderConvList() {
 }
 
 function renderMessages() {
+  window.ChatMarkdown?.suspend();
+  window.ChatHeartNotes?.beforeRender();
   const el = $("messages");
 
   if (!currentConvId) {
-    el.innerHTML = '<div class="empty-state"><div class="icon">💬</div><div class="hint">选择或创建一个对话开始聊天</div></div>';
+    el.innerHTML = `<div class="empty-state"><div class="icon">${window.VowUI?.icon('chat') || '◇'}</div><div class="hint">选择对话或新建对话</div></div>`;
+    _restoreMoodGlows();
+    window.ChatMarkdown?.didRender();
+    window.ChatHeartNotes?.restore();
     return;
   }
 
   if (currentMessages.length === 0) {
-    el.innerHTML = '<div class="empty-state"><div class="icon">✨</div><div class="hint">发送第一条消息开始对话</div></div>';
+    el.innerHTML = `<div class="empty-state"><div class="icon">${window.VowUI?.icon('chat') || '◇'}</div><div class="hint">暂无消息</div><div class="vow-empty-note">可以发送文字、语音或图片。</div></div>`;
+    _restoreMoodGlows();
+    window.ChatMarkdown?.didRender();
+    window.ChatHeartNotes?.restore();
     return;
   }
 
   const loadMoreBtn = hasMoreMessages ? '<button class="load-more-bar" data-render-action="loadOlderMessages">⬆ 加载更早的消息</button>' : '';
   el.innerHTML = loadMoreBtn + currentMessages.map(m => {
+    if (m.inherited) return '';
     const isUser = m.role === "user";
     const id = escHtml(m.id);
     const createdAt = Number(m.created_at) || 0;
@@ -62,20 +79,26 @@ function renderMessages() {
     const primaryAction = isUser
       ? `<button data-msg-action="edit" data-msg-id="${id}">编辑</button>`
       : `<button data-msg-action="regenerate" data-msg-id="${id}">${isErrorMsg ? '重试' : '重新生成'}</button>`;
-    const actionsHtml = `${primaryAction}<button data-msg-action="delete" data-msg-id="${id}">删除</button><button data-msg-action="copy" data-msg-id="${id}">复制</button>`;
+    const collectAction = (isUser || m.role === 'assistant') && m.attachments?.some(item => item?.type === 'sticker' && item.id)
+      ? `<button data-msg-action="collectSticker" data-msg-id="${id}">收藏表情</button>` : '';
+    const actionsHtml = `${primaryAction}${collectAction}<button data-msg-action="delete" data-msg-id="${id}">删除</button><button data-msg-action="copy" data-msg-id="${id}">复制</button>`;
     const dotsLeft = isUser ? `<button class="msg-dots" data-msg-action="toggleMenu" data-msg-id="${id}">&#8943;</button>` : '';
     const dotsRight = !isUser ? `<button class="msg-dots" data-msg-action="toggleMenu" data-msg-id="${id}">&#8943;</button>` : '';
-    const displayContent = isUser ? String(m.content || "") : cleanAssistantContent(m.content);
-    const parts = isUser ? displayContent.split(/\n+/).filter(p => p.trim()) : displayContent.split(/\n{2,}/).filter(p => p.trim());
-    const bubblesHtml = parts.length > 1
-      ? '<div class="msg-bubbles">' + parts.map(p => `<div class="msg-bubble">${formatMsg(p)}</div>`).join('') + renderAttachments(m.attachments) + '</div>'
-      : `<div class="msg-bubble">${formatMsg(displayContent)}${renderAttachments(m.attachments)}</div>`;
+    const displayContent = isErrorMsg ? chatErrorDisplay(m.error_text || m.content)
+      : isUser ? String(m.content || "") : cleanAssistantContent(m.content);
+    const stickerOnly = !displayContent.trim() && m.attachments?.length && m.attachments.every(item => item?.type === 'sticker');
+    const layout = window.ChatMarkdown?.prepare(displayContent, { plain: isErrorMsg, msgId: m.id })
+      || { expanded: false, html: `<div class="msg-bubble">${formatMsg(displayContent)}</div>` };
+    const attachmentsHtml = stickerOnly
+      ? `<div class="msg-sticker-only">${renderAttachments(m.attachments)}</div>`
+      : renderAttachments(m.attachments);
     const avatarSrc = avatarUrl(isUser ? 'user' : 'ai');
-    const ttsBtn = !isUser && !isErrorMsg ? `<button class="tts-replay-btn" data-msg-action="replayTTS" data-msg-id="${id}" title="重听语音">🔊</button>` : '';
+    const avatarHtml = `<img class="msg-avatar" src="${avatarSrc}" alt="">`;
+    const ttsBtn = !isUser && !isErrorMsg && !stickerOnly ? `<button class="tts-replay-btn" data-msg-action="replayTTS" data-msg-id="${id}" title="重听语音">${window.VowUI?.icon('volume') || '♪'}</button>` : '';
     return `
-    <div class="msg-row ${m.role}${isErrorMsg ? ' transient-error' : ''}" id="m_${id}" data-created-at="${createdAt}">
+    <div class="msg-row ${m.role}${isErrorMsg ? ' transient-error' : ''}${layout.expanded ? ' md-expanded' : ''}" id="m_${id}" data-created-at="${createdAt}">
       <div class="msg-avatar-col">
-        <img class="msg-avatar" src="${avatarSrc}" alt="">
+        ${m.role === 'assistant' ? `<span class="msg-avatar-frame">${avatarHtml}</span>` : avatarHtml}
         ${ttsBtn}
       </div>
       <div class="msg-body">
@@ -83,7 +106,8 @@ function renderMessages() {
           ${dotsLeft}<span class="msg-role-name">${roleLabel}</span><span class="msg-time">${time}</span>${dotsRight}
           <div class="msg-menu" id="menu_${m.id}">${actionsHtml}</div>
         </div>
-        ${bubblesHtml}
+        <div class="msg-content" data-msg-content>${displayContent.trim() ? layout.html : ''}</div>
+        <div class="msg-attachments">${attachmentsHtml}</div>
       </div>
     </div>`;
   }).join("");
@@ -145,15 +169,11 @@ function renderMessages() {
       (msgBody || row).appendChild(indicator);
     }
   }
-  // 恢复 [HEART] 心语气泡
-  for (const hwMsgId of _heartWhisperMsgIds) {
-    _applyHeartHint(hwMsgId);
-  }
-  // 恢复 AI 情绪光圈
-  for (const mid of Object.keys(_msgMoods)) {
-    _applyMoodGlow(mid);
-  }
   scrollBottom();
+  // History, WebSocket updates and stream completion share the same mood state.
+  _restoreMoodGlows();
+  window.ChatMarkdown?.didRender();
+  window.ChatHeartNotes?.restore();
   scheduleVisibleMessagesSeen();
 }
 
@@ -169,19 +189,30 @@ function scheduleVisibleMessagesSeen() {
 
 function reportVisibleMessagesSeen() {
   if (document.visibilityState !== "visible") return;
-  if (!window.ObsidianNotifications || typeof window.ObsidianNotifications.seenThrough !== "function") return;
+  if (typeof chatSyncPending !== 'undefined' && (chatSyncPending || !isChatForeground())) return;
+  const bridge = window.ObsidianNotifications;
+  if (!bridge) return;
+  if ($('subPageOverlay')?.classList.contains('show')) return;
   const container = $("messages");
   if (!container) return;
   const viewport = container.getBoundingClientRect();
+  if (viewport.width <= 0 || viewport.height <= 0) return;
   let seenThrough = 0;
-  for (const row of container.querySelectorAll(".msg-row.assistant[data-created-at]")) {
-    const rect = row.getBoundingClientRect();
-    if (rect.bottom <= viewport.top || rect.top >= viewport.bottom) continue;
-    seenThrough = Math.max(seenThrough, Number(row.dataset.createdAt) || 0);
+  // 打开聊天即确认最新已渲染的一批消息；流式占位和临时错误不算已读。
+  for (const message of currentMessages) {
+    if (message.role !== 'assistant' || message.persisted === false || message.transient_error) continue;
+    if (message.id === streamingAiId && message.persisted !== true) continue;
+    if (!document.getElementById('m_' + message.id)) continue;
+    seenThrough = Math.max(seenThrough, Number(message.created_at) || 0);
   }
-  if (seenThrough > 0) {
-    try { window.ObsidianNotifications.seenThrough(seenThrough); } catch (e) {}
+  // 日切可能只继承了最后一条文字输入；进入并成功刷新仍确认此前全部消息通知。
+  if (typeof dailyChatState !== 'undefined' && dailyChatState?.enabled) {
+    seenThrough = Math.max(seenThrough, Number(dailyChatState.latest_assistant_at) || 0);
   }
+  try {
+    if (typeof bridge.synced === 'function') bridge.synced(seenThrough);
+    else if (seenThrough > 0 && typeof bridge.seenThrough === 'function') bridge.seenThrough(seenThrough);
+  } catch (_) {}
 }
 
 let renderEventsBound = false;
@@ -243,6 +274,10 @@ function bindRenderEvents() {
         break;
       case "copy":
         copyMsg(id);
+        closeMsgMenus();
+        break;
+      case "collectSticker":
+        ChatApp.getModule("stickers")?.collectMessage(id);
         closeMsgMenus();
         break;
       case "replayTTS":

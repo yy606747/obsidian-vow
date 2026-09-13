@@ -69,6 +69,10 @@ ALL_COMMANDS = frozenset({
     "presence_draw",
     "presence_show",
     "self_wake",
+    "look_at_me",
+    "sticker_save",
+    "sticker_send",
+    "sticker_create",
 })
 
 
@@ -438,6 +442,13 @@ class PostProcessor:
         # 数据，不能借一条私有通道触发另一条。
         structured_like = looks_like_structured_reply(text)
         text, structured_actions, structured_ok = _extract_structured_reply(text)
+        # Free expressions are inert data even if they quote another control tag.
+        from .control_syntax import iter_value_control_markers
+        protected_invitations = {}
+        for marker in reversed(list(iter_value_control_markers(text, names={'陪我', '发图', '做表情'}))):
+            token = f'\ue000look_at_me_{len(protected_invitations)}\ue001'
+            protected_invitations[token] = text[marker.start:marker.end]
+            text = text[:marker.start] + token + text[marker.end:]
         candidate_text = text if structured_ok else ("" if structured_like else raw_for_candidates)
         structured_actions = _drop_vow_carrying_actions(structured_actions)
         working_model_candidate = None
@@ -486,7 +497,12 @@ class PostProcessor:
             existing_descriptions=ring_touch_descriptions,
         )
         structured_intents = parse_structured_tool_intents(structured_actions, enabled_commands=enabled)
-        legacy_intents = parse_tool_intents(text, enabled_commands=enabled, id_offset=len(structured_intents))
+        parser_text = text
+        for token, original in protected_invitations.items():
+            parser_text = parser_text.replace(token, original)
+            candidate_text = candidate_text.replace(token, original)
+            text = text.replace(token, '')
+        legacy_intents = parse_tool_intents(parser_text, enabled_commands=enabled, id_offset=len(structured_intents))
         tool_intents = [*structured_intents, *legacy_intents]
         ring_touch_descriptions.extend(
             _infer_ring_touch_descriptions(text, enabled=enabled, existing=ring_touch_descriptions)

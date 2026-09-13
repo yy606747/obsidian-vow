@@ -199,18 +199,17 @@ def test_night_prompt_never_names_an_exit_the_profile_disabled():
 
     with_reflect = _night_block(bootstrap=False, reflection=True)
     assert "[OPPORTUNITY_REFLECT]" in with_reflect
-    assert "三选一" in with_reflect
+    assert "单独选择一个出口" in with_reflect
 
     without_reflect = _night_block(bootstrap=False, reflection=False)
     assert "OPPORTUNITY_REFLECT" not in without_reflect
-    assert "二选一" in without_reflect
+    assert "单独选择一个出口" in without_reflect
     assert "[OPPORTUNITY_NONE]" in without_reflect
 
     bootstrap = _night_block(bootstrap=True, reflection=False)
     assert "OPPORTUNITY_REFLECT" not in bootstrap
-    assert "OPPORTUNITY_NONE" not in bootstrap
-    # The shared precedence tail must not offer speech or a null exit either.
-    assert "如果不想行动，就使用规定的空操作标记" not in bootstrap
+    assert "[OPPORTUNITY_NONE]" in bootstrap
+    # Only the desktop draw has a bootstrap restriction; speech stays disabled.
     assert "如果选择说话" not in bootstrap
 
 

@@ -16,13 +16,22 @@ class ScheduleAbilityPrompt(str):
         return value
 
 
-def build_abilities_block(user_name: str, schedule_text: str) -> str:
+def build_abilities_block(user_name: str, schedule_text: str, *, ai_name: str | None = None) -> str:
+    from app.chat.worldbook import load_worldbook_names
+    from app.stickers.service import chat_capabilities
+    if not ai_name:
+        _, ai_name = load_worldbook_names()
     available_tools = tuple(tool for tool in registered_tools_for_surface("schedule") if tool != "schedule.alarm")
-    rendered = render_registered_capabilities("schedule", capabilities=available_tools, context={"user_name": user_name})
+    if 'sticker.send' not in chat_capabilities():
+        available_tools = tuple(tool for tool in available_tools if tool != 'sticker.send')
+    rendered = render_registered_capabilities("schedule", capabilities=available_tools,
+                                              context={"user_name": user_name, "ai_name": ai_name})
     abilities = [prose for _tool_name, prose in rendered]
-    block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n"
+    block = f"[系统能力] {ai_name}可以在回复中根据对话氛围，善用以下指令：\n"
     block += "\n".join(f"{i+1}. {ability}" for i, ability in enumerate(abilities))
-    block += f"\n\n【指令使用建议】大多数回复直接聊天即可，无需每条都用指令。只有在{user_name}明确要求、你刚承诺提醒/记录，或上下文确实需要系统动作时，才使用对应指令。"
+    block += f"\n\n【指令使用建议】日程和音乐指令只在{user_name}明确要求、{ai_name}刚承诺提醒/记录，或上下文确实需要系统动作时使用。"
+    if 'sticker.send' in available_tools:
+        block += f"发表情和说话一样，由{ai_name}自然选择，也可以只发表情。"
     block += f"\n\n【当前日程列表】\n{schedule_text}"
     return ScheduleAbilityPrompt(
         block,

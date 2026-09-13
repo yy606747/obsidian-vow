@@ -566,16 +566,20 @@ class TideRendererRegistry:
         )
 
     async def _conversation_model_key(self, conv_id: str) -> str:
+        from app.daily_chat.service import resolve_conversation_id
+        conv_id = resolve_conversation_id(conv_id)
         async with get_db() as db:
             cur = await db.execute("SELECT model FROM conversations WHERE id=?", (conv_id,))
             row = await cur.fetchone()
             return str(row[0] or "") if row else ""
 
     async def _latest_user_text(self, conv_id: str) -> str:
+        from app.daily_chat.service import conversation_scope_ids
+        scope = conversation_scope_ids(conv_id)
         async with get_db() as db:
             cur = await db.execute(
-                "SELECT content FROM messages WHERE conv_id=? AND role='user' ORDER BY created_at DESC LIMIT 1",
-                (conv_id,),
+                f"SELECT content FROM messages WHERE conv_id IN ({','.join('?' for _ in scope)}) AND role='user' ORDER BY created_at DESC LIMIT 1",
+                scope,
             )
             row = await cur.fetchone()
             return str(row[0] or "")[:500] if row else ""

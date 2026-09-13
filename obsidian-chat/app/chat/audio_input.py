@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from config import UPLOADS_DIR
+from app.stickers.attachments import InvalidStickerAttachment, is_sticker, normalize_sticker_request
+from app.documents.service import is_document, normalize_document, InvalidDocument, MAX_MESSAGE_CHARS
 
 
 AUDIO_INPUT_UNAVAILABLE_CODE = "audio_input_unavailable"
@@ -103,7 +105,7 @@ def uploaded_attachment_path(attachment: Any) -> Path | None:
 
 
 def normalize_chat_attachments(attachments: Iterable[Any] | None) -> list[Any]:
-    """Keep legacy URL attachments and canonicalize structured voice messages."""
+    """Keep ordinary image URLs distinct from structured voice and sticker messages."""
 
     normalized: list[Any] = []
     for item in attachments or []:
@@ -123,8 +125,18 @@ def normalize_chat_attachments(attachments: Iterable[Any] | None) -> list[Any]:
         if not isinstance(item, dict):
             raise InvalidAudioAttachment("附件格式无效")
 
+        if is_document(item):
+            normalized.append(normalize_document(item))
+            continue
+
+        if is_sticker(item):
+            if any(is_sticker(value) for value in normalized):
+                raise InvalidStickerAttachment('每条消息最多发送一张表情')
+            normalized.append(normalize_sticker_request(item))
+            continue
+
         if not is_audio_attachment(item):
-            raise InvalidAudioAttachment("只允许结构化语音附件")
+            raise InvalidAudioAttachment("附件格式无效")
 
         fmt = _validate_audio_url_and_format(item)
         path = uploaded_attachment_path(item)
@@ -145,6 +157,11 @@ def normalize_chat_attachments(attachments: Iterable[Any] | None) -> list[Any]:
         if name:
             voice["name"] = Path(name).name[:255]
         normalized.append(voice)
+    documents = [item for item in normalized if is_document(item)]
+    if len(documents) > 3:
+        raise InvalidDocument('每条消息最多附带 3 个文档。')
+    if sum(item['char_count'] for item in documents) > MAX_MESSAGE_CHARS:
+        raise InvalidDocument('本条消息的文件正文合计超过 90,000 字，请分开发送。')
     return normalized
 
 

@@ -195,6 +195,10 @@ body {
 #subPageOverlay.show { display: flex; }
 #subPageFrame { flex: 1; border: none; width: 100%; }
 </style>
+<link rel="stylesheet" href="/static/home.css?v=20260913-refined">
+<script src="/static/home.js?v=20260913-refined" defer></script>
+<link rel="stylesheet" href="/static/gold-dust.css?v=20260913-gold-dust">
+<script src="/static/gold-dust.js?v=20260913-gold-dust" defer></script>
 </head>
 <body>
 
@@ -324,8 +328,7 @@ function updateBackground() {
 renderApps();
 updateClock();
 updateBackground();
-setInterval(updateClock, 15000);
-setInterval(updateBackground, 60000);
+// home.js refreshes the clock only while this page is visible.
 </script>
 <script src="/static/web_push.js?v=20260905-brand"></script>
 </body>

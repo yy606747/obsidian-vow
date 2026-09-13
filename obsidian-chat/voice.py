@@ -247,10 +247,13 @@ class VoiceWakeup:
         # 获取最近活跃的对话
         async with get_db() as db:
             db.row_factory = __import__('aiosqlite').Row
-            cur = await db.execute(
-                "SELECT id FROM conversations ORDER BY updated_at DESC LIMIT 1"
-            )
-            conv = await cur.fetchone()
+            from app.daily_chat.service import active_conversation_in_tx
+            conv = await active_conversation_in_tx(db)
+            if conv is None:
+                cur = await db.execute(
+                    "SELECT id FROM conversations ORDER BY updated_at DESC LIMIT 1"
+                )
+                conv = await cur.fetchone()
 
         if not conv:
             print("[Voice] No conversation found")

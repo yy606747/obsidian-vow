@@ -55,6 +55,14 @@ class ModeService:
     def capabilities_for_mode(self, mode: str | ChatMode | None) -> tuple[str, ...]:
         normalized = self.normalize_mode(mode)
         capabilities = MODE_CAPABILITIES.get(normalized, BASE_TOOL_CAPABILITIES)
+        from app.look_at_me.service import available
+        if available():
+            capabilities = (*capabilities, "mobile.look_at_me")
+        from app.stickers.service import chat_capabilities
+        stickers = chat_capabilities()
+        if normalized in {ChatMode.DEVICE_CONTROL, ChatMode.INTIMATE, ChatMode.CONTROL_SESSION}:
+            stickers = tuple(tool for tool in stickers if tool != "sticker.send")
+        capabilities = (*capabilities, *stickers)
         if SETTINGS.get("image_memory_enabled") is True:
             capabilities = (*capabilities, "memory.view_image")
         if ring_touch_enabled() and RING_TOUCH_CAPABILITY not in capabilities:

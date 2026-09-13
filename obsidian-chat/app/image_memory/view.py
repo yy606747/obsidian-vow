@@ -59,6 +59,11 @@ def image_followup_prompt(result: dict, *, user_name: str, ai_name: str) -> str:
 
 
 async def followup(context: ToolContext, result: dict) -> dict:
+    from dataclasses import replace
+    from app.daily_chat.service import resolve_conversation_id, conversation_scope_ids, cross_day_prompt
+    context = replace(context, conv_id=resolve_conversation_id(context.conv_id))
+    scope = conversation_scope_ids(context.conv_id)
+    placeholders = ','.join('?' for _ in scope)
     if not available(context.model_key or ""):
         return {"status": "disabled"}
     try:
@@ -71,7 +76,7 @@ async def followup(context: ToolContext, result: dict) -> dict:
             return {"status": "source_missing"}
         # 父回复被重生成或删除时，不再追加旧请求的结果。
         parent = await (await db.execute(
-            "SELECT 1 FROM messages WHERE id=? AND conv_id=? AND role='assistant'", (context.msg_id, context.conv_id),
+            f"SELECT 1 FROM messages WHERE id=? AND conv_id IN ({placeholders}) AND role='assistant'", (context.msg_id, *scope),
         )).fetchone()
         if not parent:
             return {"status": "parent_missing"}
@@ -84,6 +89,7 @@ async def followup(context: ToolContext, result: dict) -> dict:
     messages = build_worldbook_prefix(wb)
     if vow_block:
         messages += [{"role": "user", "content": vow_block}, {"role": "assistant", "content": "（嗯，这些一直都算数。）"}]
+    messages += await cross_day_prompt(context.conv_id, user_name=user_name, ai_name=ai_name, db_factory=get_db)
     messages += [{"role": row[0], "content": row[1]} for row in reversed(rows)]
     messages.append({"role": "user", "content": image_followup_prompt(result, user_name=user_name, ai_name=ai_name),
                      "attachments": [{"url": result["attachment_url"], "mime_type": result["mime_type"],
@@ -122,8 +128,8 @@ async def followup(context: ToolContext, result: dict) -> dict:
             return {"status": "source_missing_or_disabled"}
         cur = await db.execute(
             "INSERT INTO messages (id,conv_id,role,content,created_at,attachments) "
-            "SELECT ?,?,'assistant',?,?,'[]' WHERE EXISTS (SELECT 1 FROM messages WHERE id=? AND conv_id=?)",
-            (msg_id, context.conv_id, processed.content, now, context.msg_id, context.conv_id),
+            f"SELECT ?,?,'assistant',?,?,'[]' WHERE EXISTS (SELECT 1 FROM messages WHERE id=? AND conv_id IN ({placeholders}))",
+            (msg_id, context.conv_id, processed.content, now, context.msg_id, *scope),
         )
         if cur.rowcount == 0:
             return {"status": "parent_missing"}

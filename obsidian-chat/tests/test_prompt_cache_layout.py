@@ -1,5 +1,8 @@
 import asyncio
+from copy import deepcopy
 from types import SimpleNamespace
+
+import pytest
 
 from app.chat import chat_turn, prompt_builder
 from app.chat.models import MsgCreate
@@ -110,6 +113,76 @@ def test_ability_builder_splits_stable_commands_from_runtime_context(monkeypatch
     assert "召回内容是帮助理解关系连续性的证据" in stable
     assert "当前日程列表" not in stable
     assert "当前日程列表" in dynamic
+
+
+@pytest.mark.parametrize("source", ["send", "regenerate"])
+def test_time_capability_status_changes_only_runtime_and_respects_enabled_set(monkeypatch, source):
+    from app.chat import worldbook
+
+    initial = {
+        "self_wake_now_local": "2027-01-15T08:00+00:00",
+        "self_wake_timezone": "UTC",
+        "self_wake_quiet_hours": {"enabled": True, "start": "00:00", "end": "07:00"},
+        "self_wake_status": {"pending": None, "quota": {"limit": 3, "used": 1, "remaining": 2}},
+        "self_wake_legal_capabilities": (),
+    }
+    context = deepcopy(initial)
+
+    async def fake_self_wake_context(_conv_id):
+        return context
+
+    async def no_schedule_context():
+        return ""
+
+    monkeypatch.setattr(worldbook, "load_worldbook_names", lambda: ("小栀", "阿澈"))
+    monkeypatch.setattr(prompt_builder, "_self_wake_prompt_context", fake_self_wake_context)
+    monkeypatch.setattr(prompt_builder, "_build_schedule_and_location_block", no_schedule_context)
+    monkeypatch.setattr(prompt_builder, "_build_context_delivery_block", lambda _name: "")
+    monkeypatch.setattr(prompt_builder, "_append_runtime_location_capability", lambda *_args, **_kwargs: None)
+    markers = {
+        "schedule.alarm": "[ALARM:",
+        "schedule.reminder": "[REMINDER:",
+        "schedule.monitor": "[Monitor:",
+        "self_wake.schedule": "[SELF_WAKE:",
+        "self_wake.cancel": "[SELF_WAKE_CANCEL]",
+    }
+
+    def build(capabilities):
+        kwargs = {"conv_id": "conv-time-cache", "user_name": "小栀", "capabilities": capabilities}
+        if source == "send":
+            return asyncio.run(prompt_builder.build_send_ability_block(body=MsgCreate(content="继续聊"), **kwargs))
+        return asyncio.run(prompt_builder.build_regenerate_ability_block(
+            **kwargs, ai_dom_mode=False, safeword="", dom_history="", cnc_enabled=False,
+            cnc_weakness="", resist_hits=0, short_streak=0, reply_delay_ms=0,
+            compliance_streak=0, session_elapsed=0, scene_name="", scene_elapsed=0,
+            since_last_punish=None, ratchet_valley=0, debt=0, stubborn_streak=0,
+            whisper_mode=False,
+        ))
+
+    before = build(set(markers))
+    for change in ("time", "quota", "pending"):
+        context = deepcopy(initial)
+        if change == "time":
+            context["self_wake_now_local"] = "2027-01-15T08:01+00:00"
+        elif change == "quota":
+            context["self_wake_status"]["quota"] = {"limit": 3, "used": 3, "remaining": 0}
+        else:
+            context["self_wake_status"]["pending"] = {
+                "wake_at": 1_800_003_600, "intent": "回来看看小栀忙完没有", "requested_capabilities": [],
+            }
+        after = build(set(markers))
+        assert before.stable_block == after.stable_block
+        assert before.dynamic_block != after.dynamic_block
+        assert "回来约定·实时状态" not in after.stable_block
+        assert context["self_wake_now_local"] in after.dynamic_block
+
+    for capabilities in (set(markers), set(markers) - {"schedule.alarm"}, {"self_wake.schedule"}, set()):
+        block = build(capabilities)
+        assert set(block.advertised_tools) == capabilities
+        for name, marker in markers.items():
+            expected_segment = block.dynamic_block if name.startswith("self_wake.") else block.stable_block
+            assert (marker in expected_segment) == (name in capabilities)
+            assert block.count(marker) == int(name in capabilities)
 
 
 def test_context_delivery_changes_runtime_tail_without_changing_cache_prefix(monkeypatch):

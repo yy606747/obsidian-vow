@@ -133,6 +133,17 @@ def test_ai_behavior_route_can_enable_context_trigger_shadow(monkeypatch):
     assert saved == [{"context_trigger_shadow_enabled": True}]
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_ai_behavior_route_persists_device_baseline_switch(monkeypatch, enabled):
+    saved = []
+    monkeypatch.setattr(settings, "load_ai_behavior", lambda: {"context_delivery_chat_enabled": True})
+    monkeypatch.setattr(settings, "save_ai_behavior", lambda value: saved.append(dict(value)))
+    result = asyncio.run(settings.put_ai_behavior(settings.AIBehaviorUpdate(context_delivery_baseline_enabled=enabled)))
+    assert result == {"ok": True}
+    assert saved == [{"context_delivery_chat_enabled": True, "context_delivery_baseline_enabled": enabled}]
+    assert DEFAULT_AI_BEHAVIOR["context_delivery_baseline_enabled"] is True
+
+
 def test_ai_behavior_route_persists_tool_ledger_retention_settings(monkeypatch):
     saved = []
     monkeypatch.setattr(settings, "load_ai_behavior", lambda: {})

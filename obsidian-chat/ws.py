@@ -61,6 +61,14 @@ class ConnectionManager:
             return False
 
     async def broadcast(self, data: dict, exclude: WebSocket = None):
+        # A provider may finish after the midnight transaction moved its message.
+        # Route the wire event to the actual committed row, preserving its ID.
+        payload = data.get('data')
+        if data.get('type') == 'msg_created' and isinstance(payload, dict) and payload.get('conv_id'):
+            from app.daily_chat.service import daily_chat
+            target = await daily_chat.message_window(payload.get('id', ''), payload['conv_id'])
+            if target != payload['conv_id']:
+                data = {**data, 'data': {**payload, 'conv_id': target}}
         wire_data = self._with_notification_identity(data)
         msg = json.dumps(wire_data, ensure_ascii=False)
         msg_type = wire_data.get("type", "unknown")

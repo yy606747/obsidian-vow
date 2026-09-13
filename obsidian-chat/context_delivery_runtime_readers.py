@@ -67,8 +67,17 @@ def read_context_delivery_projection(
         records,
         reference_time=now,
         source_statuses=statuses,
-        baseline_provider=baseline_provider or NullBaselineDeviationProvider(),
+        baseline_provider=baseline_provider if baseline_provider is not None else _daily_baseline_provider(),
     )
+
+
+def _daily_baseline_provider() -> BaselineDeviationProvider:
+    from config import load_ai_behavior
+    from app.daily_signals.baseline import DailySignalBaselineProvider
+
+    if not load_ai_behavior().get("context_delivery_baseline_enabled", True):
+        return NullBaselineDeviationProvider()
+    return DailySignalBaselineProvider()
 
 
 async def read_context_delivery_projection_async(

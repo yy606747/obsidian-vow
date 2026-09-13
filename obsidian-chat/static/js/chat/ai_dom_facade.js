@@ -1,6 +1,6 @@
 // ── AI Dom 懒加载门面 ──
 (function (global) {
-  const AI_DOM_SCRIPT = "/static/js/chat/ai_dom.js?v=20260905-brand";
+  const AI_DOM_SCRIPT = "/static/js/chat/ai_dom.js?v=20260913-markdown";
   let aiDomLoadPromise = null;
 
   function getAiDomModule() {

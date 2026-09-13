@@ -1359,6 +1359,7 @@ function aiDomInitiativeCheck() {
 async function aiDomFireInitiative() {
   if (_aiDomInitFiring || !aiDomMode || !currentConvId) return;
   _aiDomInitFiring = true;
+  let markdownMsgId = null;
   try {
     const now = Date.now();
     const bodyData = {
@@ -1405,20 +1406,29 @@ async function aiDomFireInitiative() {
           const data = JSON.parse(line.slice(6));
           if (data.type === 'start') {
             aiMsgId = data.id;
+            markdownMsgId = aiMsgId;
             currentMessages.push({ id: aiMsgId, conv_id: currentConvId, role: 'assistant', content: '...', created_at: Date.now()/1000 });
             renderMessages();
           } else if (data.type === 'chunk') {
-            if (data.content.includes('\x00RETRY\x00')) { aiContent = ''; continue; }
+            if (data.content.includes('\x00RETRY\x00')) { aiContent = ''; resetStreamingAssistantMessage(aiMsgId); continue; }
             aiContent += data.content;
-            const display = cleanAssistantContent(aiContent);
-            const mi = currentMessages.findIndex(m => m.id === aiMsgId);
-            if (mi >= 0) currentMessages[mi].content = display;
-            const container = document.getElementById(`m_${aiMsgId}`);
-            if (container) {
-              const target = container.querySelector('.msg-bubbles') || container.querySelector('.msg-bubble');
-              if (target) target.innerHTML = formatMsg(display);
+            updateStreamingAssistantMessage(aiMsgId, aiContent);
+          } else if (data.type === 'message' && data.message) {
+            aiContent = String(data.message.content || '');
+            upsertSystemMessage(data.message);
+          } else if (data.type === 'tool_delivery') {
+            aiContent = '';
+            currentMessages = currentMessages.filter(message => message.id !== data.id);
+            renderMessages();
+          } else if (data.type === 'tool_error') {
+            if (data.empty_reply) {
+              aiContent = '';
+              currentMessages = currentMessages.filter(message => message.id !== data.id);
+              renderMessages();
             }
-            scrollBottom();
+            showToast(data.message || '陪伴邀请未能发出');
+          } else if (data.type === 'look_at_me') {
+            showToast('陪伴邀请已发往手机');
           } else if (data.type === 'toy_command') {
             ControlToyRouter.execute(data);
           } else if (data.type === 'toy_command_rejected') {
@@ -1439,6 +1449,7 @@ async function aiDomFireInitiative() {
   } catch (e) {
     console.error('[DomInitiative] error:', e);
   } finally {
+    window.ChatMarkdown?.finish(markdownMsgId);
     _aiDomInitFiring = false;
     if (aiDomMode) aiDomInitiativeStart();
   }

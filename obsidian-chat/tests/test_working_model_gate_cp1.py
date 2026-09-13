@@ -86,7 +86,8 @@ def test_settings_migration_preserves_a_custom_gate_slot(monkeypatch):
 
     changed = config._ensure_endpoints_and_slots(data)
 
-    assert changed is False
+    assert changed is True  # New expression slots are filled without replacing custom slots.
+    assert config._ensure_endpoints_and_slots(data) is False
     assert data["slots"]["working_model_gate"] == {
         "endpoint": "custom",
         "model": "gate-c",

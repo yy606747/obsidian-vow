@@ -11,6 +11,7 @@ function upsertSystemMessage(message) {
   const mi = currentMessages.findIndex(m => m.id === message.id);
   if (mi >= 0) currentMessages[mi] = message;
   else currentMessages.push(message);
+  window.ChatMarkdown?.finish(message.id);
   renderMessages();
   scrollBottom();
 }
@@ -60,11 +61,13 @@ function markTransientErrorMessage(msgId, errorText) {
   if (!msgId) return;
   const mi = currentMessages.findIndex(m => m.id === msgId);
   if (mi < 0) return;
+  const detail = errorText || currentMessages[mi].error_text || currentMessages[mi].content || "";
   currentMessages[mi] = {
     ...currentMessages[mi],
     transient_error: true,
     persisted: false,
-    error_text: errorText || currentMessages[mi].error_text || currentMessages[mi].content || "",
+    error_text: detail,
+    content: chatErrorDisplay(detail),
   };
   renderMessages();
 }
@@ -91,15 +94,20 @@ async function ensureEventStreamResponse(res, actionLabel) {
 function resetStreamingAssistantMessage(msgId) {
   const mi = currentMessages.findIndex(m => m.id === msgId);
   if (mi >= 0) currentMessages[mi].content = "...";
+  if (window.ChatMarkdown) { ChatMarkdown.reset(msgId); return; }
   const container = document.getElementById(`m_${msgId}`);
   if (!container) return;
   const bubble = container.querySelector(".msg-bubbles") || container.querySelector(".msg-bubble");
   if (bubble) bubble.innerHTML = "...";
 }
 
-function updateStreamingAssistantMessage(msgId, display) {
+function updateStreamingAssistantMessage(msgId, raw) {
   const mi = currentMessages.findIndex(m => m.id === msgId);
-  if (mi >= 0) currentMessages[mi].content = display;
+  if (mi >= 0 && currentMessages[mi].persisted === true) return;
+  const isError = mi >= 0 && isErrorLikeAssistantMessage(currentMessages[mi]);
+  if (mi >= 0 && !isError) currentMessages[mi].content = String(raw || '');
+  if (window.ChatMarkdown) { ChatMarkdown.queue(msgId); return; }
+  const display = isError ? chatErrorDisplay(currentMessages[mi].error_text || raw) : cleanAssistantContent(raw);
   const container = document.getElementById(`m_${msgId}`);
   if (!container) return;
   const parts = display.split(/\n{2,}/).filter(p => p.trim());
@@ -122,6 +130,20 @@ function updateStreamingAssistantMessage(msgId, display) {
 
 async function handleSendStreamEvent(data, streamState) {
   if (data.type === "start") {
+    if (data.conv_id && data.conv_id !== currentConvId && typeof handoverDailyWindow === 'function') {
+      beginChatSync();
+      handoverDailyWindow(data.conv_id);
+      refreshChat();
+    }
+    const pendingUser = currentMessages.find(message => message.id === 'temp_user');
+    if (pendingUser && data.user_message_id) {
+      if (currentMessages.some(message => message.id === data.user_message_id)) {
+        currentMessages = currentMessages.filter(message => message !== pendingUser);
+      } else {
+        pendingUser.id = data.user_message_id;
+        pendingUser.persisted = true;
+      }
+    }
     streamState.aiMsgId = data.id;
     streamingAiId = data.id;
     currentMessages.push({ id: data.id, conv_id: currentConvId, role: "assistant", content: "...", created_at: Date.now()/1000 });
@@ -142,8 +164,17 @@ async function handleSendStreamEvent(data, streamState) {
       streamState.hasError = true;
       markTransientErrorMessage(streamState.aiMsgId, streamState.aiContent);
     }
-    updateStreamingAssistantMessage(streamState.aiMsgId, cleanAssistantContent(streamState.aiContent));
-    scrollBottom();
+    updateStreamingAssistantMessage(streamState.aiMsgId, streamState.aiContent);
+  } else if (data.type === "tool_delivery") {
+    _stopTypingAnim();
+    currentMessages = currentMessages.filter(message => message.id !== data.id);
+    renderMessages();
+  } else if (data.type === "look_at_me") {
+    showToast('陪伴邀请已发往手机');
+  } else if (data.type === "message" && data.message) {
+    _stopTypingAnim();
+    streamState.aiContent = String(data.message.content || "");
+    upsertSystemMessage(data.message);
   } else if (data.type === "debug" && streamState.aiMsgId) {
     msgDebugData[streamState.aiMsgId] = data;
     if (data.has_error) {
@@ -173,7 +204,7 @@ async function handleSendStreamEvent(data, streamState) {
   } else if (data.type === "toy_command_rejected") {
     ControlToyRouter.reportRejected(data);
   } else if (data.type === "heart_whisper") {
-    showHeartWhisperHint(data.msg_id, data.content);
+    showHeartWhisperHint(data.msg_id, data.content, data);
   } else if (data.type === "generation_blocked") {
     streamState.hasError = true;
     handleGenerationBlocked(data);
@@ -199,6 +230,7 @@ async function consumeSendStream(reader, streamState) {
 }
 
 function finalizeSendStream(streamState) {
+  window.ChatMarkdown?.finish(streamState.aiMsgId);
   if (!streamState.hasError && streamState.aiMsgId && streamState.aiContent) {
     _msgMoods[streamState.aiMsgId] = _detectAiMood(streamState.aiContent);
     _applyMoodGlow(streamState.aiMsgId);
@@ -213,9 +245,19 @@ function finalizeSendStream(streamState) {
 }
 
 async function send() {
+  if (window.ChatDocuments?.busy()) { showToast('文件还在读取，稍等一下。'); return; }
+  if (typeof resolveDailyConversation === 'function' && resolveDailyConversation(currentConvId) !== currentConvId) {
+    beginChatSync();
+    handoverDailyWindow(resolveDailyConversation(currentConvId));
+    refreshChat();
+  }
   const input = $("input");
-  const text = input.value.trim();
+  const text = input.value.trim() ? input.value : '';
   if ((!text && !pendingAttachments.length) || !currentConvId || sending) return;
+  if (pendingAttachments.filter(item => item?.type === 'sticker').length > 1) {
+    showToast("每条消息最多发送一张表情，请移除多余表情", 2600);
+    return;
+  }
   if (hasVoiceAttachments(pendingAttachments) && !currentModelSupportsAudioInput()) {
     showAudioInputUnavailable();
     return;
@@ -240,6 +282,7 @@ async function send() {
   if (typeof whisperAutoRetreatCancel === 'function') whisperAutoRetreatCancel();
   $("sendBtn").disabled = true;
   input.value = "";
+  persistChatDraft();
   autoResize(input);
   const pendingSnapshot = pendingAttachments.slice();
   const attachments = pendingSnapshot.map(serializeChatAttachment).filter(Boolean);
@@ -293,6 +336,7 @@ async function send() {
       currentMessages = currentMessages.filter(m => m.id !== "temp_user");
       pendingAttachments = [...pendingSnapshot, ...pendingAttachments];
       if (text) input.value = input.value.trim() ? `${text}\n${input.value}` : text;
+      persistChatDraft();
       autoResize(input);
       renderPreview();
       renderMessages();
@@ -310,9 +354,11 @@ async function send() {
       }
     }
   } finally {
+    window.ChatMarkdown?.finish(streamingAiId);
     sending = false;
     streamingAiId = null;
     $("sendBtn").disabled = false;
+    window.ChatHeartNotes?.sync();
   }
 }
 

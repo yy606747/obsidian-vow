@@ -1,0 +1,20 @@
+[
+  {
+    "name": "markdown-it",
+    "version": "15.0.2",
+    "source": "https://registry.npmjs.org/markdown-it/-/markdown-it-15.0.2.tgz",
+    "archive_sha512": "ab8206c4cbf9ea30aa4f83824420030680cfdcb3b83219935e315ba611cf5ece20de3f578394439f1a8df0817fdef216114f950a752afbb25483f71fcb613a43",
+    "browser_file": "dist/browser/markdown-it.umd.min.js",
+    "browser_sha256": "635972b985228e8af9f0143647c68616b7a3bb09f6946e7e4a52e43dcf5e7be5",
+    "bytes": 115080
+  },
+  {
+    "name": "dompurify",
+    "version": "3.4.15",
+    "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.15.tgz",
+    "archive_sha512": "11406333e07e9640c4e35884f360c34827e4a0f19f5f1f08c45c4f3233739bf524e310deb7beeb4cdf70aa5c65560ef590aed71ae50cbfac14c49530c2ff97cb",
+    "browser_file": "dist/purify.min.js",
+    "browser_sha256": "f263b05369e050fa175d4ecb9c9358eb4253602d510297adfb31df48b2f1c4d5",
+    "bytes": 29369
+  }
+]

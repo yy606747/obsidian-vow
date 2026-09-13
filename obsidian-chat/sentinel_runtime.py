@@ -1216,10 +1216,13 @@ class SentinelRuntime:
         try:
             async with get_db() as db:
                 db.row_factory = aiosqlite.Row
-                cur = await db.execute(
-                    "SELECT c.id FROM conversations c ORDER BY c.updated_at DESC LIMIT 1"
-                )
-                conv = await cur.fetchone()
+                from app.daily_chat.service import active_conversation_in_tx
+                conv = await active_conversation_in_tx(db)
+                if conv is None:
+                    cur = await db.execute(
+                        "SELECT c.id FROM conversations c ORDER BY c.updated_at DESC LIMIT 1"
+                    )
+                    conv = await cur.fetchone()
                 if conv:
                     latest_conv_id = str(conv["id"] or "")
                     cur2 = await db.execute(
@@ -1957,8 +1960,11 @@ class SentinelRuntime:
 
         async with get_db() as db:
             db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 1")
-            conv = await cur.fetchone()
+            from app.daily_chat.service import active_conversation_in_tx
+            conv = await active_conversation_in_tx(db)
+            if conv is None:
+                cur = await db.execute("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 1")
+                conv = await cur.fetchone()
             if not conv:
                 await append_and_broadcast_monitor_log(_sentinel_monitor_log_entry(
                     status="core_no_conversation",
@@ -2174,7 +2180,9 @@ class SentinelRuntime:
                 {"role": "user", "content": web_block},
                 {"role": "assistant", "content": "（嗯，查询能力和已经返回的资料我都清楚。）"},
             ]
-        messages = prefix + vow_inject + relationship_inject + timeline_inject + history + web_inject + [
+        from app.daily_chat.service import cross_day_prompt
+        daily_background = await cross_day_prompt(conv_id, user_name=user_name, ai_name=ai_name, db_factory=get_db)
+        messages = prefix + vow_inject + relationship_inject + timeline_inject + daily_background + history + web_inject + [
             {"role": "user", "content": core_prompt}
         ]
         _temp = SETTINGS.get("temperature")

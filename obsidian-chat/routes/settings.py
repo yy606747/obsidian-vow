@@ -8,8 +8,8 @@ import json, re, time
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, field_validator
+from typing import Literal, Optional
 
 import httpx
 
@@ -95,6 +95,7 @@ async def list_models():
                 "endpoint": um.get("endpoint", ""),
                 "model": um.get("model", ""),
                 "audio_input": um.get("audio_input") is True,
+                "thinking_level": um.get("thinking_level"),
             })
     return out
 
@@ -528,16 +529,29 @@ class UserModelUpsert(BaseModel):
     model: str
     audio_input: bool = False
     image_input: Optional[bool] = None
+    thinking_level: Optional[Literal["LOW", "MEDIUM", "HIGH"]] = None
+
+    @field_validator("thinking_level", mode="before")
+    @classmethod
+    def normalize_thinking_level(cls, value):
+        return value.strip().upper() or None if isinstance(value, str) else value
 
 @router.put("/api/user_models")
 async def put_user_model(body: UserModelUpsert):
     ums = SETTINGS.setdefault("user_models", {})
+    # 旧客户端未提交新字段时保留设置；显式 null 才恢复模型默认值。
+    thinking_level = (
+        body.thinking_level if "thinking_level" in body.model_fields_set
+        else ums.get(body.key, {}).get("thinking_level")
+    )
     ums[body.key] = {
         "endpoint": body.endpoint,
         "model": body.model,
         "audio_input": body.audio_input is True,
         "image_input": body.image_input,
     }
+    if thinking_level is not None:
+        ums[body.key]["thinking_level"] = thinking_level
     save_settings(SETTINGS)
     return {"ok": True}
 
@@ -569,6 +583,7 @@ class AIBehaviorUpdate(BaseModel):
     web_search_enabled: Optional[bool] = None
     context_delivery_chat_enabled: Optional[bool] = None
     context_delivery_autonomous_enabled: Optional[bool] = None
+    context_delivery_baseline_enabled: Optional[bool] = None
     context_trigger_shadow_enabled: Optional[bool] = None
     working_model_reflection_enabled: Optional[bool] = None
     tool_result_feedback_enabled: Optional[bool] = None
@@ -627,6 +642,8 @@ async def put_ai_behavior(body: AIBehaviorUpdate):
         cur["context_delivery_chat_enabled"] = body.context_delivery_chat_enabled
     if body.context_delivery_autonomous_enabled is not None:
         cur["context_delivery_autonomous_enabled"] = body.context_delivery_autonomous_enabled
+    if body.context_delivery_baseline_enabled is not None:
+        cur["context_delivery_baseline_enabled"] = body.context_delivery_baseline_enabled
     if body.context_trigger_shadow_enabled is not None:
         cur["context_trigger_shadow_enabled"] = body.context_trigger_shadow_enabled
     if body.working_model_reflection_enabled is not None:

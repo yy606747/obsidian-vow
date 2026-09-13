@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Collection, Literal
 
-from app.chat.control_syntax import canonicalize_control_markers
+from app.chat.control_syntax import canonicalize_control_markers, iter_value_control_markers
 from app.tools.parser import TOOL_COMMAND_GROUPS
 from app.tools.schemas import KNOWN_TOOL_DEFINITIONS
 
 
-PromptSource = Literal["send", "regenerate", "opportunity", "initiative", "self_wake"]
-AutonomousKind = Literal["idle", "summon", "night"]
+PromptSource = Literal["send", "regenerate", "opportunity", "initiative", "self_wake", "sentinel_core", "schedule"]
+AutonomousKind = Literal["idle", "summon", "night", "look_at_me_accept"]
 
 MARKER_VISIBLE_REPLY = "visible_reply"
 MARKER_WORKING_MODEL_REQUEST = "working_model_request"
@@ -32,9 +32,12 @@ OPPORTUNITY_TOOL_CAPABILITIES = frozenset(
         "device.ring_touch",
         "pc.screen_check",
         "mobile.screen_check",
+        "mobile.look_at_me",
         "memory.remember",
         "location.poi_search",
         "desktop.presence.draw",
+        "sticker.create",
+        "sticker.send",
         "desktop.presence.show",
         "self_wake.schedule",
         "self_wake.cancel",
@@ -79,6 +82,15 @@ OpportunityControlKind = Literal["ordinary", "none", "reflect", "invalid"]
 SelfWakeControlKind = Literal["ordinary", "none", "invalid"]
 
 
+def _control_classification_text(raw_output: str) -> str:
+    text = canonicalize_control_markers(raw_output).strip()
+    for marker in reversed(list(iter_value_control_markers(text, names={"陪我", "发图", "做表情"}))):
+        # Keep a nonempty invitation token: a top-level NONE alongside an
+        # invitation is still invalid, while quoted markers are inert prose.
+        text = text[:marker.start] + f"[{marker.name}:…]" + text[marker.end:]
+    return text
+
+
 def classify_opportunity_control_output(
     raw_output: str,
     *,
@@ -86,7 +98,7 @@ def classify_opportunity_control_output(
 ) -> OpportunityControlKind:
     """Classify reserved opportunity syntax before post-processing or effects."""
 
-    text = canonicalize_control_markers(raw_output).strip()
+    text = _control_classification_text(raw_output)
     if "[OPPORTUNITY_" not in text.upper():
         return "ordinary"
     if text == OPPORTUNITY_NONE_TOKEN and profile.allows_marker(
@@ -117,7 +129,7 @@ def chat_turn_profile(prompt_source: str, *, web_search_allowed: bool = False) -
         # still the runtime policy; this profile only adds the strict source
         # allowlist required by the shared action layer.
         allowed_tool_capabilities=(
-            (frozenset(KNOWN_TOOL_DEFINITIONS) - PRESENCE_TOOL_CAPABILITIES)
+            (frozenset(KNOWN_TOOL_DEFINITIONS) - PRESENCE_TOOL_CAPABILITIES - {"sticker.create"})
             | _LEGACY_CHAT_MARKER_CAPABILITIES
         ),
     )
@@ -130,7 +142,7 @@ def classify_self_wake_control_output(
 ) -> SelfWakeControlKind:
     """The reserved NONE marker is valid only as the entire output."""
 
-    text = canonicalize_control_markers(raw_output).strip()
+    text = _control_classification_text(raw_output)
     if SELF_WAKE_NONE_TOKEN not in text.upper():
         return "ordinary"
     if text == SELF_WAKE_NONE_TOKEN and profile.allows_marker(MARKER_SELF_WAKE_NONE):
@@ -138,8 +150,10 @@ def classify_self_wake_control_output(
     return "invalid"
 
 
-def initiative_turn_profile(*, toy_enabled: bool) -> TurnProfile:
+def initiative_turn_profile(*, toy_enabled: bool, look_at_me_enabled: bool = False) -> TurnProfile:
     tools = {"memory.remember"}
+    if look_at_me_enabled:
+        tools.add("mobile.look_at_me")
     if toy_enabled:
         tools.add("device.toy")
     return TurnProfile(
@@ -157,28 +171,27 @@ def opportunity_turn_profile(
     kind: AutonomousKind = "idle",
     presence_bootstrap_required: bool = False,
 ) -> TurnProfile:
-    if kind not in {"idle", "summon", "night"}:
+    if kind not in {"idle", "summon", "night", "look_at_me_accept"}:
         raise ValueError("invalid_autonomous_kind")
     if presence_bootstrap_required and kind != "night":
         raise ValueError("presence_bootstrap_requires_night")
-    markers = set()
-    if not presence_bootstrap_required:
-        markers.add(MARKER_OPPORTUNITY_NONE)
-    if kind == "idle":
+    markers = {MARKER_OPPORTUNITY_NONE}
+    if kind in {"idle", "look_at_me_accept"}:
         markers.add(MARKER_VISIBLE_REPLY)
     if (
         reflection_allowed
         and kind in {"idle", "night"}
-        and not presence_bootstrap_required
     ):
         markers.add(MARKER_OPPORTUNITY_REFLECT)
-    if web_search_allowed and kind == "idle":
+    if web_search_allowed and kind in {"idle", "look_at_me_accept"}:
         markers.add(MARKER_WEB_SEARCH_INTENT)
     requested = {str(item) for item in runtime_capabilities}
+    if kind != "night":
+        requested.discard("sticker.create")
     if kind == "summon":
         requested &= {"desktop.presence.show"}
     elif kind == "night":
-        requested &= {"desktop.presence.draw"}
+        requested &= {"desktop.presence.draw", "sticker.create"}
     return TurnProfile(
         prompt_source="opportunity",
         allowed_markers=frozenset(markers),

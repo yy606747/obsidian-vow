@@ -105,14 +105,22 @@ async def create_memory(content: str, memory_type: str = "event", *,
                         keywords: str = "",
                         importance: float = 0.5,
                         source_start_ts=None,
-                        source_end_ts=None) -> dict:
+                        source_end_ts=None, idempotency_key: str | None = None) -> dict:
+    import hashlib
+    mem_id = ('mem_key_' + hashlib.sha256(idempotency_key.encode()).hexdigest()
+              if idempotency_key else f"mem_{int(time.time()*1000)}")
+    if idempotency_key:
+        async with get_db() as db:
+            db.row_factory = aiosqlite.Row
+            existing = await (await db.execute('SELECT * FROM memories WHERE id=?', (mem_id,))).fetchone()
+            if existing:
+                return dict(existing)
     vec = await get_document_embedding(content)
-    mem_id = f"mem_{int(time.time()*1000)}"
     now = time.time()
     embedding_blob = pack_embedding(vec) if vec else None
     async with get_db() as db:
         await db.execute(
-            "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts) "
+            ("INSERT OR IGNORE" if idempotency_key else "INSERT") + " INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 mem_id, content, memory_type, now, source_conv, embedding_blob,

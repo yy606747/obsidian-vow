@@ -155,26 +155,28 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 
 /* ── [HEART] 心语提示 ── */
 .msg-avatar-col { position: relative; }
-.heart-whisper-hint { position: absolute; top: -4px; right: -4px; font-size: 14px; line-height: 1; cursor: default; opacity: 1; animation: heartFadeIn 0.6s ease both; pointer-events: none; z-index: 2; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.15)); }
-@keyframes heartFadeIn { 0% { opacity: 0; transform: scale(0.3); } 50% { transform: scale(1.2); } 100% { opacity: 1; transform: scale(1); } }
 
 /* ── AI 情绪光圈 ── */
-.msg-avatar.mood-happy  { box-shadow: 0 0 0 2px #fff, 0 0 10px 3px rgba(255,105,180,0.55); }
-.msg-avatar.mood-sad    { box-shadow: 0 0 0 2px #fff, 0 0 10px 3px rgba(100,149,237,0.55); }
-.msg-avatar.mood-angry  { box-shadow: 0 0 0 2px #fff, 0 0 10px 3px rgba(239,68,68,0.50); }
-.msg-avatar.mood-shy    { box-shadow: 0 0 0 2px #fff, 0 0 10px 3px rgba(255,182,193,0.60); }
-.msg-avatar.mood-tender { box-shadow: 0 0 0 2px #fff, 0 0 10px 3px rgba(186,85,211,0.50); }
-.msg-avatar[class*="mood-"] { animation: moodGlow 2.5s ease-in-out infinite; }
-@keyframes moodGlow { 0%,100% { filter:brightness(1); transform:scale(1); } 50% { filter:brightness(1.08); transform:scale(1.05); } }
-
-/* ── 心语飘字 ── */
-.whisper-float { position:fixed; font-size:13px; color:var(--text3); opacity:0; pointer-events:none; white-space:nowrap; max-width:70vw; overflow:hidden; text-overflow:ellipsis; z-index:999; font-style:italic; letter-spacing:0.5px; text-shadow:0 1px 6px rgba(0,0,0,0.06); animation:whisperDrift 10s ease-in-out forwards; }
-@keyframes whisperDrift {
-  0%   { opacity:0; transform:translateX(-50%) translateY(0); }
-  10%  { opacity:0.75; }
-  50%  { opacity:0.55; }
-  85%  { opacity:0.15; }
-  100% { opacity:0; transform:translateX(-50%) translateY(-160px); }
+.msg-avatar-frame { display: inline-flex; position: relative; flex-shrink: 0; margin-top: 3px; border-radius: 50%; }
+.msg-avatar-frame > .msg-avatar { display: block; margin: 0; border-radius: 50%; }
+.msg-avatar-frame[data-mood="happy"]  { --mood-rgb: 255,105,180; }
+.msg-avatar-frame[data-mood="sad"]    { --mood-rgb: 100,149,237; }
+.msg-avatar-frame[data-mood="angry"]  { --mood-rgb: 239,68,68; --mood-alpha: .5; }
+.msg-avatar-frame[data-mood="shy"]    { --mood-rgb: 255,182,193; --mood-alpha: .6; }
+.msg-avatar-frame[data-mood="tender"] { --mood-rgb: 186,85,211; --mood-alpha: .5; }
+.msg-avatar-frame[data-mood] > .msg-avatar {
+  border-color: #ffffffb3;
+  box-shadow: 0 0 0 2px #fff, 0 0 10px 3px rgba(var(--mood-rgb), var(--mood-alpha, .55));
+}
+.msg-avatar-frame[data-mood]::after {
+  content: ""; position: absolute; inset: -2px; border-radius: inherit; pointer-events: none;
+  box-shadow: 0 0 14px 3px rgba(var(--mood-rgb), .3); opacity: 0;
+}
+/* Two soft breaths on the latest reply; the color remains after motion ends. */
+.msg-avatar-frame.mood-pulse::after { animation: moodGlow 2.6s ease-in-out var(--mood-pulse-delay, 0s) 2; }
+@keyframes moodGlow { 0%,100% { opacity: 0; } 50% { opacity: .8; } }
+@media (prefers-reduced-motion: reduce) {
+  .msg-avatar-frame.mood-pulse::after { animation: none; }
 }
 
 /* ── AI 输入等待动画 ── */
@@ -845,3 +847,26 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
   white-space: nowrap;
 }
 .toast-msg.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Chat stickers retain their original animation and aspect ratio. */
+.msg-media img.chat-sticker { width: auto; height: auto; max-width: min(180px, 60vw); max-height: 180px; object-fit: contain; border-radius: 8px; }
+.msg-sticker-only .msg-media { margin: 0; }
+.sticker-attachment { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; }
+.sticker-attachment figcaption { padding: 2px 7px; border-radius: 5px; background: rgba(212,148,58,.1); color: var(--text2); font-size: 11px; line-height: 1.3; }
+.sticker-preview { outline: 1px solid var(--accent); }
+.attachment-kind { position: absolute; bottom: 2px; left: 2px; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.7); color: #fff; font-size: 10px; }
+.input-row textarea { min-width: 0; }
+.sticker-toggle[aria-expanded="true"] { border-color: var(--accent); background: rgba(212,148,58,.15); }
+.sticker-panel { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface2); }
+.sticker-panel[hidden] { display: none; }
+.sticker-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+.sticker-panel-header strong { font-size: 14px; }
+#stickerCount { font-size: 11px; color: var(--text3); font-weight: normal; }
+.sticker-panel-header button { padding: 6px 8px; background: transparent; color: var(--text2); border: 0; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px; }
+.sticker-panel-header button:hover { background: var(--surface); color: var(--text); }
+.sticker-panel-header button:disabled { opacity: .5; cursor: wait; }
+.sticker-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(72px,1fr)); gap: 8px; max-height: min(36vh,300px); overflow-y: auto; padding: 10px; overscroll-behavior: contain; }
+.sticker-tile { display: flex; align-items: center; justify-content: center; aspect-ratio: 1; min-width: 0; padding: 5px; border: 1px solid transparent; border-radius: 10px; background: var(--surface); cursor: pointer; }
+.sticker-tile:hover, .sticker-tile:focus-visible { border-color: var(--accent); }
+.sticker-tile img { display: block; max-width: 100%; max-height: 82px; object-fit: contain; }
+.sticker-panel-empty { grid-column: 1 / -1; padding: 24px 8px; text-align: center; color: var(--text3); font-size: 13px; line-height: 1.8; }

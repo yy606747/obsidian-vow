@@ -2,6 +2,7 @@ package app.obsidianvow.core;
 
 import android.Manifest;
 import android.app.KeyguardManager;
+import android.content.Context;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -19,22 +20,36 @@ import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.appcompat.app.AlertDialog;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+import androidx.webkit.WebViewRenderProcess;
+import androidx.webkit.WebViewRenderProcessClient;
 
 /**
  * WebView 全屏聊天页
@@ -47,6 +62,7 @@ public class WebViewActivity extends AppCompatActivity {
     private static final int REQ_AUDIO = 1001;
     private WebView webView;
     private String targetUrl;
+    private String authToken;
     private boolean pageLoaded = false;
     private boolean permissionsRequested = false;
     private int retryCount = 0;
@@ -56,7 +72,30 @@ public class WebViewActivity extends AppCompatActivity {
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingPermRequest;
     private BleBridge bleBridge;
+    private AudioBridge audioBridge;
     private volatile boolean chatVisible = false;
+    private boolean chatReady = false;
+    private FrameLayout webContainer;
+    private LinearLayout recoveryPanel;
+    private TextView recoveryText;
+    private Button recoveryButton;
+    private int recoveryAttempts = 0;
+    private boolean rendererRecoveryPending = false;
+    private boolean pageLoadFailed = false;
+    private int probeGeneration = 0;
+    private int messageAckGeneration = 0;
+    private static final int MAX_RENDER_RECOVERIES = 2;
+    private static final long RENDER_PROBE_TIMEOUT_MS = 8000L;
+    private Runnable probeTimeout;
+    private Runnable nextProbe;
+    private Runnable loadTimeout;
+    private Runnable loadRetry;
+
+    static Intent openChatIntent(Context context) {
+        return new Intent(context, WebViewActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+    }
 
     private final ActivityResultLauncher<Intent> fileChooserLauncher =
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
@@ -87,17 +126,92 @@ public class WebViewActivity extends AppCompatActivity {
         getWindow().setNavigationBarColor(COLOR_BG);
         getWindow().getDecorView().setSystemUiVisibility(0);
 
+        if (!readLaunchConfiguration(getIntent())) return;
+        webContainer = new FrameLayout(this);
+        webContainer.setBackgroundColor(COLOR_BG);
+        setContentView(webContainer);
+        createRecoveryPanel();
+        createWebView();
+        ensurePushService();
+        LookAtMeController.activity = new java.lang.ref.WeakReference<>(this);
+    }
+
+    private boolean readLaunchConfiguration(Intent intent) {
+        SharedPreferences prefs = getSharedPreferences(LauncherActivity.PREFS, MODE_PRIVATE);
+        String url = intent == null ? null : intent.getStringExtra("url");
+        targetUrl = url == null || url.isEmpty() ? prefs.getString(LauncherActivity.KEY_URL, "") : url;
+        String token = intent == null ? null : intent.getStringExtra("token");
+        authToken = token == null ? prefs.getString(LauncherActivity.KEY_TOKEN, "") : token;
+        if (authToken == null) authToken = "";
+        if (targetUrl == null || targetUrl.isEmpty()) {
+            startActivity(new Intent(this, LauncherActivity.class));
+            finish();
+            return false;
+        }
+        return true;
+    }
+
+    private void ensurePushService() {
+        Intent intent = new Intent(this, ObsidianPushService.class)
+                .putExtra("url", targetUrl).putExtra("token", authToken);
+        ContextCompat.startForegroundService(this, intent);
+    }
+
+    private void createRecoveryPanel() {
+        recoveryPanel = new LinearLayout(this);
+        recoveryPanel.setOrientation(LinearLayout.VERTICAL);
+        recoveryPanel.setGravity(Gravity.CENTER);
+        recoveryPanel.setBackgroundColor(COLOR_BG);
+        int padding = (int) (28 * getResources().getDisplayMetrics().density);
+        recoveryPanel.setPadding(padding, padding, padding, padding);
+        recoveryText = new TextView(this);
+        recoveryText.setTextColor(0xFFF3E7D5);
+        recoveryText.setTextSize(17);
+        recoveryText.setGravity(Gravity.CENTER);
+        recoveryPanel.addView(recoveryText);
+        recoveryButton = new Button(this);
+        recoveryButton.setText("重新加载");
+        recoveryButton.setOnClickListener(v -> {
+            recoveryAttempts = 0;
+            retryCount = 0;
+            if (webView == null) createWebView();
+            else recoverWebView(webView, "manual_retry", true);
+        });
+        recoveryPanel.addView(recoveryButton);
+        webContainer.addView(recoveryPanel, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        showRecovery("正在加载聊天…", false);
+    }
+
+    private void showRecovery(String text, boolean canRetry) {
+        recoveryText.setText(text);
+        recoveryButton.setVisibility(canRetry ? View.VISIBLE : View.GONE);
+        recoveryPanel.setVisibility(View.VISIBLE);
+        recoveryPanel.bringToFront();
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void createWebView() {
+        if (isFinishing() || isDestroyed() || webView != null) return;
+        pageLoaded = false;
+        pageLoadFailed = false;
+        rendererRecoveryPending = false;
+
         boolean debuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         WebView.setWebContentsDebuggingEnabled(debuggable);
 
         webView = new WebView(this);
-        setContentView(webView);
+        webView.setBackgroundColor(COLOR_BG);
+        webContainer.addView(webView, 0, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // 原生麦克风桥接（绕过 getUserMedia 的 HTTPS 限制）
-        BrandCompatibility.addJavascriptInterface(webView, new AudioBridge(webView), "ObsidianAudio");
+        audioBridge = new AudioBridge(webView);
+        BrandCompatibility.addJavascriptInterface(webView, audioBridge, "ObsidianAudio");
 
         // 聊天页真正显示到某条消息后，按消息时间撤掉它及更早的通知。
-        BrandCompatibility.addJavascriptInterface(webView, new NotificationReadBridge(), "ObsidianNotifications");
+        BrandCompatibility.addJavascriptInterface(webView, new NotificationReadBridge(webView), "ObsidianNotifications");
+        BrandCompatibility.addJavascriptInterface(webView, new LookAtMeBridge(webView), "ObsidianLookAtMe");
 
         // 原生 BLE 桥接（绕过 WebView 不支持 Web Bluetooth API 的限制）
         bleBridge = new BleBridge(webView, this);
@@ -174,21 +288,38 @@ public class WebViewActivity extends AppCompatActivity {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
+                if (view != webView) return;
+                cancelRendererProbe();
                 pageLoaded = false;
+                pageLoadFailed = false;
+                setChatReady(false);
+                if (loadTimeout != null) mainHandler.removeCallbacks(loadTimeout);
+                loadTimeout = () -> {
+                    if (view == webView && !chatReady && chatVisible) {
+                        showRecovery("连接较慢，可以重新加载", true);
+                        probeRenderer();
+                    }
+                };
+                mainHandler.postDelayed(loadTimeout, 25000);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                // 过滤掉错误页的 onPageFinished（data: URL）
-                if (url != null && !url.startsWith("data:")) {
+                if (view != webView) return;
+                if (!pageLoadFailed && url != null && (url.startsWith("https://") || url.startsWith("http://"))) {
                     pageLoaded = true;
                     retryCount = 0;
+                    if (!isChatDocument(url)) {
+                        if (loadTimeout != null) mainHandler.removeCallbacks(loadTimeout);
+                        recoveryPanel.setVisibility(View.GONE);
+                    }
                     // 页面加载成功后，延迟请求权限（串行，不阻塞页面）
                     if (!permissionsRequested) {
                         permissionsRequested = true;
                         mainHandler.postDelayed(() -> requestPermissionsSequentially(0), 1500);
                     }
+                    if (chatVisible) resumeChat();
                 }
             }
 
@@ -202,13 +333,47 @@ public class WebViewActivity extends AppCompatActivity {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 // 只处理主页面加载失败（非子资源）
-                if (request.isForMainFrame()) {
+                if (view == webView && request.isForMainFrame()) {
                     pageLoaded = false;
+                    pageLoadFailed = true;
                     android.util.Log.e("ObsidianWebView", "页面加载失败: " + error.getDescription());
                     showErrorPage(view, error.getDescription().toString());
                 }
             }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
+                if (view == webView && request.isForMainFrame()) {
+                    pageLoaded = false;
+                    pageLoadFailed = true;
+                    showErrorPage(view, "HTTP " + response.getStatusCode());
+                }
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                android.util.Log.w("ObsidianWebView", "renderer exited, crashed=" + detail.didCrash());
+                if (view == webView) recoverWebView(view, "renderer_gone", false);
+                else view.destroy();
+                return true;
+            }
         });
+
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_CLIENT_BASIC_USAGE)) {
+            WebViewCompat.setWebViewRenderProcessClient(webView, new WebViewRenderProcessClient() {
+                @Override
+                public void onRenderProcessUnresponsive(@NonNull WebView view, @Nullable WebViewRenderProcess renderer) {
+                    if (view == webView && canAcknowledgeMessagesSeen()) {
+                        recoverWebView(view, "renderer_unresponsive", true);
+                    }
+                }
+
+                @Override
+                public void onRenderProcessResponsive(@NonNull WebView view, @Nullable WebViewRenderProcess renderer) {
+                    if (view == webView && chatVisible) probeRenderer();
+                }
+            });
+        }
 
         webView.setWebChromeClient(new WebChromeClient() {
             // ── 麦克风权限自动授予（给网页 getUserMedia 用） ──
@@ -261,19 +426,12 @@ public class WebViewActivity extends AppCompatActivity {
         });
 
         // 加载目标 URL
-        targetUrl = getIntent().getStringExtra("url");
-        if (targetUrl == null || targetUrl.isEmpty()) {
-            // 没配置 → 回到设置页
-            startActivity(new Intent(this, LauncherActivity.class));
-            finish();
-            return;
-        }
         // 先由原生侧写入鉴权 cookie，避免 WebView 首次 ?token= 跳转后 cookie
         // 没来得及生效，或 HTTP 自部署场景下 Secure cookie 被丢弃。
-        String token = getIntent().getStringExtra("token");
-        if (token != null && !token.isEmpty()) {
-            seedAuthCookie(targetUrl, token);
+        if (authToken != null && !authToken.isEmpty()) {
+            seedAuthCookie(targetUrl, authToken);
         }
+        showRecovery("正在加载聊天…", false);
         webView.loadUrl(targetUrl);
     }
 
@@ -299,68 +457,24 @@ public class WebViewActivity extends AppCompatActivity {
      * 加载失败时显示错误页：自动重试 + 手动按钮
      */
     private void showErrorPage(WebView view, String errorMsg) {
+        if (view != webView) return;
+        setChatReady(false);
+        if (loadRetry != null) mainHandler.removeCallbacks(loadRetry);
         if (retryCount < MAX_RETRY) {
             retryCount++;
             int delay = Math.min(retryCount * 2000, 8000); // 2s, 4s, 6s, 8s, 8s
             android.util.Log.i("ObsidianWebView", "自动重试 " + retryCount + "/" + MAX_RETRY + "，" + delay + "ms 后重试");
-            String retryHtml = buildErrorHtml(
-                    "正在连接服务器",
-                    "第 " + retryCount + " 次重试（最多 " + MAX_RETRY + " 次）",
-                    errorMsg,
-                    null);
-            view.loadDataWithBaseURL(null, retryHtml, "text/html", "utf-8", null);
-            mainHandler.postDelayed(() -> {
-                if (webView != null && !pageLoaded) {
-                    webView.loadUrl(targetUrl);
+            showRecovery("正在重新连接…（" + retryCount + "/" + MAX_RETRY + "）", true);
+            loadRetry = () -> {
+                loadRetry = null;
+                if (view == webView && !pageLoaded && chatVisible) {
+                    view.loadUrl(targetUrl);
                 }
-            }, delay);
+            };
+            mainHandler.postDelayed(loadRetry, delay);
         } else {
-            // 重试耗尽，显示手动操作页面
-            String actions = "<button class='btn primary' onclick='window.location.href=\"obsidianvow://retry\"'>重新连接</button>"
-                    + "<button class='btn' onclick='window.location.href=\"obsidianvow://switch\"'>切换地址</button>";
-            String failHtml = buildErrorHtml(
-                    "无法连接到服务器",
-                    targetUrl,
-                    errorMsg,
-                    actions);
-            view.loadDataWithBaseURL(null, failHtml, "text/html", "utf-8", null);
+            showRecovery("暂时无法连接，点击重新加载", true);
         }
-    }
-
-    private String buildErrorHtml(String title, String subtitle, String detail, String actionsHtml) {
-        String actions = actionsHtml == null ? "" : "<div class='actions'>" + actionsHtml + "</div>";
-        return "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-                + "<style>"
-                + "html,body{margin:0;min-height:100%;background:#1a1714;color:#e8dcc8;"
-                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}"
-                + "body{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;"
-                + "padding:28px;box-sizing:border-box;background:#1a1714;}"
-                + ".panel{width:min(100%,360px);padding:24px 22px;border:1px solid rgba(212,148,58,.18);"
-                + "border-radius:12px;background:rgba(36,33,32,.92);box-shadow:0 18px 48px rgba(0,0,0,.38);}"
-                + ".mark{width:42px;height:3px;border-radius:999px;background:#d4943a;box-shadow:0 0 14px rgba(212,148,58,.35);"
-                + "margin:0 0 18px;}"
-                + "h1{font-size:20px;line-height:1.3;margin:0 0 8px;font-weight:650;color:#f3e7d5;}"
-                + ".sub{font-size:13px;line-height:1.55;color:#b5a898;word-break:break-all;margin-bottom:10px;}"
-                + ".detail{font-size:12px;line-height:1.55;color:#75695d;word-break:break-word;}"
-                + ".actions{display:flex;gap:10px;margin-top:22px;}"
-                + ".btn{flex:1;padding:11px 12px;border-radius:8px;border:1px solid rgba(212,148,58,.25);"
-                + "background:#2e2a26;color:#e8dcc8;font-size:14px;}"
-                + ".btn.primary{border-color:#d4943a;background:#d4943a;color:#1a1714;font-weight:650;}"
-                + "</style></head><body><main class='panel'><div class='mark'></div>"
-                + "<h1>" + escapeHtml(title) + "</h1>"
-                + "<div class='sub'>" + escapeHtml(subtitle) + "</div>"
-                + "<div class='detail'>" + escapeHtml(detail) + "</div>"
-                + actions
-                + "</main></body></html>";
-    }
-
-    private String escapeHtml(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;")
-                .replace("'", "&#39;");
     }
 
     // ── 串行权限请求链：页面加载后依次请求，每次只弹一个 ──
@@ -515,7 +629,8 @@ public class WebViewActivity extends AppCompatActivity {
     @SuppressWarnings("deprecation")
     @Override
     public void onBackPressed() {
-        if (webView.canGoBack()) {
+        if (LookAtMeController.instance != null && LookAtMeController.instance.resident()) return;
+        if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
             // 已经退到最顶层，弹出选择对话框
@@ -538,31 +653,178 @@ public class WebViewActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         chatVisible = true;
-        // 告诉推送服务：前台已打开，不需要弹通知
+        LookAtMeController.activity = new java.lang.ref.WeakReference<>(this);
+        maybeOpenCompanionshipInvitation();
+        setChatReady(false);
         notifyServiceForeground(true);
-        // 回到前台：强制重连 WebSocket + 重新加载当天消息
-        if (webView != null && pageLoaded) {
+        resumeChat();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        String previousUrl = targetUrl;
+        String previousToken = authToken;
+        setIntent(intent);
+        maybeOpenCompanionshipInvitation();
+        if (!readLaunchConfiguration(intent)) return;
+        if (!targetUrl.equals(previousUrl) || !authToken.equals(previousToken)) {
+            releaseWebView();
+            recoveryAttempts = 0;
+            createWebView();
+            ensurePushService();
+        } else if (webView != null && pageLoaded && !isChatDocument(webView.getUrl())) {
+            webView.loadUrl(targetUrl);
+        }
+        if (chatVisible) resumeChat();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && chatVisible) { maybeOpenCompanionshipInvitation(); resumeChat(); }
+    }
+
+    private boolean isChatDocument(String url) {
+        if (url == null) return false;
+        String path = Uri.parse(url).getPath();
+        return "/chat".equals(path) || "/chat/".equals(path);
+    }
+
+    private void resumeChat() {
+        if (!chatVisible || webContainer == null || isFinishing()) return;
+        if (webView == null) {
+            if (recoveryAttempts <= MAX_RENDER_RECOVERIES) createWebView();
+            return;
+        }
+        if (rendererRecoveryPending) return;
+        webView.onResume();
+        webView.resumeTimers();
+        webView.requestLayout();
+        webView.invalidate();
+        if (pageLoadFailed && loadRetry == null) {
+            retryCount = 0;
+            webView.loadUrl(targetUrl);
+        } else if (pageLoaded) {
+            if (LookAtMeController.instance != null && !LookAtMeController.instance.requestId().isEmpty()
+                    && !isChatDocument(webView.getUrl())) {
+                webView.loadUrl(Uri.parse(targetUrl).buildUpon().path("/chat").clearQuery().fragment(null).build().toString());
+                return;
+            }
             webView.evaluateJavascript(
-                "(function(){" +
-                "  if(typeof ws!=='undefined' && ws.readyState!==1){" +
-                "    console.log('[ObsidianApp] WS断线，重连+刷新');" +
-                "    connectWS();" +
-                "    setTimeout(function(){if(typeof loadMessages==='function')loadMessages();},1500);" +
-                "  }" +
-                "})();",
-                null);
-            // BLE 状态同步：如果主控 Service 还活着，告诉前端广播仍在
+                    "(function(){"
+                    + "if(typeof onChatForeground==='function'){onChatForeground();}"
+                    + "else if(typeof selectConv==='function'&&typeof currentConvId!=='undefined'&&currentConvId){selectConv(currentConvId);}"
+                    + "})();", null);
             if (DomForegroundService.isRunning()) {
                 webView.evaluateJavascript(
-                    "typeof toyNativeBle!=='undefined'&&typeof toyNativeBle.onConnected==='function'&&toyNativeBle.onConnected()",
-                    null);
+                        "typeof toyNativeBle!=='undefined'&&typeof toyNativeBle.onConnected==='function'&&toyNativeBle.onConnected()",
+                        null);
             }
+        }
+        probeRenderer();
+    }
+
+    private void cancelRendererProbe() {
+        probeGeneration++;
+        if (probeTimeout != null) mainHandler.removeCallbacks(probeTimeout);
+        if (nextProbe != null) mainHandler.removeCallbacks(nextProbe);
+        probeTimeout = nextProbe = null;
+    }
+
+    private void probeRenderer() {
+        if (webView == null || rendererRecoveryPending || !canAcknowledgeMessagesSeen()) return;
+        cancelRendererProbe();
+        final WebView source = webView;
+        final int generation = probeGeneration;
+        probeTimeout = () -> {
+            if (generation == probeGeneration && source == webView && canAcknowledgeMessagesSeen()) {
+                recoverWebView(source, "render_probe_timeout", true);
+            }
+        };
+        mainHandler.postDelayed(probeTimeout, RENDER_PROBE_TIMEOUT_MS);
+        source.evaluateJavascript("!!document.body && document.body.getBoundingClientRect().height > 0", result -> {
+            if (source != webView || generation != probeGeneration) return;
+            if (pageLoaded && !pageLoadFailed && !"true".equals(result)) {
+                recoverWebView(source, "empty_document", true);
+                return;
+            }
+            source.postVisualStateCallback(generation, new WebView.VisualStateCallback() {
+                @Override public void onComplete(long requestId) {
+                    if (source != webView || generation != probeGeneration) return;
+                    if (probeTimeout != null) mainHandler.removeCallbacks(probeTimeout);
+                    probeTimeout = null;
+                    source.invalidate();
+                    nextProbe = () -> probeRenderer();
+                    mainHandler.postDelayed(nextProbe, 30000);
+                }
+            });
+        });
+    }
+
+    private void recoverWebView(WebView source, String reason, boolean terminateRenderer) {
+        if (source != webView || isFinishing() || isDestroyed()) return;
+        if (terminateRenderer && rendererRecoveryPending) return;
+        android.util.Log.w("ObsidianWebView", "recovering page: " + reason);
+        cancelRendererProbe();
+        setChatReady(false);
+        showRecovery("页面正在恢复…", false);
+        if (terminateRenderer
+                && WebViewFeature.isFeatureSupported(WebViewFeature.GET_WEB_VIEW_RENDERER)
+                && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_TERMINATE)) {
+            WebViewRenderProcess renderer = WebViewCompat.getWebViewRenderProcess(source);
+            if (renderer != null) {
+                rendererRecoveryPending = true;
+                if (renderer.terminate()) {
+                    // 正常由 onRenderProcessGone 清理；少数实现没有及时回调时也能退出空白页。
+                    mainHandler.postDelayed(() -> {
+                        if (source == webView && rendererRecoveryPending) {
+                            recoverWebView(source, "renderer_exit_timeout", false);
+                        }
+                    }, 2500);
+                    return;
+                }
+            }
+        }
+        releaseWebView();
+        recoveryAttempts++;
+        if (recoveryAttempts > MAX_RENDER_RECOVERIES) {
+            showRecovery("页面恢复失败，点击重新加载", true);
+        } else if (chatVisible) {
+            mainHandler.post(this::createWebView);
+        }
+    }
+
+    private void releaseWebView() {
+        cancelRendererProbe();
+        if (loadTimeout != null) mainHandler.removeCallbacks(loadTimeout);
+        if (loadRetry != null) mainHandler.removeCallbacks(loadRetry);
+        loadTimeout = loadRetry = null;
+        rendererRecoveryPending = false;
+        messageAckGeneration++;
+        DomForegroundService.setWebView(null);
+        MuseForegroundService.setWebView(null);
+        if (audioBridge != null) { audioBridge.stop(); audioBridge = null; }
+        if (bleBridge != null) { bleBridge.shutdown(); bleBridge = null; }
+        if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
+        if (pendingPermRequest != null) { pendingPermRequest.deny(); pendingPermRequest = null; }
+        WebView previous = webView;
+        webView = null;
+        if (previous != null) {
+            webContainer.removeView(previous);
+            previous.destroy();
         }
     }
 
     @Override
     protected void onPause() {
         chatVisible = false;
+        setChatReady(false);
+        cancelRendererProbe();
+        if (webView != null && !rendererRecoveryPending) {
+            webView.evaluateJavascript("typeof onChatBackground==='function'&&onChatBackground()", null);
+            webView.onPause();
+        }
         super.onPause();
         // 告诉推送服务：前台已关闭，需要弹通知
         notifyServiceForeground(false);
@@ -572,21 +834,131 @@ public class WebViewActivity extends AppCompatActivity {
         Intent intent = new Intent(this, ObsidianPushService.class);
         intent.putExtra("action", "set_foreground");
         intent.putExtra("active", active);
+        intent.putExtra("chat_ready", chatReady);
         startService(intent);
     }
 
+    private void setChatReady(boolean ready) {
+        if (!ready && LookAtMeController.instance != null) LookAtMeController.instance.visibility(false);
+        if (!ready) messageAckGeneration++;
+        if (chatReady == ready) return;
+        chatReady = ready;
+        Intent intent = new Intent(this, ObsidianPushService.class)
+                .putExtra("action", "set_chat_ready").putExtra("active", ready);
+        startService(intent);
+    }
+
+    boolean lookAtMeVisible() {
+        return pageLoaded && webView != null && isChatDocument(webView.getUrl()) && canAcknowledgeMessagesSeen();
+    }
+
+    private void maybeOpenCompanionshipInvitation() {
+        String id = getIntent().getStringExtra("look_at_me_notification");
+        if (id == null || !canAcknowledgeMessagesSeen()) return;
+        LookAtMeController c = LookAtMeController.instance;
+        if (c == null) { mainHandler.postDelayed(this::maybeOpenCompanionshipInvitation, 300); return; }
+        getIntent().removeExtra("look_at_me_notification");
+        c.notificationOpened(id);
+    }
+
+    private final class LookAtMeBridge {
+        private final WebView source;
+        LookAtMeBridge(WebView source) { this.source = source; }
+        @JavascriptInterface public String deviceId() { return DeviceIdentity.id(WebViewActivity.this); }
+        @JavascriptInterface public String deviceName() { return DeviceIdentity.name(WebViewActivity.this); }
+        @JavascriptInterface public String requestId() {
+            LookAtMeController c = LookAtMeController.instance;
+            return c == null ? "" : c.requestId();
+        }
+        @JavascriptInterface public void end() {
+            mainHandler.post(() -> { if (LookAtMeController.instance != null) LookAtMeController.instance.finish("disabled"); });
+        }
+        @JavascriptInterface public void settings() { mainHandler.post(() -> showLookAtMeSettings()); }
+        @JavascriptInterface public void ready(String request, String conv, String daily) {
+            mainHandler.post(() -> {
+                if (source != webView || !lookAtMeVisible()) return;
+                final int generation = messageAckGeneration;
+                source.postVisualStateCallback(generation, new WebView.VisualStateCallback() {
+                    @Override public void onComplete(long ignored) {
+                        if (source != webView || generation != messageAckGeneration || !lookAtMeVisible()) return;
+                        LookAtMeController c = LookAtMeController.instance;
+                        if (c != null) c.ready(request, conv, daily);
+                    }
+                });
+            });
+        }
+    }
+
+    private void showLookAtMeSettings() {
+        new AlertDialog.Builder(this, R.style.Theme_ObsidianVow_Dialog)
+            .setTitle("腻歪时间 · 手机设置")
+            .setItems(new String[]{"悬浮窗", "使用情况访问", "通知与来电中断", "电池优化", "vivo 后台设置说明"}, (dialog, which) -> {
+                Intent intent;
+                switch (which) {
+                    case 0: intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())); break;
+                    case 1: intent = new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS); break;
+                    case 2:
+                        java.util.ArrayList<String> permissions = new java.util.ArrayList<>();
+                        permissions.add(Manifest.permission.READ_PHONE_STATE);
+                        if (android.os.Build.VERSION.SDK_INT >= 33) permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+                        requestPermissions(permissions.toArray(new String[0]), 4202); return;
+                    case 3: requestBatteryOptimization(); return;
+                    default:
+                        new AlertDialog.Builder(this, R.style.Theme_ObsidianVow_Dialog)
+                            .setTitle("后台邀请")
+                            .setMessage("请在 vivo 应用管理中允许“后台弹出界面”，并在电池 → 后台耗电管理中打开“允许后台耗电”。电池优化豁免不能代替这两个开关。设置后请验证切到其他应用时能否收到邀请。")
+                            .setPositiveButton("打开应用设置", (d, w) -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))))
+                            .setNegativeButton("知道了", null).show(); return;
+                }
+                try { startActivity(intent); } catch (Exception ignored) {}
+            }).setNegativeButton("关闭", null).show();
+    }
+
     private final class NotificationReadBridge {
+        private final WebView source;
+
+        NotificationReadBridge(WebView source) { this.source = source; }
+
+        @JavascriptInterface
+        public String pendingConversationId() {
+            return ObsidianPushService.latestUnreadConversationId(getApplicationContext());
+        }
+
+        @JavascriptInterface
+        public void syncStarted() {
+            mainHandler.post(() -> { if (source == webView) setChatReady(false); });
+        }
+
+        @JavascriptInterface
+        public void synced(double createdAtSeconds) {
+            acknowledge(createdAtSeconds);
+        }
+
         @JavascriptInterface
         public void seenThrough(double createdAtSeconds) {
-            if (!canAcknowledgeMessagesSeen()
-                    || !Double.isFinite(createdAtSeconds)
-                    || createdAtSeconds <= 0) {
-                return;
-            }
-            long cutoffMs = Math.round(createdAtSeconds * 1000.0);
-            ObsidianPushService.clearMessageNotificationsThrough(
-                    getApplicationContext(), cutoffMs
-            );
+            acknowledge(createdAtSeconds);
+        }
+
+        private void acknowledge(double createdAtSeconds) {
+            if (!Double.isFinite(createdAtSeconds) || createdAtSeconds < 0) return;
+            mainHandler.post(() -> {
+                if (source != webView || !pageLoaded || !canAcknowledgeMessagesSeen()) return;
+                final int generation = messageAckGeneration;
+                source.postVisualStateCallback(generation, new WebView.VisualStateCallback() {
+                    @Override public void onComplete(long requestId) {
+                        if (source != webView || generation != messageAckGeneration
+                                || !canAcknowledgeMessagesSeen()) return;
+                        setChatReady(true);
+                        recoveryAttempts = 0;
+                        recoveryPanel.setVisibility(View.GONE);
+                        if (loadTimeout != null) mainHandler.removeCallbacks(loadTimeout);
+                        if (createdAtSeconds > 0) {
+                            ObsidianPushService.clearMessageNotificationsThrough(
+                                    getApplicationContext(), Math.round(createdAtSeconds * 1000.0));
+                        }
+                    }
+                });
+            });
         }
     }
 
@@ -600,7 +972,7 @@ public class WebViewActivity extends AppCompatActivity {
         KeyguardManager keyguardManager = getSystemService(KeyguardManager.class);
         boolean deviceLocked = keyguardManager == null || keyguardManager.isKeyguardLocked();
         boolean visible = MessageNotificationPolicy.isChatActuallyVisible(
-                chatVisible,
+                chatVisible && hasWindowFocus(),
                 screenInteractive,
                 deviceLocked
         );
@@ -631,17 +1003,8 @@ public class WebViewActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        DomForegroundService.setWebView(null);
-        MuseForegroundService.setWebView(null);
+        releaseWebView();
         mainHandler.removeCallbacksAndMessages(null);
-        if (bleBridge != null) {
-            bleBridge.shutdown();
-            bleBridge = null;
-        }
-        if (webView != null) {
-            webView.destroy();
-            webView = null;
-        }
         super.onDestroy();
     }
 }

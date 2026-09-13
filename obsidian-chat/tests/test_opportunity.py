@@ -179,6 +179,38 @@ def _stub_prepared_turn(
 
 # ── opportunity TurnProfile prompt ──────────────────
 
+@pytest.mark.parametrize("self_wake_tools", [
+    {"self_wake.schedule", "self_wake.cancel"},
+    {"self_wake.schedule"},
+    {"self_wake.cancel"},
+    set(),
+])
+def test_time_capabilities_do_not_expand_opportunity_permissions(self_wake_tools):
+    profile = opportunity_turn_profile(
+        runtime_capabilities=self_wake_tools | {"schedule.alarm", "schedule.reminder", "schedule.monitor"},
+        reflection_allowed=False,
+    )
+    block = build_opportunity_ability_block(
+        profile=profile, user_name="小栀", ai_name="阿澈", model_key="test-model",
+        self_wake_context={
+            "self_wake_timezone": "UTC",
+            "self_wake_now_local": "2027-01-15T08:00+00:00",
+            "self_wake_status": {"pending": None},
+            "self_wake_legal_capabilities": ("device.ring_touch",),
+        },
+    )
+    assert set(block.advertised_tools) == profile.allowed_tool_capabilities == self_wake_tools
+    assert ("[SELF_WAKE:" in block) == ("self_wake.schedule" in self_wake_tools)
+    assert ("[SELF_WAKE_CANCEL]" in block) == ("self_wake.cancel" in self_wake_tools)
+    if "self_wake.schedule" in self_wake_tools:
+        assert "未来唤醒可预留动作名：device.ring_touch" in block
+    for marker in ("[ALARM:", "[REMINDER:", "[Monitor:", "[RING:"):
+        assert marker not in block
+    assert "[OPPORTUNITY_NONE]" in block
+    assert "[OPPORTUNITY_REFLECT]" not in block
+    assert "不得增删日程" in block
+
+
 def test_prompt_renders_only_profile_capabilities_and_control_markers():
     profile = opportunity_turn_profile(
         runtime_capabilities={"heart.whisper", "memory.remember"},
@@ -745,11 +777,14 @@ def test_reflection_failure_details_are_not_exposed_on_general_websocket(monkeyp
     }
 
 
-def test_web_search_marker_only_counts_as_acted_without_empty_message(monkeypatch):
-    _stub_prepared_turn(monkeypatch, web_search_allowed=True)
+@pytest.mark.parametrize("kind", ["idle", "look_at_me_accept"])
+def test_web_search_marker_only_counts_as_acted_without_empty_message(monkeypatch, kind):
+    _stub_prepared_turn(monkeypatch, web_search_allowed=True, kind=kind)
     broadcasts = _stub_broadcast(monkeypatch)
+    core_calls, searches = [], []
 
     async def fake_core(*_args, **_kwargs):
+        core_calls.append(True)
         return "[WEB_SEARCH_INTENT]查最近的新应用[/WEB_SEARCH_INTENT]"
 
     class Processor:
@@ -765,7 +800,8 @@ def test_web_search_marker_only_counts_as_acted_without_empty_message(monkeypatc
 
     class WebSearch:
         async def enqueue_opportunity(self, **kwargs):
-            assert kwargs["origin_turn_id"].endswith("_opp")
+            searches.append(kwargs)
+            assert kwargs["origin_turn_id"].endswith("_opp" if kind == "idle" else "_look_at_me_accept")
             return {"status": "queued", "search_id": "web-1"}
 
     async def no_message(*_args, **_kwargs):
@@ -783,12 +819,13 @@ def test_web_search_marker_only_counts_as_acted_without_empty_message(monkeypatc
     monkeypatch.setattr(opp, "execute_postprocessed_actions", no_actions)
     monkeypatch.setattr(opp, "_send_message", no_message)
 
-    result = asyncio.run(OpportunityRunner()._run(
-        time.time(),
-        {"conv_id": "conv", "model_key": "core", "last_user_ts": 1.0},
+    result = asyncio.run(opp.run_autonomous_turn(
+        kind=kind, now=time.time(),
+        target={"conv_id": "conv", "model_key": "core", "last_user_ts": 1.0},
     ))
     assert result["status"] == "acted"
     assert result["web_search_queued"] is True
+    assert len(core_calls) == len(searches) == 1
     event = next(item for item in broadcasts if item["type"] == "opportunity_log")
     assert "WEB_SEARCH" not in str(event)
 
@@ -871,6 +908,33 @@ def test_control_and_empty_outputs_stop_before_postprocess(
 
     assert result["status"] == expected_status
     assert result["executed"] is False
+
+
+def test_idle_invitation_with_quoted_control_marker_reaches_adapter(monkeypatch):
+    from app.look_at_me import service
+    _stub_prepared_turn(monkeypatch, capabilities={"mobile.look_at_me"})
+    _stub_broadcast(monkeypatch)
+    calls = []
+
+    async def core(*_args, **_kwargs):
+        return "【陪我：20｜聊聊[OPPORTUNITY_NONE]的含义】"
+
+    async def execute(intent, _context, **_kwargs):
+        calls.append(intent.arguments)
+        return {"ok": True, "id": "lam_test", "status": "queued"}
+
+    async def no_message(*_args, **_kwargs):
+        raise AssertionError("invitation-only idle turn persisted an empty message")
+
+    monkeypatch.setattr(opp, "call_opportunity_core", core)
+    monkeypatch.setattr(service, "execute_invitation", execute)
+    monkeypatch.setattr(opp, "_send_message", no_message)
+    result = asyncio.run(opp.run_autonomous_turn(
+        kind="idle", now=time.time(),
+        target={"conv_id": "conv", "model_key": "core", "last_user_ts": 1.0},
+    ))
+    assert result["status"] == "acted"
+    assert len(calls) == 1 and calls[0]["expression"] == "聊聊[OPPORTUNITY_NONE]的含义"
 
 
 def test_provider_exception_stops_before_postprocess(monkeypatch):
@@ -1032,7 +1096,7 @@ def test_normal_night_profile_exposes_only_draw_reflect_and_none():
     assert "Arden今晚不需要向Alice说话" in block
 
 
-def test_empty_library_night_profile_exposes_only_first_human_draw():
+def test_empty_library_night_keeps_other_exits_and_requires_human_only_for_draw():
     profile = opportunity_turn_profile(
         runtime_capabilities={
             "desktop.presence.draw",
@@ -1053,12 +1117,12 @@ def test_empty_library_night_profile_exposes_only_first_human_draw():
         presence_requires_human=True,
     ))
     assert profile.allowed_tool_capabilities == frozenset({"desktop.presence.draw"})
-    assert profile.allowed_markers == frozenset()
+    assert profile.allowed_markers == frozenset({"opportunity_none", "opportunity_reflect"})
     assert "[PRESENCE_DRAW:" in block
-    assert "OPPORTUNITY_REFLECT" not in block
-    assert "OPPORTUNITY_NONE" not in block
+    assert "OPPORTUNITY_REFLECT" in block
+    assert "OPPORTUNITY_NONE" in block
     assert "脸、身形、头发、衣着、配色和视角" in block
-    assert "唯一合法出口是一个人形 PRESENCE_DRAW" in block
+    assert "若选择桌面绘图，第一张须为人形" in block
 
 
 def test_prepare_empty_library_night_freezes_bootstrap_profile(monkeypatch):
@@ -1106,11 +1170,51 @@ def test_prepare_empty_library_night_freezes_bootstrap_profile(monkeypatch):
     assert prepared.profile.allowed_tool_capabilities == frozenset(
         {"desktop.presence.draw"}
     )
-    assert prepared.profile.allowed_markers == frozenset()
-    assert prepared.reflection_context is None
-    assert "第一次为自己留下正式形象" in rendered
-    assert "OPPORTUNITY_REFLECT" not in rendered
-    assert "OPPORTUNITY_NONE" not in rendered
+    assert prepared.profile.allowed_markers == frozenset({"opportunity_none", "opportunity_reflect"})
+    assert prepared.reflection_context is not None
+    assert "若选择桌面绘图，第一张须为人形" in rendered
+    assert "OPPORTUNITY_REFLECT" in rendered
+    assert "OPPORTUNITY_NONE" in rendered
+
+
+def test_unsynced_desktop_only_removes_drawing_from_night(monkeypatch):
+    _patch_prepare_context(monkeypatch)
+    from app.presence import sprite_library
+    from app.stickers.repository import sticker_repository
+
+    async def capabilities(**_kwargs):
+        return frozenset({'desktop.presence.draw', 'sticker.create'})
+
+    async def has_sprite(**_kwargs):
+        return True
+
+    async def not_synced(**_kwargs):
+        return False
+
+    async def heads():
+        return {}, {}
+
+    async def reflection(**_kwargs):
+        return object()
+
+    async def wishes(**_kwargs):
+        return [{'expression': '想钻被窝', 'count': 2, 'context': {'message': '今天好冷'}}]
+
+    monkeypatch.setattr(opp, '_runtime_capabilities', capabilities)
+    monkeypatch.setattr(sprite_library, 'has_non_seed_sprites', has_sprite)
+    monkeypatch.setattr(sprite_library, 'has_synced_non_seed_sprites', not_synced)
+    monkeypatch.setattr(opp, 'working_model_v2_injection_enabled', lambda: False)
+    monkeypatch.setattr(opp, 'load_ai_behavior', lambda: {'working_model_reflection_enabled': True})
+    monkeypatch.setattr(opp.working_model_service, 'load_v2_prompt_heads', heads)
+    monkeypatch.setattr(opp, 'capture_reflection_context', reflection)
+    monkeypatch.setattr(sticker_repository, 'wishes', wishes)
+    prepared = asyncio.run(opp._prepare_opportunity_turn(
+        target={'conv_id': 'conv', 'model_key': 'core', 'last_user_ts': 1}, now=1000, kind='night'))
+    assert prepared.profile.allowed_tool_capabilities == frozenset({'sticker.create'})
+    assert prepared.profile.allowed_markers == frozenset({'opportunity_none', 'opportunity_reflect'})
+    rendered = '\n'.join(message['content'] for message in prepared.messages)
+    assert '想钻被窝' in rendered and '今天好冷' in rendered
+    assert '【做表情：' in rendered and '[PRESENCE_DRAW:' not in rendered
 
 
 def test_night_plain_text_is_dropped_without_message_or_broadcast(monkeypatch):

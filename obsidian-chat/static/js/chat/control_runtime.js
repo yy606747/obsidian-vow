@@ -346,6 +346,10 @@
 
   function _setSession(next, options) {
     const opts = options || {};
+    if (typeof resolveDailyConversation === 'function') {
+      if (opts.convId) opts.convId = resolveDailyConversation(opts.convId);
+      if (next?.conv_id) next = { ...next, conv_id: resolveDailyConversation(next.conv_id) };
+    }
     const previous = session;
     const previousConv = activeConvId;
     if (opts.convId) activeConvId = opts.convId;
@@ -436,12 +440,30 @@
         return null;
       }
       const current = await fetchCurrent(target);
-      _setSession(current, { convId: target, reason: "recover" });
+      const resolved = typeof resolveDailyConversation === 'function' ? resolveDailyConversation(target) : target;
+      if (resolved !== target && !current) return recover(resolved);
+      const next = current && resolved !== target ? { ...current, conv_id: resolved } : current;
+      _setSession(next, { convId: resolved, reason: "recover" });
       return session;
     } catch (e) {
       console.warn("[ControlRuntime] recover failed", e);
       _setSession(null, { convId: target, reason: "recover_failed" });
       return null;
+    }
+  }
+
+  function rolloverConversation(previous, target) {
+    if (!target) return;
+    try {
+      const stoppedAt = localStorage.getItem(_safetyKey(previous));
+      if (stoppedAt) localStorage.setItem(_safetyKey(target), stoppedAt);
+    } catch (_) {}
+    if (activeConvId === previous || session?.conv_id === previous) {
+      if (previous) _clearOwnerLock(previous, session?.session_id);
+      activeConvId = target;
+      if (session) session = { ...session, conv_id: target };
+      if (session && isOwnerOrStaleOwner(session)) _writeOwnerLock('daily_rollover');
+      _emit('daily_rollover');
     }
   }
 
@@ -605,6 +627,7 @@
   _bindPageLifecycle();
 
   global.ControlRuntime = {
+    rolloverConversation,
     start,
     recover,
     heartbeat,

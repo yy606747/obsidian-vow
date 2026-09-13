@@ -587,16 +587,19 @@ def test_summary_retry_rechecks_source_and_observation_status(photo, monkeypatch
 
 
 @pytest.mark.parametrize("followup_outcome", ["succeeded", "failed", "invalid_output"])
-def test_actual_chat_stream_schedules_one_image_followup_on_same_turn(viewable, monkeypatch, followup_outcome):
+@pytest.mark.parametrize("opening", ["我再看看。", "", "【发图：探头】"], ids=["text", "view-only", "view-and-sticker"])
+def test_actual_chat_stream_schedules_one_image_followup_on_same_turn(viewable, monkeypatch, followup_outcome, opening):
     from app.chat import streaming
     from app.image_memory import view
     from app.background_tasks import _BACKGROUND_TASKS, begin_task_lifecycle
     calls = []
+    first_calls = []
 
     async def noop(*args, **kwargs):
         return None
     async def first_reply(*args, **kwargs):
-        yield "我再看看。[VIEW_IMAGE:photo|/uploads/photo.png][VIEW_IMAGE:photo|/uploads/photo.png]"
+        first_calls.append(True)
+        yield opening + "[VIEW_IMAGE:photo|/uploads/photo.png][VIEW_IMAGE:photo|/uploads/photo.png]"
     async def second_reply(history, model, **kwargs):
         calls.append((history, model))
         assert len([part for message in ai_providers.build_multimodal_messages(history)
@@ -636,6 +639,8 @@ def test_actual_chat_stream_schedules_one_image_followup_on_same_turn(viewable, 
                          "prompt_messages": history, "prompt_count": 1, "advertised_tools": ["memory.view_image"]},
         )
         events = [json.loads(raw[6:].strip()) async for raw in response.body_iterator]
+        assert not events[-1]['has_error']
+        assert '[请求出错:' not in ''.join(event.get('content', '') for event in events)
         pending = [task for task in _BACKGROUND_TASKS if not task.done() and task.get_loop() is asyncio.get_running_loop()]
         if pending:
             await asyncio.wait_for(asyncio.gather(*pending), timeout=3)
@@ -643,6 +648,7 @@ def test_actual_chat_stream_schedules_one_image_followup_on_same_turn(viewable, 
 
     turn_id = asyncio.run(scenario())
     assert len(calls) == 1 and calls[0][1] == "core-image"
+    assert len(first_calls) == 1  # A pending image reply does not need a sticker supplement.
     with sqlite3.connect(viewable) as db:
         answers = db.execute("SELECT content FROM messages WHERE id LIKE '%_image_view'").fetchall()
         assert answers == ([("看清了，是红色杯子。",)] if followup_outcome == "succeeded" else [])
@@ -655,3 +661,49 @@ def test_actual_chat_stream_schedules_one_image_followup_on_same_turn(viewable, 
         phases = db.execute("SELECT invocation_id,outcome,metadata_json FROM tool_invocation_events WHERE stage='diagnostic' AND source='image_view_followup'").fetchall()
         assert len(phases) == 1 and phases[0][0] and phases[0][1] == followup_outcome
         assert json.loads(phases[0][2])["phase"] == "image_view_followup"
+
+
+@pytest.mark.parametrize('reason', ['disabled', 'no_vision', 'source_deleted', 'file_changed', 'commit_failed'])
+def test_view_only_request_does_not_bypass_validation_or_commit(viewable, monkeypatch, reason):
+    from app.chat import streaming
+    from app.image_memory import view
+    from test_chat_streaming_sse import _FakeDB, _collect_sse, _patch_streaming_io, _prompt_meta
+    executed, _broadcasts = _patch_streaming_io(monkeypatch)
+    followups = []
+
+    if reason == 'disabled':
+        monkeypatch.setitem(config.SETTINGS, 'image_memory_enabled', False)
+    elif reason == 'no_vision':
+        monkeypatch.setitem(config.SETTINGS['user_models']['core-image'], 'image_input', False)
+    elif reason == 'source_deleted':
+        with sqlite3.connect(viewable) as db:
+            db.execute("DELETE FROM messages WHERE id='photo'")
+    elif reason == 'file_changed':
+        (repo.UPLOADS_DIR / 'photo.png').write_bytes(b'changed')
+    else:
+        class FailingDB(_FakeDB):
+            async def commit(self):
+                raise RuntimeError('test_commit_failure')
+        monkeypatch.setattr(streaming, 'get_db', lambda: FailingDB(executed))
+
+    async def first_reply(*_args, **_kwargs):
+        yield '[VIEW_IMAGE:photo|/uploads/photo.png]'
+
+    async def unexpected_followup(*args, **kwargs):
+        followups.append((args, kwargs))
+
+    monkeypatch.setattr(streaming, 'stream_ai', first_reply)
+    monkeypatch.setattr(view, 'followup', unexpected_followup)
+
+    async def scenario():
+        response = await streaming.stream_chat_response(
+            conv_id='conv', model_key='core-image', history=[], temperature=None, prompt_meta=_prompt_meta())
+        return await _collect_sse(response)
+
+    events = asyncio.run(scenario())
+    assert not followups
+    if reason != 'commit_failed':
+        assert events[-1]['has_error']
+        assert '[请求出错:' in ''.join(event.get('content', '') for event in events)
+        assert not [params for sql, params in executed
+                    if sql.startswith('INSERT INTO messages') and params[2] == 'assistant']

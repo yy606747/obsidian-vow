@@ -55,8 +55,8 @@ def provider_configured() -> bool:
     return True
 
 
-def _request_config() -> tuple[dict[str, Any], str, float]:
-    slot = get_slot("presence_image")
+def _request_config(slot_name: str = "presence_image") -> tuple[dict[str, Any], str, float]:
+    slot = get_slot(slot_name)
     if not slot:
         raise PresenceImageProviderError("presence_image_provider_unconfigured")
     endpoint = slot.get("endpoint") or {}
@@ -182,48 +182,16 @@ async def _remove_background(data: bytes) -> bytes:
     return await asyncio.to_thread(run)
 
 
-class PresenceImageProvider:
-    """Configurable endpoint plus local u2netp extraction and alpha validation."""
+class ImageGenerationTransport:
+    """Provider dispatch and decoding, without sprite styling or cutout."""
 
-    async def preflight(self) -> None:
-        self._request_config()
-        # Load the local post-processor (and its model) before a paid image
-        # request or quota reservation. Missing configuration and runtime
-        # dependencies therefore fail without consuming the daily allowance.
-        await _rembg_session()
+    negative_prompt = ""
 
-    async def generate(
-        self,
-        prompt: str,
-        reference_png: bytes | None = None,
-        reference_prompt: str = "",
-    ) -> bytes:
-        return (
-            await self.generate_with_metadata(
-                prompt,
-                reference_png=reference_png,
-                reference_prompt=reference_prompt,
-            )
-        ).png
-
-    async def generate_with_metadata(
-        self,
-        prompt: str,
-        *,
-        reference_png: bytes | None = None,
-        reference_prompt: str = "",
-    ) -> PresenceImageGeneration:
-        await self.preflight()
-        endpoint, model, timeout = self._request_config()
+    async def generate_raw(self, prompt: str, *, reference_png: bytes | None = None,
+                           reference_prompt: str = "", request_config=None) -> bytes:
+        endpoint, model, timeout = request_config or self._request_config()
         endpoint_type = str(endpoint.get("type") or "openai").lower()
-        reference = bytes(reference_png) if reference_png is not None else None
-        if reference is not None:
-            try:
-                inspect_transparent_png(reference)
-            except Exception as exc:
-                raise PresenceImageProviderError(
-                    "presence_reference_png_invalid"
-                ) from exc
+        reference = reference_png
         try:
             async with httpx.AsyncClient(
                 timeout=timeout,
@@ -246,19 +214,7 @@ class PresenceImageProvider:
             raise PresenceImageProviderError(
                 f"image_provider_{type(exc).__name__}"
             ) from exc
-        cutout = await _remove_background(raw)
-        inspect_transparent_png(cutout)
-        degraded = bool(reference is not None and endpoint_type != "gemini")
-        return PresenceImageGeneration(
-            png=cutout,
-            provider_type=endpoint_type,
-            degraded=degraded,
-            degradation_reason=(
-                "reference_image_unsupported:openai"
-                if degraded
-                else ""
-            ),
-        )
+        return raw
 
     async def _generate_with_retries(
         self,
@@ -381,7 +337,7 @@ class PresenceImageProvider:
                 prompt,
                 reference_prompt=reference_prompt,
             ),
-            "negative_prompt": _NEGATIVE_PROMPT,
+            "negative_prompt": cls.negative_prompt,
             "image_size": DEFAULT_OPENAI_IMAGE_SIZE,
             "num_inference_steps": 8,
         }
@@ -429,16 +385,86 @@ class PresenceImageProvider:
 
     @staticmethod
     def _render_prompt(prompt: str, *, reference_prompt: str = "") -> str:
+        return str(prompt)
+
+
+class PresenceImageProvider(ImageGenerationTransport):
+    """Configurable endpoint plus local u2netp extraction and alpha validation."""
+
+    negative_prompt = _NEGATIVE_PROMPT
+
+    async def preflight(self) -> None:
+        self._request_config()
+        # Load the local post-processor (and its model) before a paid image
+        # request or quota reservation. Missing configuration and runtime
+        # dependencies therefore fail without consuming the daily allowance.
+        await _rembg_session()
+
+    async def generate(
+        self,
+        prompt: str,
+        reference_png: bytes | None = None,
+        reference_prompt: str = "",
+    ) -> bytes:
+        return (
+            await self.generate_with_metadata(
+                prompt,
+                reference_png=reference_png,
+                reference_prompt=reference_prompt,
+            )
+        ).png
+
+    async def generate_with_metadata(
+        self,
+        prompt: str,
+        *,
+        reference_png: bytes | None = None,
+        reference_prompt: str = "",
+    ) -> PresenceImageGeneration:
+        await self.preflight()
+        endpoint, model, timeout = self._request_config()
+        endpoint_type = str(endpoint.get("type") or "openai").lower()
+        reference = bytes(reference_png) if reference_png is not None else None
+        if reference is not None:
+            try:
+                inspect_transparent_png(reference)
+            except Exception as exc:
+                raise PresenceImageProviderError(
+                    "presence_reference_png_invalid"
+                ) from exc
+        raw = await self.generate_raw(
+            prompt, reference_png=reference, reference_prompt=reference_prompt,
+            request_config=(endpoint, model, timeout),
+        )
+        cutout = await _remove_background(raw)
+        inspect_transparent_png(cutout)
+        degraded = bool(reference is not None and endpoint_type != "gemini")
+        return PresenceImageGeneration(
+            png=cutout,
+            provider_type=endpoint_type,
+            degraded=degraded,
+            degradation_reason=(
+                "reference_image_unsupported:openai"
+                if degraded
+                else ""
+            ),
+        )
+
+    @staticmethod
+    def _render_prompt(prompt: str, *, reference_prompt: str = "") -> str:
         subject = " ".join(str(prompt or "").split())[:800]
         baseline = " ".join(str(reference_prompt or "").split())[:800]
         if baseline:
             subject = (
-                "Keep the same person and recognizable identity as the supplied "
-                f"baseline ({baseline}); apply this new variation: {subject}"
+                "Keep the same recognizable face, body proportions and illustration style as the supplied "
+                f"reference image. Identity notes: {baseline}. Apply this variation: {subject}. "
+                "The face must retain visible expressive facial features, never a blank face, "
+                "featureless mask or dark facial silhouette. Keep the face readable at small desktop size. "
+                "The reference's dark clothing does not require dark lighting across the whole figure"
             )
         return (
             f"{subject}. A single desktop spirit sprite, full subject visible, centered, "
-            "clean silhouette, generous empty margins, isolated on a perfectly uniform "
+            "clear contours and readable subject details, generous empty margins, isolated on a perfectly uniform "
             "pure white studio background for later cutout, no floor and no cast shadow. "
             "No scenery, frame, readable text, logo, or watermark."
         )

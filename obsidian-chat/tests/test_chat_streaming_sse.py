@@ -92,6 +92,31 @@ class _FakeControlGateway:
         return {**self.result, "legacy_command": intent.arguments["command"]}
 
 
+@pytest.mark.parametrize('raw', ['', '[错误] OpenAI 调用失败（HTTP 200 / empty_response）：流已结束但未收到正文'])
+def test_empty_response_is_transient_in_sse_and_websocket_and_never_persisted(monkeypatch, raw):
+    executed, broadcasts = _patch_streaming_io(monkeypatch)
+
+    async def fake_stream(*_args):
+        yield raw
+
+    monkeypatch.setattr(streaming, 'stream_ai', fake_stream)
+
+    async def run():
+        response = await streaming.stream_chat_response(
+            conv_id='empty', model_key='mock-model', history=[{'role': 'user', 'content': '晚安'}],
+            prompt_meta=_prompt_meta(), temperature=0,
+        )
+        return await _collect_sse(response)
+
+    events = asyncio.run(run())
+    assert events[-1]['has_error'] is True
+    assert not [params for sql, params in executed if sql.startswith('INSERT INTO messages') and params[2] == 'assistant']
+    message = next(event['data'] for event in broadcasts if event['type'] == 'msg_created')
+    assert message['transient_error'] is True and message['persisted'] is False
+    assert message['error_text'] == message['content'] == events[-1]['error_text']
+    assert not message['attachments']
+
+
 def test_stream_chat_response_normal_mode_skips_toy_event(monkeypatch):
     executed, broadcasts = _patch_streaming_io(monkeypatch)
 

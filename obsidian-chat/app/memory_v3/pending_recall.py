@@ -8,8 +8,9 @@ import json
 import time
 from collections.abc import Iterable
 
-from app.memory_v2.hybrid_recall import wide_chunk_recall
 from memory import _call_flash_lite
+
+from app.memory_v2.hybrid_recall import wide_chunk_recall
 
 from .config import load_memory_v3_config, normalize_memory_v3_config
 from .repository import PendingRecallRepository

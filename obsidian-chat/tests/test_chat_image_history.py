@@ -106,6 +106,34 @@ def test_real_user_window_ignores_triggers_and_keeps_message_positions(chat_imag
     }]
 
 
+def test_regenerate_source_and_sticker_summary_survive_history_normalization(chat_images):
+    chat_images.add("photo", [chat_images.image("photo.png")], content="这个猫猫送给阿澈")
+    chat_images.add("sticker", [{"type": "sticker", "url": "/uploads/sent.gif",
+                    "expression": "偷偷探头", "summary": {"visual": "白猫探头"}}],
+                    role="assistant", content="")
+    chat_images.add("wake", role="trigger", content="后台事件")
+    context = chat_images.prepare("last_user")
+    assert context.latest_user_message_id == "photo"
+    assert context.latest_user_content == "这个猫猫送给阿澈"
+    sent = next(message for message in context.history if "[已发表情]" in message["content"])
+    assert "阿澈向小栀" in sent["content"] and "白猫探头" in sent["content"]
+    assert not sent["attachments"]
+
+
+@pytest.mark.parametrize('policy', ['last_message', 'last_user'])
+def test_user_sticker_and_normal_image_keep_distinct_context_and_actual_images(chat_images, policy):
+    photo = chat_images.image('normal.png')
+    sticker = {'type': 'sticker', 'id': 'st_cat', 'url': chat_images.image('cat.png'),
+               'mime_type': 'image/png', 'summary': {'visual': '猫猫探头'}}
+    chat_images.add('images', [photo, sticker], content='')
+    context = chat_images.prepare(policy)
+    message = context.history[-1]
+    assert '小栀向阿澈发送的聊天表情' in message['content']
+    assert '猫猫探头' in message['content'] and '1 张普通图片' in message['content']
+    assert message['attachments'] == [photo, sticker]
+    assert len(images_in_openai_payload(context.history)) == 2
+
+
 def test_budget_prefers_recent_images_and_exempts_current_images(chat_images):
     chat_images.add("older", [chat_images.image(f"old-{index}.png") for index in range(3)])
     chat_images.add("newer", [chat_images.image(f"new-{index}.png") for index in range(3)])

@@ -17,6 +17,7 @@ from prompt_cache import (
     CACHE_SESSION_KEY,
     cache_request_policy,
     provider_event_usage_meta,
+    reset_usage_meta,
     update_cache_policy_meta,
     update_usage_meta,
 )
@@ -201,6 +202,16 @@ def _required_attachment(attachment) -> bool:
     return isinstance(attachment, dict) and bool(attachment.get("expected_sha256"))
 
 
+def _attachment_payloads(attachment, path: Path, mime: str) -> list[tuple[str, str]]:
+    data = _attachment_bytes(attachment, path)
+    if mime == 'image/gif':
+        # Gemini does not accept GIF input. Keep the original in storage/UI,
+        # and share the same ordered samples used by sticker summarization.
+        from app.stickers.images import png_frames
+        return [('image/png', base64.b64encode(frame).decode()) for frame in png_frames(data)]
+    return [(mime, base64.b64encode(data).decode())]
+
+
 def build_multimodal_messages(
     history: list,
     *,
@@ -208,6 +219,8 @@ def build_multimodal_messages(
     include_audio: bool = False,
 ):
     """将带附件的历史记录转换为 OpenAI 兼容多模态格式"""
+    from app.documents.service import materialize_documents
+    history = materialize_documents(history)
     result = []
     for m in history:
         boundary_style = marker_style if m.get(CACHE_BOUNDARY_KEY) else ""
@@ -223,7 +236,7 @@ def build_multimodal_messages(
                     raise FileNotFoundError(f"Audio attachment is unavailable: {Path(url).name}")
                 if fpath.exists() or _required_attachment(att):
                     mime = attachment_mime_type(att) or mimetypes.guess_type(str(fpath))[0] or "image/jpeg"
-                    b64 = base64.b64encode(_attachment_bytes(att, fpath)).decode()
+                    payloads = _attachment_payloads(att, fpath, mime)
                     if is_audio_attachment(att):
                         if not include_audio:
                             continue
@@ -232,12 +245,13 @@ def build_multimodal_messages(
                             raise ValueError("Direct audio input only supports WAV or MP3")
                         parts.append({
                             "type": "input_audio",
-                            "input_audio": {"data": b64, "format": fmt},
+                            "input_audio": {"data": payloads[0][1], "format": fmt},
                         })
                     elif mime.startswith("image/"):
-                        parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                        parts.extend({"type": "image_url", "image_url": {"url": f"data:{frame_mime};base64,{b64}"}}
+                                     for frame_mime, b64 in payloads)
                     elif mime.startswith("video/"):
-                        parts.append({"type": "video_url", "video_url": {"url": f"data:{mime};base64,{b64}"}})
+                        parts.append({"type": "video_url", "video_url": {"url": f"data:{mime};base64,{payloads[0][1]}"}})
             result.append({"role": m["role"], "content": parts if parts else m["content"]})
         elif boundary_style and m.get("content"):
             result.append({
@@ -251,6 +265,8 @@ def build_multimodal_messages(
 
 def build_gemini_contents(history: list, *, include_audio: bool = False):
     """将带附件的历史记录转换为 Gemini 格式"""
+    from app.documents.service import materialize_documents
+    history = materialize_documents(history)
     contents = []
     for m in history:
         role = "user" if m["role"] == "user" else "model"
@@ -268,8 +284,8 @@ def build_gemini_contents(history: list, *, include_audio: bool = False):
                     raise FileNotFoundError(f"Audio attachment is unavailable: {Path(url).name}")
                 if fpath.exists() or _required_attachment(att):
                     mime = attachment_mime_type(att) or mimetypes.guess_type(str(fpath))[0] or "image/jpeg"
-                    b64 = base64.b64encode(_attachment_bytes(att, fpath)).decode()
-                    parts.append({"inline_data": {"mime_type": mime, "data": b64}})
+                    parts.extend({"inline_data": {"mime_type": frame_mime, "data": b64}}
+                                 for frame_mime, b64 in _attachment_payloads(att, fpath, mime))
         contents.append({"role": role, "parts": parts if parts else [{"text": m["content"]}]})
     return contents
 
@@ -328,7 +344,8 @@ async def call_aipro(messages, model, meta=None, temperature=None, *, include_au
 async def _stream_openai(*, base_url, api_key, messages, model,
                          meta=None, temperature=None, label="OpenAI",
                          endpoint: dict | None = None, scope: str = "core",
-                         include_audio: bool = False):
+                         include_audio: bool = False, thinking_level: str | None = None):
+    meta = reset_usage_meta(meta)
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     policy = cache_request_policy(
@@ -346,6 +363,8 @@ async def _stream_openai(*, base_url, api_key, messages, model,
     payload = {"model": model, "messages": api_messages, "stream": True,
                "stream_options": {"include_usage": True}}
     payload.update(policy["request_fields"])
+    if thinking_level is not None:
+        payload["reasoning_effort"] = _normalize_thinking_level(thinking_level).lower()
     if temperature is not None:
         payload["temperature"] = temperature
     ctx = _provider_context(
@@ -353,6 +372,8 @@ async def _stream_openai(*, base_url, api_key, messages, model,
         base_url=base_url, endpoint=endpoint,
     )
     start = time.monotonic()
+    has_text = False
+    frames = parse_errors = 0
     try:
         async with httpx.AsyncClient(
             timeout=ctx["timeout_sec"], proxy=ctx["proxy_url"] or None
@@ -381,22 +402,44 @@ async def _stream_openai(*, base_url, api_key, messages, model,
                                                event["request_id"])
                     return
                 async for line in resp.aiter_lines():
-                    if line.startswith("data: "):
-                        data = line[6:]
+                    if line.startswith("data:"):
+                        data = line[5:].lstrip()
                         if data.strip() == "[DONE]":
-                            _finish_provider_call(meta, ctx, ok=True, start=start)
-                            return
+                            break
                         try:
                             chunk = json.loads(data)
+                            frames += 1
                             if meta is not None and "usage" in chunk and chunk["usage"]:
                                 u = chunk["usage"]
                                 update_usage_meta(meta, u, provider_type="openai")
-                            delta = chunk["choices"][0].get("delta", {}) if chunk.get("choices") else {}
-                            if "content" in delta and delta["content"]:
-                                yield delta["content"]
+                            choice = chunk["choices"][0] if chunk.get("choices") else {}
+                            if choice.get("finish_reason"):
+                                meta["finish_reason"] = str(choice["finish_reason"])[:120]
+                            content = (choice.get("delta") or {}).get("content")
                         except Exception:
-                            pass
-        _finish_provider_call(meta, ctx, ok=True, start=start)
+                            parse_errors += 1
+                            continue
+                        if chunk.get("error"):
+                            error = chunk["error"]
+                            detail = error.get("message", "上游流返回错误") if isinstance(error, dict) else str(error)
+                            raise RuntimeError(detail)
+                        if isinstance(content, str) and content:
+                            has_text = has_text or bool(content.strip())
+                            yield content
+        if not has_text:
+            reason = (f"流已结束但未收到正文；finish_reason={meta.get('finish_reason') or 'unknown'}；"
+                      f"frames={frames}；parse_errors={parse_errors}")
+            event = _finish_provider_call(
+                meta, ctx, ok=False, start=start, http_status=200,
+                error_type="empty_response", retryable=True, message=reason,
+            )
+            await _broadcast_endpoint_error(
+                scope, ctx["endpoint_id"], reason, status=200, error_type="empty_response",
+                elapsed_ms=event["elapsed_ms"], request_id=event["request_id"],
+            )
+            yield _provider_error_text(label, 200, "empty_response", event["elapsed_ms"], reason, event["request_id"])
+            return
+        _finish_provider_call(meta, ctx, ok=True, start=start, http_status=200)
     except Exception as e:
         error_type, retryable = classify_exception(e)
         event = _finish_provider_call(
@@ -432,11 +475,19 @@ def _vertex_headers(api_key: str) -> dict:
     return headers
 
 
+def _normalize_thinking_level(value: str) -> str:
+    level = str(value).strip().upper()
+    if level not in {"LOW", "MEDIUM", "HIGH"}:
+        raise ValueError("思考强度只支持 LOW、MEDIUM、HIGH")
+    return level
+
+
 def _gemini_stream_payload(
     messages: list,
     temperature: float | None = None,
     *,
     include_audio: bool = False,
+    thinking_level: str | None = None,
 ) -> dict:
     payload = {
         "contents": build_gemini_contents(messages, include_audio=include_audio),
@@ -444,6 +495,10 @@ def _gemini_stream_payload(
     }
     if temperature is not None:
         payload["generationConfig"] = {"temperature": temperature}
+    if thinking_level is not None:
+        payload.setdefault("generationConfig", {})["thinkingConfig"] = {
+            "thinkingLevel": _normalize_thinking_level(thinking_level),
+        }
     return payload
 
 
@@ -455,6 +510,7 @@ def _gemini_slot_payload(
     expect_json: bool = False,
     response_schema: dict | None = None,
     thinking_budget: int | None = None,
+    thinking_level: str | None = None,
 ) -> dict:
     contents = []
     system_text = ""
@@ -462,8 +518,7 @@ def _gemini_slot_payload(
         if m["role"] == "system":
             system_text += m.get("content", "") + "\n"
         else:
-            role = "user" if m["role"] == "user" else "model"
-            contents.append({"role": role, "parts": [{"text": m.get("content", "")}]})
+            contents.extend(build_gemini_contents([{**m, "content": m.get("content", "")}]))
     payload = {"contents": contents}
     if system_text.strip():
         payload["systemInstruction"] = {"parts": [{"text": system_text.strip()}]}
@@ -477,7 +532,13 @@ def _gemini_slot_payload(
         generation_config["responseJsonSchema"] = response_schema
     elif expect_json:
         generation_config["responseMimeType"] = "application/json"
-    if thinking_budget is not None:
+    if thinking_level is not None and thinking_budget is not None:
+        raise ValueError("思考强度和思考预算不能同时指定")
+    if thinking_level is not None:
+        generation_config["thinkingConfig"] = {
+            "thinkingLevel": _normalize_thinking_level(thinking_level),
+        }
+    elif thinking_budget is not None:
         generation_config["thinkingConfig"] = {
             "thinkingBudget": int(thinking_budget),
         }
@@ -487,8 +548,15 @@ def _gemini_slot_payload(
 
 
 def _gemini_response_text(data: dict) -> str:
-    return (data.get("candidates", [{}])[0]
-                .get("content", {}).get("parts", [{}])[0].get("text", ""))
+    candidates = data.get("candidates") or []
+    if not candidates:
+        return ""
+    # 思考摘要不是聊天正文；同一候选中的多个正文片段需要完整保留。
+    return "".join(
+        part.get("text", "")
+        for part in candidates[0].get("content", {}).get("parts", [])
+        if isinstance(part, dict) and not part.get("thought")
+    )
 
 
 # ── 底层通用流：Gemini ─────────────────────────────
@@ -496,7 +564,8 @@ async def _stream_gemini(*, base_url, api_key, messages, model,
                          meta=None, temperature=None, label="Gemini",
                          endpoint: dict | None = None, scope: str = "core",
                          preset_gemini: bool = False,
-                         include_audio: bool = False):
+                         include_audio: bool = False, thinking_level: str | None = None):
+    meta = reset_usage_meta(meta)
     url = f"{base_url.rstrip('/')}/models/{model}:streamGenerateContent?alt=sse&key={api_key}"
     policy = cache_request_policy(
         base_url=base_url,
@@ -509,6 +578,7 @@ async def _stream_gemini(*, base_url, api_key, messages, model,
         messages,
         temperature,
         include_audio=include_audio,
+        thinking_level=thinking_level,
     )
     ctx = _provider_context(
         scope=scope, provider_type="gemini", label=label, model=model,
@@ -555,7 +625,7 @@ async def _stream_gemini(*, base_url, api_key, messages, model,
                                 print(f"[{label}] finishReason={finish}, safetyRatings={cand.get('safetyRatings','')}")
                                 if finish == "PROHIBITED_CONTENT" and meta is not None:
                                     meta["_prohibited"] = True
-                            text = cand.get("content", {}).get("parts", [{}])[0].get("text", "")
+                            text = _gemini_response_text(chunk)
                             if text:
                                 yield text
                         except Exception:
@@ -579,7 +649,8 @@ async def _stream_gemini(*, base_url, api_key, messages, model,
 async def _stream_vertex(*, base_url, api_key, messages, model,
                          meta=None, temperature=None, label="Vertex Gemini",
                          endpoint: dict | None = None, scope: str = "core",
-                         include_audio: bool = False):
+                         include_audio: bool = False, thinking_level: str | None = None):
+    meta = reset_usage_meta(meta)
     url = _vertex_model_url(base_url, model, "streamGenerateContent", stream=True)
     policy = cache_request_policy(
         base_url=base_url,
@@ -592,6 +663,7 @@ async def _stream_vertex(*, base_url, api_key, messages, model,
         messages,
         temperature,
         include_audio=include_audio,
+        thinking_level=thinking_level,
     )
     headers = _vertex_headers(api_key)
     ctx = _provider_context(
@@ -639,7 +711,7 @@ async def _stream_vertex(*, base_url, api_key, messages, model,
                                 print(f"[{label}] finishReason={finish}, safetyRatings={cand.get('safetyRatings','')}")
                                 if finish == "PROHIBITED_CONTENT" and meta is not None:
                                     meta["_prohibited"] = True
-                            text = cand.get("content", {}).get("parts", [{}])[0].get("text", "")
+                            text = _gemini_response_text(chunk)
                             if text:
                                 yield text
                         except Exception:
@@ -661,37 +733,43 @@ async def _stream_vertex(*, base_url, api_key, messages, model,
 
 # ── 自定义端点入口 ────────────────────────────────
 async def call_openai_compat(endpoint: dict, model: str, messages: list,
-                             meta=None, temperature=None, *, include_audio=False):
+                             meta=None, temperature=None, *, include_audio=False,
+                             thinking_level=None):
     async for c in _stream_openai(
         base_url=endpoint.get("base_url", ""),
         api_key=endpoint.get("api_key", ""),
         messages=messages, model=model, meta=meta, temperature=temperature,
         label=endpoint.get("name", "自定义"), endpoint=endpoint,
         include_audio=include_audio,
+        thinking_level=thinking_level,
     ):
         yield c
 
 
 async def call_gemini_compat(endpoint: dict, model: str, messages: list,
-                             meta=None, temperature=None, *, include_audio=False):
+                             meta=None, temperature=None, *, include_audio=False,
+                             thinking_level=None):
     async for c in _stream_gemini(
         base_url=endpoint.get("base_url", ""),
         api_key=endpoint.get("api_key", ""),
         messages=messages, model=model, meta=meta, temperature=temperature,
         label=endpoint.get("name", "自定义"), endpoint=endpoint,
         include_audio=include_audio,
+        thinking_level=thinking_level,
     ):
         yield c
 
 
 async def call_vertex_compat(endpoint: dict, model: str, messages: list,
-                             meta=None, temperature=None, *, include_audio=False):
+                             meta=None, temperature=None, *, include_audio=False,
+                             thinking_level=None):
     async for c in _stream_vertex(
         base_url=endpoint.get("base_url", ""),
         api_key=endpoint.get("api_key", ""),
         messages=messages, model=model, meta=meta, temperature=temperature,
         label=endpoint.get("name", "Vertex Gemini"), endpoint=endpoint,
         include_audio=include_audio,
+        thinking_level=thinking_level,
     ):
         yield c
 
@@ -774,6 +852,8 @@ async def stream_ai(messages: list, model_key: str, meta: dict | None = None,
     if cfg.get("_kind") == "custom":
         ep = cfg["endpoint"]
         ep_type = ep.get("type", "openai")
+        if cfg.get("thinking_level") is not None:
+            audio_kwargs["thinking_level"] = cfg["thinking_level"]
         if ep_type in ("gemini", "vertex"):
             provider_call = call_vertex_compat if ep_type == "vertex" else call_gemini_compat
             async for chunk in provider_call(
@@ -852,10 +932,12 @@ async def _call_endpoint_chat_once(
     preset_gemini: bool = False,
     response_schema: dict | None = None,
     thinking_budget: int | None = None,
+    thinking_level: str | None = None,
     enable_thinking: bool | None = None,
 ) -> str:
     """One non-streaming transport call. No retry or endpoint failover."""
 
+    usage_meta = reset_usage_meta(usage_meta)
     ep_type = endpoint.get("type", "openai")
     ctx = _provider_context(
         scope=scope,
@@ -886,6 +968,8 @@ async def _call_endpoint_chat_once(
                 payload["max_tokens"] = max_tokens
             if enable_thinking is not None:
                 payload["enable_thinking"] = enable_thinking
+            if thinking_level is not None:
+                payload["reasoning_effort"] = _normalize_thinking_level(thinking_level).lower()
             if response_schema is not None:
                 payload["response_format"] = {
                     "type": "json_schema",
@@ -920,6 +1004,7 @@ async def _call_endpoint_chat_once(
                 expect_json=expect_json,
                 response_schema=response_schema,
                 thinking_budget=thinking_budget,
+                thinking_level=thinking_level,
             )
             payload["safetySettings"] = GEMINI_SAFETY_SETTINGS
             async with httpx.AsyncClient(

@@ -32,6 +32,13 @@ function showAudioInputUnavailable() {
 }
 
 function serializeChatAttachment(item) {
+  if (item?.type === 'document') return { type: 'document', id: String(item.id || ''),
+    name: item.name, url: item.url, mime_type: item.mime_type, size: item.size,
+    char_count: item.char_count, page_count: item.page_count, warnings: item.warnings || [] };
+  if (item?.type === "sticker") {
+    return { type: "sticker", id: String(item.id || ""), url: String(item.url || ""),
+      mime_type: String(item.mime_type || ""), summary: item.summary || {} };
+  }
   if (isVoiceAttachment(item) && typeof item === "object") {
     return {
       type: "voice",
@@ -171,8 +178,15 @@ function renderAttachments(atts) {
   let voiceHtml = '';
   const aiName = worldBook.ai_name || 'AI';
   atts.forEach(item => {
-    if (typeof item === 'object' && item.type === 'music') {
+    if (item?.type === 'document') {
+      capsuleHtml += window.ChatDocuments?.card(item) || '';
+    } else if (typeof item === 'object' && item.type === 'music') {
       capsuleHtml += `<div class="music-capsule" data-music-action="open" data-song-id="${escHtml(item.id)}">🎵 ${escHtml(aiName)}给你点播歌曲《${escHtml(item.name)}》</div>`;
+    } else if (typeof item === 'object' && item.type === 'sticker') {
+      const url = String(item.url || '');
+      if (url.startsWith('/uploads/')) {
+        mediaHtml += `<figure class="sticker-attachment"><img class="chat-sticker" src="${escHtml(url)}" alt="${escHtml(item.expression || '表情')}" data-attachment-preview><figcaption>表情</figcaption></figure>`;
+      }
     } else if (typeof isVoiceAttachment === 'function' && isVoiceAttachment(item)) {
       voiceHtml += renderVoiceAttachment(item);
     } else {
@@ -189,15 +203,18 @@ function renderAttachments(atts) {
 }
 
 async function handleFileSelect(input) {
-  for (const file of input.files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await fetch('/api/upload', {method:'POST', body: fd});
-    const data = await res.json();
-    if (data.error) { alert(data.error); continue; }
-    pendingAttachments.push(data);
-  }
+  const files = Array.from(input.files || []);
   input.value = '';
+  for (const file of files) {
+    try {
+      const data = await ChatDocuments.upload(file);
+      if (data.type === 'document' && pendingAttachments.filter(a => a?.type === 'document').length >= 3) {
+        ChatDocuments.discard(data); showToast('每条消息最多附带 3 个文档。', 3500); continue;
+      }
+      pendingAttachments.push(data);
+      renderPreview();
+    } catch (error) { showToast(error.message || '文件上传失败，请重试。', 5000); }
+  }
   renderPreview();
 }
 
@@ -224,21 +241,27 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function renderPreview() {
+  if (typeof persistChatDraft === 'function') persistChatDraft();
   const area = $('previewArea');
-  if (!pendingAttachments.length) { area.className = 'preview-area'; area.innerHTML = ''; return; }
+  const progress = window.ChatDocuments?.progress() || '';
+  if (!pendingAttachments.length && !progress) { area.className = 'preview-area'; area.innerHTML = ''; return; }
   area.className = 'preview-area has-files';
   area.innerHTML = pendingAttachments.map((a, i) => {
+    if (a?.type === 'document') return `<div class="preview-item document-preview">${ChatDocuments.card(a)}<button class="preview-remove" data-preview-remove="${i}" aria-label="移除文件">✕</button></div>`;
     if (typeof isVoiceAttachment === 'function' && isVoiceAttachment(a)) {
       return `<div class="preview-item voice-preview">${renderVoicePreview(a)}<button class="preview-remove" data-preview-remove="${i}">✕</button></div>`;
     }
-    const isVid = a.type && a.type.startsWith('video/');
-    const media = isVid ? `<video src="${a.url}" muted></video>` : `<img src="${a.url}">`;
-    return `<div class="preview-item">${media}<button class="preview-remove" data-preview-remove="${i}">✕</button></div>`;
-  }).join('');
+    const url = typeof a === 'string' ? a : String(a.url || '');
+    const isVid = /\.(mp4|webm|mov)$/i.test(url) || a.type?.startsWith('video/');
+    const isSticker = a?.type === 'sticker';
+    const media = isVid ? `<video src="${escHtml(url)}" muted></video>` : `<img src="${escHtml(url)}" alt="${isSticker ? '表情' : '图片'}">`;
+    return `<div class="preview-item${isSticker ? ' sticker-preview' : ''}">${media}<span class="attachment-kind">${isSticker ? '表情' : isVid ? '视频' : '图片'}</span><button class="preview-remove" data-preview-remove="${i}" aria-label="移除附件">✕</button></div>`;
+  }).join('') + progress;
 }
 
 function removeAttachment(i) {
-  pendingAttachments.splice(i, 1);
+  const [removed] = pendingAttachments.splice(i, 1);
+  window.ChatDocuments?.discard(removed);
   renderPreview();
 }
 
@@ -333,6 +356,7 @@ function bindChatShellEvents() {
       renameCurrent: () => renameCurrent(),
       dismissAlarm: () => dismissAlarm(),
       chooseUpload: () => $("fileInput")?.click(),
+      toggleStickers: () => ChatApp.getModule("stickers")?.toggle(),
       send: () => send(),
     };
     if (!actions[action]) return;

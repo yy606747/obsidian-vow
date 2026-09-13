@@ -56,5 +56,5 @@ def test_frontend_history_and_streams_share_one_control_marker_cleaner():
     ):
         assert marker in core
 
-    assert html.index("/static/js/chat/core.js?v=20260905-brand") < html.index("/static/js/chat/render.js?v=20260905-brand")
-    assert html.index("/static/js/chat/core.js?v=20260905-brand") < html.index("/static/js/chat/send.js?v=20260905-brand")
+    assert html.index("/static/js/chat/core.js?") < html.index("/static/js/chat/render.js?")
+    assert html.index("/static/js/chat/core.js?") < html.index("/static/js/chat/send.js?")

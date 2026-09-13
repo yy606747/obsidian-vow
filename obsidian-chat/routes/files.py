@@ -13,6 +13,11 @@ from config import (
 )
 from database import get_db
 from ws import manager
+from app.documents.service import (
+    MIMES, InvalidDocument, document_path, read_document, upload_document,
+)
+from pathlib import Path
+from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
@@ -119,6 +124,12 @@ def parse_chat_file(content: str):
 # ── 上传 ──────────────────────────────────────────
 @router.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
+    suffix = Path(file.filename or '').suffix.lower()
+    if suffix in MIMES or suffix == '.doc':
+        try:
+            return await upload_document(file)
+        except InvalidDocument as exc:
+            return JSONResponse(status_code=422, content={'error': str(exc)})
     if file.content_type not in ALLOWED_TYPES:
         return {"error": f"不支持的文件类型: {file.content_type}"}
     ext = mimetypes.guess_extension(file.content_type) or ".bin"
@@ -131,6 +142,30 @@ async def upload_file(file: UploadFile = File(...)):
     fpath.write_bytes(content)
     url = f"/uploads/{fname}"
     return {"url": url, "type": file.content_type, "name": file.filename}
+
+
+@router.get('/api/documents/{document_id}')
+async def get_document(document_id: str):
+    try:
+        return read_document(document_id)
+    except InvalidDocument as exc:
+        return JSONResponse(status_code=404, content={'error': str(exc)})
+
+
+@router.delete('/api/documents/{document_id}')
+async def discard_document(document_id: str):
+    """Discard an unsent upload; sent files remain available to conversation history."""
+    try:
+        record = read_document(document_id)
+    except InvalidDocument:
+        return {'ok': True}
+    async with get_db() as db:
+        cursor = await db.execute('SELECT 1 FROM messages WHERE instr(attachments, ?) > 0 LIMIT 1', (document_id,))
+        if await cursor.fetchone():
+            return {'ok': True, 'retained': True}
+        document_path(document_id).unlink(missing_ok=True)
+        (UPLOADS_DIR / Path(record['url']).name).unlink(missing_ok=True)
+    return {'ok': True}
 
 
 # ── 文件列表 / 读取 / 保存 ────────────────────────

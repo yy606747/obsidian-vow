@@ -19,6 +19,7 @@ from app.memory_v3.repository import PendingRecallRepository
 from app.web_search.repository import WebSearchRepository
 
 from .models import ConvCreate, ConvUpdate, MsgUpdate
+from app.daily_chat.service import daily_chat
 
 router = APIRouter()
 
@@ -45,22 +46,43 @@ async def create_conversation(body: ConvCreate):
         await db.commit()
     conv = {"id": conv_id, "title": body.title, "model": body.model, "created_at": now, "updated_at": now}
     await manager.broadcast({"type": "conv_created", "data": conv})
+    if daily_chat.state:
+        await daily_chat.adopt(conv_id)
     await export_conversation(conv_id)
     return conv
 
 @router.put("/api/conversations/{conv_id}")
 async def update_conversation(conv_id: str, body: ConvUpdate):
+    if body.model is not None and daily_chat.state:
+        await daily_chat.ensure_current()
+    changes = {}
     async with get_db() as db:
+        await db.execute('BEGIN IMMEDIATE')
         if body.title is not None:
             await db.execute("UPDATE conversations SET title=?, updated_at=? WHERE id=?",
                              (body.title, time.time(), conv_id))
+            changes.setdefault(conv_id, {})['title'] = body.title
         if body.model is not None:
+            model_conv_id = conv_id
+            if daily_chat.state:
+                # Serialize with midnight: a model selection already in flight
+                # belongs to the same live chat as the following send request.
+                cur = await db.execute(
+                    'SELECT r.target_conv_id FROM daily_chat_successors r '
+                    'JOIN daily_chat_state s ON s.id=1 AND s.enabled=1 WHERE r.source_conv_id=?',
+                    (conv_id,),
+                )
+                successor = await cur.fetchone()
+                if successor:
+                    model_conv_id = successor[0]
             await db.execute("UPDATE conversations SET model=?, updated_at=? WHERE id=?",
-                             (body.model, time.time(), conv_id))
+                             (body.model, time.time(), model_conv_id))
+            changes.setdefault(model_conv_id, {})['model'] = body.model
         await db.commit()
-    await manager.broadcast({"type": "conv_updated", "data": {"id": conv_id, **(body.dict(exclude_none=True))}})
-    await export_conversation(conv_id)
-    return {"ok": True}
+    for target, change in changes.items():
+        await manager.broadcast({"type": "conv_updated", "data": {"id": target, **change}})
+        await export_conversation(target)
+    return {"ok": True, "conv_id": model_conv_id if body.model is not None else conv_id}
 
 @router.delete("/api/conversations/{conv_id}")
 async def delete_conversation(conv_id: str):

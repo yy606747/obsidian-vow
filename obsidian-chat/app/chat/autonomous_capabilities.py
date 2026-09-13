@@ -67,6 +67,14 @@ async def resolve_autonomous_capabilities(
             capabilities.add("desktop.presence.show")
     except Exception:
         pass
+    from app.stickers.service import chat_capabilities, create_available
+    if "sticker.send" in chat_capabilities():
+        capabilities.add("sticker.send")
+    if create_available():
+        capabilities.add("sticker.create")
+    from app.look_at_me.service import available
+    if available():
+        capabilities.add("mobile.look_at_me")
     return frozenset(capabilities)
 
 

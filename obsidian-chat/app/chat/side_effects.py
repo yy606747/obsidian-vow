@@ -90,14 +90,12 @@ def _schedule_chunk_index_update(
     config_snapshot = normalize_memory_v3_config(
         memory_v3_config if memory_v3_config is not None else load_memory_v3_config()
     )
-    create_tracked_task(
-        _update_memory_chunks(
-            conv_id,
-            reason=reason,
-            memory_v3_config=config_snapshot,
-        ),
-        name=f"memory_chunks:{conv_id}:{reason}",
-    )
+    from app.daily_chat.service import resolve_conversation_id
+    for target in dict.fromkeys((conv_id, resolve_conversation_id(conv_id))):
+        create_tracked_task(
+            _update_memory_chunks(target, reason=reason, memory_v3_config=config_snapshot),
+            name=f"memory_chunks:{target}:{reason}",
+        )
     return config_snapshot
 
 
@@ -408,7 +406,10 @@ async def perform_poi_check(
     wb = load_worldbook()
     user_name, ai_name = resolve_worldbook_names(wb)
 
+    from app.daily_chat.service import resolve_conversation_id, cross_day_prompt
+    conv_id = resolve_conversation_id(conv_id)
     prefix = build_worldbook_prefix(wb)
+    prefix += await cross_day_prompt(conv_id, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db)
 
     # 获取最近对话上下文
     import aiosqlite
@@ -579,7 +580,10 @@ async def perform_activity_check(
     user_name, ai_name = resolve_worldbook_names(wb)
     minutes = n * 10
 
+    from app.daily_chat.service import resolve_conversation_id, cross_day_prompt
+    conv_id = resolve_conversation_id(conv_id)
     prefix = build_worldbook_prefix(wb)
+    prefix += await cross_day_prompt(conv_id, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db)
 
     import aiosqlite
     async with get_db() as db:
@@ -740,7 +744,10 @@ async def perform_schedule_list_followup(
 
     wb = load_worldbook()
     user_name, _ai_name = resolve_worldbook_names(wb)
+    from app.daily_chat.service import resolve_conversation_id, cross_day_prompt
+    conv_id = resolve_conversation_id(conv_id)
     prefix = build_worldbook_prefix(wb)
+    prefix += await cross_day_prompt(conv_id, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db)
 
     import aiosqlite
 
@@ -1108,14 +1115,17 @@ async def _screen_followup_messages(
     request, wb: dict, user_name: str, *, screen_label: str = "电脑",
     reject_text: dict | None = None, vow_block: str = ""
 ) -> list[dict]:
+    from app.daily_chat.service import resolve_conversation_id, cross_day_prompt
+    target = resolve_conversation_id(request.conv_id)
     prefix = build_worldbook_prefix(wb)
+    prefix += await cross_day_prompt(target, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db)
 
     import aiosqlite
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT role, content FROM messages WHERE conv_id=? AND role IN ('user','assistant') ORDER BY created_at DESC LIMIT 6",
-            (request.conv_id,),
+            (target,),
         )
         rows = await cur.fetchall()
     recent = [{"role": r["role"], "content": r["content"], "attachments": []} for r in reversed(rows)]

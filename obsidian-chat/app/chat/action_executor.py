@@ -43,6 +43,10 @@ _SCHEDULE_CAPABILITIES = frozenset(
 _SELF_WAKE_CAPABILITIES = frozenset({"self_wake.schedule", "self_wake.cancel"})
 
 _EXECUTION_ORDER = (
+    "mobile.look_at_me",
+    "sticker.save",
+    "sticker.send",
+    "sticker.create",
     "music.search",
     _SCHEDULE_GROUP,
     _SELF_WAKE_GROUP,
@@ -170,12 +174,17 @@ async def _standard_bindings(
     # 本批只拆出基础三组；其余已上线的设备适配器仍延迟引用原实现。
     from . import streaming
     from app.image_memory.view import execute_view_image
+    from app.stickers.service import execute_sticker
+    from app.look_at_me.service import execute_invitation
     from app.presence.renderer import execute_presence_show
     from app.presence.sprites import execute_presence_draw
     from app.self_wake.service import (
         execute_cancel_intent,
         execute_schedule_intent,
     )
+
+    async def execute_look_at_me(intent: ToolIntent, tool_context: ToolContext):
+        return await execute_invitation(intent, tool_context, origin_conv_id=context.conv_id)
 
     async def execute_self_wake(intent: ToolIntent, tool_context: ToolContext):
         if intent.tool_name == "self_wake.schedule":
@@ -203,6 +212,10 @@ async def _standard_bindings(
     schedule_intents = streaming._schedule_intents(postprocessed)
 
     bindings: dict[str, tuple[list[ToolIntent], ToolAdapter]] = {
+        "mobile.look_at_me": (
+            [intent for intent in postprocessed.tool_intents if intent.tool_name == "mobile.look_at_me"],
+            execute_look_at_me,
+        ),
         "music.search": (
             basic_actions._music_search_intents(postprocessed),
             basic_actions._execute_music_search,
@@ -273,6 +286,11 @@ async def _standard_bindings(
         ],
         execute_self_wake,
     )
+    for tool_name in ("sticker.save", "sticker.send", "sticker.create"):
+        bindings[tool_name] = (
+            [intent for intent in postprocessed.tool_intents if intent.tool_name == tool_name],
+            execute_sticker,
+        )
     return bindings
 
 
@@ -347,6 +365,11 @@ async def execute_postprocessed_actions(
         if self_wake_group and len(allowed) > 1:
             for extra in allowed[1:]:
                 results.append(_extra_self_wake_denied(extra))
+            allowed = allowed[:1]
+        if tool_name.startswith("sticker.") and len(allowed) > 1:
+            results.extend(ToolResult.from_intent(
+                intent, status=ToolStatus.SKIPPED, error="one_sticker_action_per_turn",
+            ) for intent in allowed[1:])
             allowed = allowed[:1]
         if tool_name == "memory.view_image" and len(allowed) > 1:
             results.extend(ToolResult.from_intent(

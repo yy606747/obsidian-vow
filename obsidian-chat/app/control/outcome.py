@@ -129,21 +129,25 @@ class ControlOutcomeService:
         }
 
     async def _recent_messages(self, session: ControlSession) -> list[dict[str, Any]]:
+        from app.daily_chat.service import conversation_scope_ids
+        scope = conversation_scope_ids(session.conv_id)
         async with self._get_db() as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                "SELECT id, role, content, created_at FROM messages WHERE conv_id=? AND created_at>=? AND created_at<=? ORDER BY created_at DESC LIMIT ?",
-                (session.conv_id, session.started_at, session.ended_at or self._now(), self._message_window_size),
+                f"SELECT id, role, content, created_at FROM messages WHERE conv_id IN ({','.join('?' for _ in scope)}) AND created_at>=? AND created_at<=? ORDER BY created_at DESC LIMIT ?",
+                (*scope, session.started_at, session.ended_at or self._now(), self._message_window_size),
             )
             rows = await cur.fetchall()
         return [dict(row) for row in reversed(rows)]
 
     async def _recent_control_events(self, session: ControlSession) -> list[dict[str, Any]]:
+        from app.daily_chat.service import conversation_scope_ids
+        scope = conversation_scope_ids(session.conv_id)
         async with self._get_db() as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                "SELECT id, content, metadata_json, created_at FROM memory_events WHERE source='control' AND conv_id=? ORDER BY created_at DESC LIMIT 20",
-                (session.conv_id,),
+                f"SELECT id, content, metadata_json, created_at FROM memory_events WHERE source='control' AND conv_id IN ({','.join('?' for _ in scope)}) ORDER BY created_at DESC LIMIT 20",
+                scope,
             )
             rows = await cur.fetchall()
         events = []

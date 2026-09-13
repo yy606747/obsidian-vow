@@ -3,12 +3,12 @@
 <head>
 <script src="/static/brand_compat.js?v=20260905-brand"></script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>记忆库 - Obsidian Vow</title>
 <link rel="stylesheet" href="/static/common.css">
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#1a1714">
+<meta name="theme-color" content="#13151d">
 <style>
 .mem-tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:12px; }
 .mem-tab { background:none; border:none; border-bottom:2px solid transparent; color:var(--text2); cursor:pointer; font-size:14px; padding:8px 12px; }
@@ -161,6 +161,10 @@
 .editing-focus .mem-entry.mem-editing { border:none; }
 .editing-focus .page-content { padding-top:12px; }
 </style>
+<link rel="stylesheet" href="/static/vow.css?v=20260913-enamel">
+<script src="/static/vow.js?v=20260913-gold-dust"></script>
+<link rel="stylesheet" href="/static/gold-dust.css?v=20260913-gold-dust">
+<script src="/static/gold-dust.js?v=20260913-gold-dust" defer></script>
 </head>
 <body>
 <div class="sub-page">
@@ -170,14 +174,14 @@
   </div>
   <div class="page-content">
     <div class="mem-tabs">
-      <button class="mem-tab active" data-mem-tab="list" onclick="switchMemoryPanel('list')">记忆列表</button>
+      <button class="mem-tab active" data-mem-tab="list" onclick="switchMemoryPanel('list')">回忆时间线</button>
       <button class="mem-tab" data-mem-tab="vows" onclick="switchMemoryPanel('vows')">誓约</button>
       <button class="mem-tab" data-mem-tab="debug" onclick="switchMemoryPanel('debug')">召回调试</button>
     </div>
 
     <div class="mem-panel active" data-mem-panel="list">
       <div class="mem-filter-row">
-        <input class="mem-search" id="memSearch" type="text" placeholder="🔍 搜索记忆..." oninput="filterMemories()">
+        <input class="mem-search" id="memSearch" type="text" placeholder="搜索回忆…" aria-label="搜索回忆" oninput="filterMemories()">
         <select class="mem-filter-select" id="memTypeFilter" onchange="reloadMemories()">
           <option value="">全部类型</option>
           <option value="digest_note">记忆摘要</option>
@@ -188,6 +192,8 @@
       <div class="mem-count" id="memCount"></div>
       <div class="mem-list" id="memList"><div class="mem-empty">暂无记忆</div></div>
       <div class="mem-load-row"><button class="mem-load-more" id="memLoadMore" onclick="loadMoreMemories()">加载更多</button></div>
+      <details class="vow-memory-tools">
+      <summary>整理与添加回忆</summary>
       <div class="mem-add-row">
       <input type="text" id="memAddInput" placeholder="手动添加一条记忆...">
       <select id="memAddType">
@@ -209,6 +215,7 @@
       <div class="btn-row">
         <button class="btn-digest" id="digestBtn" onclick="triggerDigest()">📝 总结新记忆</button>
       </div>
+      </details>
     </div>
 
     <div class="mem-panel" data-mem-panel="debug">
@@ -275,7 +282,7 @@
   </div>
 </div>
 
-<script src="/static/common.js?v=20260905-brand"></script>
+<script src="/static/common.js?v=20260913-refined"></script>
 <script src="/static/web_push.js?v=20260905-brand"></script>
 <script>
 const MEM_TYPE_LABELS = {
@@ -409,11 +416,17 @@ function renderMemories() {
     el.innerHTML = `<div class="mem-empty">${query || type ? "暂无匹配记忆" : "暂无记忆"}</div>`;
     return;
   }
+  let previousDay = '';
   el.innerHTML = _allMemories.map(m => {
     const typeLabel = MEM_TYPE_LABELS[m.type] || m.type;
-    const timeStr = m.created_at ? new Date(m.created_at * 1000).toLocaleString("zh-CN", {month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}) : "";
+    const date = m.created_at ? new Date(m.created_at * 1000) : null;
+    const day = date ? date.toLocaleDateString('zh-CN', {year:'numeric',month:'long',day:'numeric'}) : '未标注日期';
+    const dateHeading = day !== previousDay ? `<div class="mem-date-heading">${escHtml(day)}</div>` : '';
+    previousDay = day;
+    const timeStr = date ? date.toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',hour12:false}) : '';
+    const glyph = name => window.VowUI?.icon(name) || '';
     const hasSource = m.source_start_ts && m.source_end_ts;
-    const sourceBtn = hasSource ? `<button class="mem-source-btn" onclick="viewSource('${escHtml(m.id)}')" title="查看原文">📜</button>` : '';
+    const sourceBtn = hasSource ? `<button class="mem-source-btn" onclick="viewSource('${escHtml(m.id)}')" title="查看原文">${glyph('memory')}</button>` : '';
     let kwDisplay = '';
     try {
       const kws = m.keywords ? (typeof m.keywords === 'string' ? JSON.parse(m.keywords) : m.keywords) : [];
@@ -421,17 +434,17 @@ function renderMemories() {
     } catch(e) { if (m.keywords) kwDisplay = `<span class="mem-kw">${escHtml(m.keywords)}</span>`; }
     const impDisplay = m.importance != null ? `<span class="mem-imp" title="重要度">${Number(m.importance).toFixed(1)}</span>` : '';
     const pinClass = m.unresolved ? 'mem-pin active' : 'mem-pin';
-    return `<div class="mem-entry${m.unresolved ? ' mem-unresolved' : ''}" data-id="${escHtml(m.id)}">
+    return `${dateHeading}<div class="mem-entry${m.unresolved ? ' mem-unresolved' : ''}" data-id="${escHtml(m.id)}">
       <div class="mem-left"><span class="mem-type">${escHtml(typeLabel)}</span>${impDisplay}</div>
       <div style="flex:1;min-width:0">
         <div class="mem-content" id="mc_${escHtml(m.id)}">${escHtml(m.content)}</div>
         <div class="mem-meta">${kwDisplay}<span class="mem-time">${escHtml(timeStr)}</span></div>
       </div>
       <div class="mem-actions">
-        <button class="${pinClass}" onclick="toggleUnresolved('${escHtml(m.id)}')" title="标记待办">📌</button>
+        <button class="${pinClass}" onclick="toggleUnresolved('${escHtml(m.id)}')" title="标记待办">${glyph('bookmark')}</button>
         ${sourceBtn}
-        <button onclick="editMemory('${escHtml(m.id)}')" title="编辑">✏️</button>
-        <button onclick="deleteMemory('${escHtml(m.id)}')" title="删除">🗑️</button>
+        <button onclick="editMemory('${escHtml(m.id)}')" title="编辑">${glyph('edit')}</button>
+        <button onclick="deleteMemory('${escHtml(m.id)}')" title="删除">${glyph('trash')}</button>
       </div>
     </div>`;
   }).join("");
@@ -598,6 +611,11 @@ function switchMemoryPanel(name) {
   else if (location.hash === '#debug' || location.hash === '#vows') history.replaceState(null, '', location.pathname);
   if (name === 'vows') loadVows();  // 每次切入都重拉，防止显示过期状态
 }
+
+window.addEventListener('hashchange', () => {
+  const name = location.hash === '#vows' ? 'vows' : location.hash === '#debug' ? 'debug' : 'list';
+  if (document.querySelector('.mem-tab.active')?.dataset.memTab !== name) switchMemoryPanel(name);
+});
 
 function parseRecallKeywords() {
   return ($('recallKeywords').value || '')

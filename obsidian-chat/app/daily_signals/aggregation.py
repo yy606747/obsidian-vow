@@ -109,6 +109,7 @@ def reconcile_daily_signals(
             activity_entries=day_activity,
             sensing_entries=day_sensing,
             biometric_entries=canonical_entries,
+            reference_time=reference,
         )
         rows.append(
             target_store.merge_reconciled(
@@ -186,6 +187,7 @@ def aggregate_daily_signals(
     activity_entries: Iterable[dict],
     sensing_entries: Iterable[dict],
     biometric_entries: Iterable[dict] | None = None,
+    reference_time: float | None = None,
 ) -> dict:
     activity_entries = list(activity_entries)
     sensing_entries = list(sensing_entries)
@@ -211,6 +213,10 @@ def aggregate_daily_signals(
     )
     return {
         "activity": activity,
+        "device_usage": _aggregate_device_usage(
+            activity_entries, timezone, day_start,
+            min(day_end, reference_time) if reference_time is not None else day_end,
+        ),
         "biometrics": biometrics,
         "environment": environment,
         "coverage": {
@@ -219,6 +225,82 @@ def aggregate_daily_signals(
             "biometric": _coverage(biometric_coverage),
         },
     }
+
+
+def _aggregate_device_usage(
+    entries: Iterable[dict], timezone: ZoneInfo, day_start: float, observed_until: float,
+) -> dict:
+    """Versioned, source/device-separated facts for CP4, not activity conclusions.
+
+    Keep the historical combined activity domain unchanged. Only activity
+    reports can cover this domain; a sensing/notification/location heartbeat
+    cannot establish which application was in the foreground. Never carry a
+    sample beyond its normal reporting period, even across a short outage.
+    """
+    from .usage import DEVICE_USAGE_SCHEMA
+
+    grouped: dict[str, dict] = {}
+    for entry in entries:
+        stamp = _timestamp(entry.get("timestamp"))
+        device = str(entry.get("device") or "").strip().lower()
+        if stamp is None or not day_start <= stamp < observed_until:
+            continue
+        if device not in {"pc", "phone", "tablet"}:
+            continue
+        if device != "pc" and entry.get("device_type") in {"phone", "tablet"}:
+            device = entry["device_type"]
+        device_id = str(entry.get("device_id") or "").strip()
+        # Legacy endpoints are separate sources, never aliases for a later
+        # stable hardware ID. In particular phone and PC cannot share history.
+        identity = device_id or f"legacy:{device}"
+        source = "pc.activity" if device == "pc" else "android.activity"
+        stream_key = json.dumps([source, device, identity], separators=(",", ":"))
+        stream = grouped.setdefault(stream_key, {
+            "source": source, "device": device, "device_id": identity,
+            "identity_scope": "device" if device_id else "legacy_source",
+            "samples": {},
+        })
+        state = _activity_state(entry)
+        app = _activity_app(entry) if state == "active" else None
+        sample = (state, app)
+        samples = stream["samples"]
+        # Conflicting duplicates are unknown regardless of input order.
+        samples[stamp] = sample if stamp not in samples or samples[stamp] == sample else ("unknown", None)
+
+    streams = {}
+    for key, stream in sorted(grouped.items()):
+        ordered = sorted(stream.pop("samples").items())
+        bins: dict[str, dict] = {}
+        expected = PC_EXPECTED_SECONDS if stream["device"] == "pc" else MOBILE_EXPECTED_SECONDS
+        for index, (start, (state, app)) in enumerate(ordered):
+            if state not in {"active", "idle", "locked"}:
+                continue
+            following = ordered[index + 1][0] if index + 1 < len(ordered) else observed_until
+            end = min(start + expected, following, observed_until)
+            for label, seconds in _split_interval_by_bin(start, end, timezone):
+                detail = bins.setdefault(label, {
+                    "sample_count": 0, "last_observed_at": None,
+                    "observed_seconds": 0, "active_seconds": 0,
+                    "app_observed_seconds": 0, "app_seconds": {},
+                })
+                if label == _bin_label(start, timezone):
+                    detail["sample_count"] += 1
+                    detail["last_observed_at"] = start
+                detail["observed_seconds"] += seconds
+                if state == "active":
+                    detail["active_seconds"] += seconds
+                if state != "active" or app:
+                    detail["app_observed_seconds"] += seconds
+                if app:
+                    detail["app_seconds"][app] = detail["app_seconds"].get(app, 0) + seconds
+        for detail in bins.values():
+            for field in ("observed_seconds", "active_seconds", "app_observed_seconds"):
+                detail[field] = round(detail[field], 3)
+            detail["app_seconds"] = {
+                app: round(seconds, 3) for app, seconds in sorted(detail["app_seconds"].items())
+            }
+        streams[key] = {**stream, "bins": bins}
+    return {"schema_version": DEVICE_USAGE_SCHEMA, "streams": streams}
 
 
 def _aggregate_activity(

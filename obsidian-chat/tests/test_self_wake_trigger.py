@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import aiosqlite
+import pytest
 
 from app.chat.action_executor import ActionExecution
 from app.chat.turn_profiles import (
@@ -280,7 +281,8 @@ def test_all_tools_rejected_is_not_a_success(monkeypatch):
     assert repo.finishes[-1][1]["outcome"] == "all_tools_rejected"
 
 
-def test_prepare_intersects_requested_runtime_and_registered(monkeypatch):
+@pytest.mark.parametrize('sticker_available', [False, True])
+def test_prepare_intersects_requested_runtime_and_registered(monkeypatch, sticker_available):
     history_ctx = SimpleNamespace(
         history=[{"role": "user", "content": "history", "attachments": []}],
         cap_idx=0,
@@ -298,7 +300,7 @@ def test_prepare_intersects_requested_runtime_and_registered(monkeypatch):
         return None
 
     async def runtime(**_kwargs):
-        return frozenset({"memory.remember"})
+        return frozenset({"memory.remember"} | ({'sticker.send'} if sticker_available else set()))
 
     async def vow_context():
         return "", ""
@@ -349,11 +351,13 @@ def test_prepare_intersects_requested_runtime_and_registered(monkeypatch):
             now=1_800_000_100.0,
         )
     )
-    assert prepared.effective_capabilities == frozenset({"memory.remember"})
+    expected = frozenset({"memory.remember"} | ({'sticker.send'} if sticker_available else set()))
+    assert prepared.effective_capabilities == expected
     assert prepared.unavailable_capabilities == frozenset(
         {"desktop.presence.show"}
     )
-    assert prepared.advertised_tools == ("memory.remember",)
+    assert set(prepared.advertised_tools) == expected
+    assert ('【发图：' in '\n'.join(m['content'] for m in prepared.messages)) is sticker_available
     assert not prepared.profile.allows_tool("self_wake.schedule")
     final_prompt = prepared.messages[-1]["content"]
     assert "实际挂载能力：memory.remember" in final_prompt

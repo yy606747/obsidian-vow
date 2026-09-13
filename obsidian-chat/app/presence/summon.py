@@ -239,21 +239,27 @@ async def resolve_summon_target(
 
     async with get_db_factory() as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT c.id, c.model FROM conversations AS c "
-            "WHERE EXISTS ("
-            "SELECT 1 FROM messages AS m "
-            "WHERE m.conv_id=c.id AND m.role='user'"
-            ") ORDER BY c.updated_at DESC LIMIT 1"
-        )
-        conversation = await cursor.fetchone()
+        from app.daily_chat.service import active_conversation_in_tx
+        conversation = await active_conversation_in_tx(db)
+        if conversation is None:
+            cursor = await db.execute(
+                "SELECT c.id, c.model FROM conversations AS c "
+                "WHERE EXISTS ("
+                "SELECT 1 FROM messages AS m "
+                "WHERE m.conv_id=c.id AND m.role='user'"
+                ") ORDER BY c.updated_at DESC LIMIT 1"
+            )
+            conversation = await cursor.fetchone()
         if conversation is None:
             return None
+        from app.daily_chat.service import conversation_scope_ids
+        scope = conversation_scope_ids(conversation["id"])
+        placeholders = ",".join("?" for _ in scope)
         cursor = await db.execute(
             "SELECT created_at FROM messages "
-            "WHERE conv_id=? AND role='user' "
+            f"WHERE conv_id IN ({placeholders}) AND role='user' "
             "ORDER BY created_at DESC LIMIT 1",
-            (conversation["id"],),
+            scope,
         )
         last_user = await cursor.fetchone()
     return {

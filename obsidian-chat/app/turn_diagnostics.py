@@ -50,6 +50,11 @@ class TurnDiagnostics:
         for key in ("cache_read_tokens", "cache_write_tokens", "cache_hit"):
             counters[key] = raw.get(key) if metrics_reported is True else None
         counters["cache_metrics_reported"] = metrics_reported
+        counters["reasoning_metrics_reported"] = raw.get("reasoning_metrics_reported")
+        counters["reasoning_tokens"] = (
+            raw.get("reasoning_tokens") if raw.get("reasoning_metrics_reported") is True else None
+        )
+        counters["billable_output_tokens"] = raw.get("billable_output_tokens")
         return {"turn_id": self.turn_id, "started_at": self.started_at,
                 "timings": dict(self.timings), "usage": counters}
 

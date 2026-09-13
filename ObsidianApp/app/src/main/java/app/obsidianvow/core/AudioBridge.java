@@ -23,7 +23,7 @@ public class AudioBridge {
     private static final int FRAME_BYTES = 1280;
 
     private final WebView webView;
-    private AudioRecord recorder;
+    private volatile AudioRecord recorder;
     private volatile boolean recording = false;
 
     public AudioBridge(WebView webView) {
@@ -31,7 +31,7 @@ public class AudioBridge {
     }
 
     @JavascriptInterface
-    public boolean start() {
+    public synchronized boolean start() {
         if (recording) return false;
 
         int minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING);
@@ -53,16 +53,20 @@ public class AudioBridge {
 
         recorder.startRecording();
         recording = true;
+        final AudioRecord activeRecorder = recorder;
 
         new Thread(() -> {
             byte[] buf = new byte[FRAME_BYTES];
-            while (recording) {
-                int read = recorder.read(buf, 0, buf.length);
+            while (recording && recorder == activeRecorder) {
+                int read;
+                try { read = activeRecorder.read(buf, 0, buf.length); }
+                catch (IllegalStateException e) { break; }
+                if (read < 0) break;
                 if (read > 0) {
                     String b64 = Base64.encodeToString(buf, 0, read, Base64.NO_WRAP);
                     // 推送到前端 JS（必须在 UI 线程执行）
                     webView.post(() -> {
-                        if (recording) {
+                        if (recording && recorder == activeRecorder) {
                             webView.evaluateJavascript(
                                     "(function(c){"
                                             + "if(typeof remoteVoice!=='undefined'&&remoteVoice._onNativeChunk){remoteVoice._onNativeChunk(c);}"
@@ -73,13 +77,16 @@ public class AudioBridge {
                     });
                 }
             }
+            synchronized (AudioBridge.this) {
+                if (recorder == activeRecorder) stop();
+            }
         }, "ObsidianMicThread").start();
 
         return true;
     }
 
     @JavascriptInterface
-    public void stop() {
+    public synchronized void stop() {
         recording = false;
         if (recorder != null) {
             try { recorder.stop(); } catch (Exception ignored) {}

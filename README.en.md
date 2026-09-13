@@ -172,6 +172,12 @@ Obsidian Vow was forked from the AionsHome `1fdb8cd` baseline. It is not a from-
 
 The upstream project provided a complete application seed. Obsidian Vow's work is concentrated in relationship state, initiative, execution boundaries, cross-device context, and migrating those mechanisms onto long-running production data.
 
+## Chat update — 2026-09-13
+
+Messages from both participants now render Markdown, and chat accepts TXT, MD, DOCX, and text-based PDF files. The home screen keeps its background and icon navigation; other pages gain updated layouts, emotion rings, attached heart notes, and gold particles that pause in the background.
+
+This snapshot also includes the runtime and Android changes used by the chat page: sticker collections, daily conversation continuity, companionship invitations, and page recovery. File limits and upgrade instructions are in the [chat update notes (Chinese)](docs/chat-update-2026-09-13.md).
+
 ## Run
 
 For existing installations, preview `python scripts/migrate_project_names.py`, then add `--apply`. The migration preserves runtime data and backs up environment configuration; compatibility entry points retain existing logins, browser preferences, and Android device identity.

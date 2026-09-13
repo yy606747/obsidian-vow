@@ -208,7 +208,7 @@ def test_scheduler_polling_and_restart_never_call_core_twice(tmp_path):
     asyncio.run(scenario())
 
 
-def test_scheduler_waits_for_first_formal_sprite_sync_before_claim(tmp_path):
+def test_scheduler_keeps_night_available_while_desktop_sprite_waits_for_sync(tmp_path):
     now = _timestamp(2027, 1, 9, 2, 30)
     repository = _repository(tmp_path, now=now)
     state = {"has_non_seed": True, "has_synced_non_seed": False}
@@ -245,17 +245,12 @@ def test_scheduler_waits_for_first_formal_sprite_sync_before_claim(tmp_path):
 
     async def scenario():
         pending = await scheduler.run_once()
-        assert pending == {
-            "status": "gated",
-            "reason": "presence_sprite_pending_sync",
-        }
-        assert calls == []
-        assert await repository.get("2027-01-09") is None
-
-        state["has_synced_non_seed"] = True
-        result = await scheduler.run_once()
-        assert result["round_branch"] == "none"
+        assert pending["round_branch"] == "none"
         assert calls == ["target", "core"]
         assert (await repository.get("2027-01-09"))["status"] == "completed"
+        state["has_synced_non_seed"] = True
+        result = await scheduler.run_once()
+        assert result["reason"] == "already_claimed"
+        assert calls == ["target", "core", "target"]
 
     asyncio.run(scenario())

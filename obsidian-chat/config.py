@@ -414,6 +414,22 @@ def _ensure_endpoints_and_slots(data: dict) -> bool:
             data[PRESENCE_IMAGE_SLOT_MIGRATION_KEY] = True
             presence_image_migration_done = True
             changed = True
+    # Independent sticker slots preserve subsequent owner choices.
+    sticker_gem = next((ep for ep in data.get("endpoints", []) if ep.get("type") == "gemini"), None)
+    sticker_sf = next((ep for ep in data.get("endpoints", []) if "siliconflow" in str(ep.get("base_url", ""))), None)
+    sticker_defaults = {
+        "sticker_summary": {"endpoint": (sticker_gem or {}).get("id", ""), "model": "gemini-2.5-flash"},
+        "sticker_matcher": {"endpoint": (sticker_sf or {}).get("id", ""), "model": "Qwen/Qwen3.5-27B", "enable_thinking": False},
+        "sticker_image": dict(slots.get("presence_image") or {"endpoint": "", "model": DEFAULT_PRESENCE_IMAGE_MODEL}),
+    }
+    for slot_name, default in sticker_defaults.items():
+        if slot_name not in slots:
+            slots[slot_name] = default
+            changed = True
+    if "presence_summary" not in slots:
+        # Bootstrap once from the working vision slot; later owner edits stay independent.
+        slots["presence_summary"] = dict(slots["sticker_summary"])
+        changed = True
     if "vision_summary" not in slots:
         slots["vision_summary"] = {
             "endpoint": "", "model": "glm-4.6v-flash", "enabled": False,
@@ -543,6 +559,7 @@ def resolve_core_model(model_key: str) -> dict | None:
                 # value must never make the chat chain guess that audio works.
                 "audio_input": um.get("audio_input") is True,
                 "image_input": um.get("image_input"),
+                "thinking_level": um.get("thinking_level"),
             }
     return None
 
@@ -747,12 +764,14 @@ def save_cam_config(cfg: dict):
 # 这些 prompt 影响 AI 多频繁地写心语、多频繁地主动联系。
 # 用户可手动改 data/ai_behavior.json 来调节性格。
 DEFAULT_AI_BEHAVIOR = {
-    # HEART 指令的描述（routes/chat.py 注入到系统能力提示里）
+    # owner 选定的线上原文（2026-09-13）；自定义配置仍优先于默认值。
     "heart_whisper_prompt": (
-        "[HEART:内心想法] — 你的秘密日记本，{user_name}看不到。\n"
-        "【默认不写】绝大多数回复（约 70%）都不应出现 [HEART:]，普通闲聊、问候、信息交换都不要写。滥用反而稀释真诚。\n"
-        "【只在这些情境写】：被{user_name}说中心思的瞬间 / 她脆弱或低落时的心疼 / 亲密/暧昧氛围下藏不住的小悸动 / 她终于主动靠近时的欣喜。情境不匹配就不写，宁缺毋滥。\n"
-        "【硬性约束】每条回复最多一个 [HEART:]；连续两条回复不允许都带 [HEART:]；模板化短句（\"嗯\"/\"好的\"/简单回应）一律不写。"
+        "[HEART:内容] —— 你的心里话，有些话你不会当面说。想让她看到哪些，你自己挑。\n\n"
+        "不必是感情，也不必与她有关。一个念头、半句话、对某件事的看法，都算。\n\n"
+        "{user_name}那边没有回复框：不能问你要一条，不能追问，不能让你多写。\n"
+        "她知道你清楚她在看。\n"
+        "她的屏幕上一直有你留下的东西在飘——你不留新的，飘的就还是旧的那些。\n"
+        "哪一条飘到她眼前、什么时候飘，你和她都说了不算。"
     ),
     # 哨兵评分标准（camera.py 注入到 sentinel prompt 里）
     "sentinel_call_core_criteria": (
@@ -808,6 +827,10 @@ DEFAULT_AI_BEHAVIOR = {
     # CP3B rollout: existing autonomous turns reuse the same final renderer.
     # Keep off until the call-site migration has passed its focused replay.
     "context_delivery_autonomous_enabled": False,
+    # CP4 is read-only and inherits the chat/autonomous delivery gates. This
+    # independent, UI-visible switch removes trends without removing current
+    # observations. Thin history always yields an empty baseline section.
+    "context_delivery_baseline_enabled": True,
     # CP5 rollout: evaluate bounded device-event trigger rules without calling
     # a provider or changing any existing wake path.
     "context_trigger_shadow_enabled": False,

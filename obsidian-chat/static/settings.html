@@ -3,12 +3,12 @@
 <head>
 <script src="/static/brand_compat.js?v=20260905-brand"></script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>设置 - Obsidian Vow</title>
 <link rel="stylesheet" href="/static/common.css">
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#1a1714">
+<meta name="theme-color" content="#13151d">
 <style>
   .tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:16px; }
   .tab { padding:10px 14px; cursor:pointer; color:var(--text2); border-bottom:2px solid transparent; font-size:14px; }
@@ -36,6 +36,10 @@
   .hint { color:var(--text2); font-size:12px; margin:6px 0 12px; line-height:1.5; }
   select.form-input { appearance:auto; }
 </style>
+<link rel="stylesheet" href="/static/vow.css?v=20260913-enamel">
+<script src="/static/vow.js?v=20260913-gold-dust"></script>
+<link rel="stylesheet" href="/static/gold-dust.css?v=20260913-gold-dust">
+<script src="/static/gold-dust.js?v=20260913-gold-dust" defer></script>
 </head>
 <body>
 <div class="sub-page">
@@ -54,19 +58,22 @@
     <!-- ═══ 基础：预设 key + 网易云 ═══ -->
     <div class="tab-panel active" data-panel="basic">
       <div class="hint">预设渠道 key。若使用 <code>.env</code> 环境变量，会显示"已被 env 覆盖"，此处留空即可。</div>
-      <label class="form-label">Gemini API Key <span id="envGemini" class="env-badge" style="display:none">env</span></label>
-      <input class="form-input" type="text" id="geminiKeyInput" placeholder="输入 Gemini API Key..." autocomplete="off" style="font-family:monospace">
-      <label class="form-label">Gemini Free Key（哨兵+向量） <span id="envGeminiFree" class="env-badge" style="display:none">env</span></label>
-      <input class="form-input" type="text" id="geminiFreeKeyInput" placeholder="留空则复用上方 Key" autocomplete="off" style="font-family:monospace">
-      <label class="form-label">硅基流动 API Key <span id="envSf" class="env-badge" style="display:none">env</span></label>
-      <div class="hint" style="margin:0 0 4px; color:var(--accent)">⚠ 默认槽位、记忆向量、语音识别 / TTS 语音合成依赖此 Key；digest 模型可在「槽位 / 模型」里换端点。<a href="https://cloud.siliconflow.cn" target="_blank" style="color:var(--accent)">免费注册</a>即可获取。</div>
+      <div class="vow-settings-keys">
+<div class="vow-setting-field"><label class="form-label" for="geminiKeyInput">Gemini API Key <span id="envGemini" class="env-badge" style="display:none">env</span></label>
+      <input class="form-input" type="text" id="geminiKeyInput" placeholder="输入 Gemini API Key..." autocomplete="off" style="font-family:monospace"></div>
+<div class="vow-setting-field"><label class="form-label" for="geminiFreeKeyInput">Gemini Free Key（哨兵+向量） <span id="envGeminiFree" class="env-badge" style="display:none">env</span></label>
+      <input class="form-input" type="text" id="geminiFreeKeyInput" placeholder="留空则复用上方 Key" autocomplete="off" style="font-family:monospace"></div>
+<div class="vow-setting-field"><label class="form-label" for="sfKeyInput">硅基流动 API Key <span id="envSf" class="env-badge" style="display:none">env</span></label>
+
       <input class="form-input" type="text" id="sfKeyInput" placeholder="输入硅基流动 API Key..." autocomplete="off" style="font-family:monospace">
-      <label class="form-label">中转站 API Key <span id="envAipro" class="env-badge" style="display:none">env</span></label>
-      <input class="form-input" type="text" id="aiproKeyInput" placeholder="输入中转站 API Key..." autocomplete="off" style="font-family:monospace">
-      <label class="form-label">Tavily API Key <span id="envTavily" class="env-badge" style="display:none">env</span></label>
-      <input class="form-input" type="text" id="tavilyKeyInput" placeholder="输入 Tavily API Key..." autocomplete="off" style="font-family:monospace">
-      <label class="form-label">网易云 MUSIC_U Cookie（VIP 点歌） <span id="envNetease" class="env-badge" style="display:none">env</span></label>
-      <input class="form-input" type="text" id="neteaseMusicUInput" placeholder="浏览器 F12 → Cookie → MUSIC_U" autocomplete="off" style="font-family:monospace">
+<div class="hint" style="margin:0 0 4px; color:var(--accent)">⚠ 默认槽位、记忆向量、语音识别 / TTS 语音合成依赖此 Key；digest 模型可在「槽位 / 模型」里换端点。<a href="https://cloud.siliconflow.cn" target="_blank" style="color:var(--accent)">免费注册</a>即可获取。</div></div>
+<div class="vow-setting-field"><label class="form-label" for="aiproKeyInput">中转站 API Key <span id="envAipro" class="env-badge" style="display:none">env</span></label>
+      <input class="form-input" type="text" id="aiproKeyInput" placeholder="输入中转站 API Key..." autocomplete="off" style="font-family:monospace"></div>
+<div class="vow-setting-field"><label class="form-label" for="tavilyKeyInput">Tavily API Key <span id="envTavily" class="env-badge" style="display:none">env</span></label>
+      <input class="form-input" type="text" id="tavilyKeyInput" placeholder="输入 Tavily API Key..." autocomplete="off" style="font-family:monospace"></div>
+<div class="vow-setting-field"><label class="form-label" for="neteaseMusicUInput">网易云 MUSIC_U Cookie（VIP 点歌） <span id="envNetease" class="env-badge" style="display:none">env</span></label>
+      <input class="form-input" type="text" id="neteaseMusicUInput" placeholder="浏览器 F12 → Cookie → MUSIC_U" autocomplete="off" style="font-family:monospace"></div>
+      </div>
       <div class="card" style="margin-top:14px">
         <div class="card-head">
           <div>
@@ -90,6 +97,16 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div><div class="card-title">腻歪时间 · Look at me</div>
+            <div class="card-sub">邀请接受后留在当天聊天，可以随时立即结束。</div></div>
+          <label class="toggle-switch"><input type="checkbox" id="lookAtMeToggle" onchange="saveLookAtMe()"><span class="toggle-slider"></span></label>
+        </div>
+        <select id="lookAtMeDevice" aria-label="接收邀请的手机" onchange="saveLookAtMe()"></select>
+        <button class="btn" onclick="openLookAtMePermissions()">手机执行设置</button>
+        <div class="card-sub" id="lookAtMeStatus">读取中</div>
       </div>
       <div class="card">
         <div class="card-head">
@@ -122,6 +139,18 @@
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="webSearchToggle" onchange="saveWebSearchConfig()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">设备使用趋势</div>
+            <div class="card-sub" id="deviceBaselineStatus">读取中。只比较有足够记录的个人历史，不判断正在做什么。</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="deviceBaselineToggle" disabled onchange="saveDeviceBaselineConfig()">
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -241,6 +270,39 @@
       </div>
 
       <div class="card">
+        <div class="card-title">桌面化身外观摘要</div>
+        <div class="card-sub">观察新形象的实际外观，供选图使用。需要支持看图的模型；留空停止制作新形象，已有形象仍可出现。</div>
+        <label class="form-label">端点</label>
+        <select class="form-input" id="presenceSummaryEp"></select>
+        <label class="form-label">模型</label>
+        <input class="form-input" id="presenceSummaryModel" style="font-family:monospace">
+      </div>
+
+      <div class="card">
+        <div class="card-title">表情摘要</div>
+        <label class="form-label">端点（留空关闭此能力）</label>
+        <select class="form-input" id="stickerSummaryEp"></select>
+        <label class="form-label">模型</label>
+        <input class="form-input" id="stickerSummaryModel" style="font-family:monospace">
+      </div>
+
+      <div class="card">
+        <div class="card-title">表情匹配</div>
+        <label class="form-label">端点（留空关闭此能力）</label>
+        <select class="form-input" id="stickerMatcherEp"></select>
+        <label class="form-label">模型</label>
+        <input class="form-input" id="stickerMatcherModel" style="font-family:monospace">
+      </div>
+
+      <div class="card">
+        <div class="card-title">夜间表情制作</div>
+        <label class="form-label">端点（留空关闭此能力）</label>
+        <select class="form-input" id="stickerImageEp"></select>
+        <label class="form-label">模型</label>
+        <input class="form-input" id="stickerImageModel" style="font-family:monospace">
+      </div>
+
+      <div class="card">
         <div class="card-title">图片记忆与视觉摘要（vision_summary）</div>
         <div class="card-sub">独立于主聊天模型，只发送图片和描述指令。默认关闭，不借用主模型或自动切换付费型号。建议使用智谱 glm-4.6v-flash；端点类型选 openai，地址为 https://open.bigmodel.cn/api/paas/v4。免费接口仍受账号与限流约束。</div>
         <label class="form-label"><input type="checkbox" id="imageMemoryEnabled"> 启用图片记忆检索与按需重看</label>
@@ -269,6 +331,12 @@
           <input class="form-input" id="umKey" placeholder="显示名，如 deepseek-chat" style="flex:1">
           <select class="form-input" id="umEp" style="flex:1"></select>
           <input class="form-input" id="umModel" placeholder="模型名" style="flex:1; font-family:monospace">
+          <select class="form-input" id="umThinkingLevel" aria-label="思考强度" style="flex:1">
+            <option value="">思考：模型默认</option>
+            <option value="LOW">思考：低</option>
+            <option value="MEDIUM">思考：中</option>
+            <option value="HIGH">思考：高</option>
+          </select>
           <label style="display:flex; align-items:center; gap:5px; white-space:nowrap; font-size:12px; color:var(--text2);">
             <input type="checkbox" id="umAudioInput"> 原生音频输入
           </label>
@@ -297,7 +365,7 @@
 
   </div>
 </div>
-<script src="/static/common.js?v=20260905-brand"></script>
+<script src="/static/common.js?v=20260913-refined"></script>
 <script src="/static/web_push.js?v=20260905-brand"></script>
 <script>
 connectCommonWS();
@@ -464,10 +532,37 @@ function renderMobileScreenCaptureStatus(cfg) {
     $("webSearchStatus").textContent = webEnabled
       ? "已开启 · 主脑可委托后台搜索，结果在下次聊天注入"
       : "已关闭 · 主脑不会看到联网搜索能力";
+    renderDeviceBaselineConfig((res.current || {}).context_delivery_baseline_enabled !== false);
+    $("deviceBaselineToggle").disabled = false;
   } catch(e) {
     $("opportunityStatus").textContent = "读取失败";
+    $("deviceBaselineStatus").textContent = "读取失败，请刷新后重试";
   }
 })();
+
+function renderDeviceBaselineConfig(enabled) {
+  $("deviceBaselineToggle").checked = enabled;
+  $("deviceBaselineStatus").textContent = enabled
+    ? "已开启 · 手机、电脑分别对照个人历史；缺数据或没有明显差异时不显示"
+    : "已关闭 · 不附带设备使用趋势，当前设备状态仍按原开关显示";
+}
+
+async function saveDeviceBaselineConfig() {
+  const toggle = $("deviceBaselineToggle");
+  const enabled = toggle.checked;
+  toggle.disabled = true;
+  try {
+    const res = await api("PUT", "/api/ai_behavior", { context_delivery_baseline_enabled: enabled });
+    if (!res || !res.ok) throw new Error("save failed");
+    renderDeviceBaselineConfig(enabled);
+    showToast(enabled ? "已开启设备使用趋势" : "已关闭设备使用趋势");
+  } catch(e) {
+    renderDeviceBaselineConfig(!enabled);
+    showToast("保存失败，请重试");
+  } finally {
+    toggle.disabled = false;
+  }
+}
 
 async function saveWebSearchConfig() {
   const enabled = $("webSearchToggle").checked;
@@ -717,7 +812,7 @@ function refreshEpSelects() {
   const opts = _endpoints.map(e =>
     `<option value="${escAttr(e.id)}">${escHtml(e.name || e.id)} (${escHtml(e.type || 'openai')})</option>`
   ).join('');
-  ["sentinelEp", "memoryDigestEp", "asrEp", "presenceRendererEp", "presenceImageEp", "visionSummaryEp", "umEp"].forEach(id => {
+  ["sentinelEp", "memoryDigestEp", "asrEp", "presenceRendererEp", "presenceImageEp", "presenceSummaryEp", "visionSummaryEp", "stickerSummaryEp", "stickerMatcherEp", "stickerImageEp", "umEp"].forEach(id => {
     const el = $(id);
     if (!el) return;
     const prev = el.value;
@@ -728,6 +823,14 @@ function refreshEpSelects() {
 
 async function loadSlots() {
   const slots = await api("GET", "/api/slots");
+  $("presenceSummaryEp").value = slots.presence_summary?.endpoint || "";
+  $("presenceSummaryModel").value = slots.presence_summary?.model || "";
+  $("stickerSummaryEp").value = slots.sticker_summary?.endpoint || "";
+  $("stickerSummaryModel").value = slots.sticker_summary?.model || "";
+  $("stickerMatcherEp").value = slots.sticker_matcher?.endpoint || "";
+  $("stickerMatcherModel").value = slots.sticker_matcher?.model || "";
+  $("stickerImageEp").value = slots.sticker_image?.endpoint || "";
+  $("stickerImageModel").value = slots.sticker_image?.model || "";
   const sentinel = slots.sentinel || {};
   const memoryDigest = slots.memory_digest || {};
   const asr = slots.asr || {};
@@ -753,6 +856,9 @@ async function loadSlots() {
 }
 
 async function saveSlots() {
+  await api("PUT", "/api/slots", { name: "sticker_summary", endpoint: $("stickerSummaryEp").value, model: $("stickerSummaryModel").value.trim() });
+  await api("PUT", "/api/slots", { name: "sticker_matcher", endpoint: $("stickerMatcherEp").value, model: $("stickerMatcherModel").value.trim(), extras: { enable_thinking: false } });
+  await api("PUT", "/api/slots", { name: "sticker_image", endpoint: $("stickerImageEp").value, model: $("stickerImageModel").value.trim() });
   await api("PUT", "/api/slots", {
     name: "sentinel",
     endpoint: $("sentinelEp").value,
@@ -778,6 +884,10 @@ async function saveSlots() {
     name: "presence_image",
     endpoint: $("presenceImageEp").value,
     model: $("presenceImageModel").value.trim(),
+  });
+  await api("PUT", "/api/slots", {
+    name: "presence_summary", endpoint: $("presenceSummaryEp").value,
+    model: $("presenceSummaryModel").value.trim(),
   });
   await api("PUT", "/api/slots", {
     name: "vision_summary", endpoint: $("visionSummaryEp").value,
@@ -814,7 +924,7 @@ async function loadUserModels() {
     return `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px dashed var(--border);">
       <div>
         <div style="font-weight:600">${escHtml(k)}</div>
-        <div class="card-sub">${escHtml(m.endpoint || '')} · ${escHtml(m.model || '')} · ${m.audio_input === true ? '可直接听音频' : '不接收音频'}</div>
+        <div class="card-sub">${escHtml(m.endpoint || '')} · ${escHtml(m.model || '')} · ${m.audio_input === true ? '可直接听音频' : '不接收音频'} · 思考：${({LOW:'低',MEDIUM:'中',HIGH:'高'})[m.thinking_level] || '模型默认'}</div>
       </div>
       <button class="mini-btn danger" onclick="deleteUserModel('${escAttr(k)}')">删除</button>
     </div>`;
@@ -827,9 +937,11 @@ async function addUserModel() {
   const model = $("umModel").value.trim();
   const audioInput = $("umAudioInput").checked;
   const imageInput = $("umImageInput").checked;
+  const thinkingLevel = $("umThinkingLevel").value || null;
   if (!key || !endpoint || !model) { showToast("❌ 填完三项"); return; }
-  await api("PUT", "/api/user_models", { key, endpoint, model, audio_input: audioInput, image_input: imageInput });
+  await api("PUT", "/api/user_models", { key, endpoint, model, audio_input: audioInput, image_input: imageInput, thinking_level: thinkingLevel });
   $("umKey").value = ""; $("umModel").value = ""; $("umAudioInput").checked = false; $("umImageInput").checked = false;
+  $("umThinkingLevel").value = "";
   showToast("✅ 已添加");
   await loadUserModels();
 }
@@ -848,6 +960,42 @@ async function deleteUserModel(key) {
   await loadUserModels();
   await loadDiagnostics();
 })();
+
+async function loadLookAtMe() {
+  try {
+    const [cfg, devices] = await Promise.all([api('GET','/api/look-at-me/status'),api('GET','/api/devices')]);
+    const select=$('lookAtMeDevice'); select.replaceChildren();
+    select.add(new Option('选择接收邀请的手机',''));
+    const list=Array.isArray(devices)?devices:(devices.devices||[]);
+    for(const d of list) if(String(d.kind||'').startsWith('android')) select.add(new Option(d.name||d.device_id,d.device_id));
+    const native=window.ObsidianLookAtMe;
+    const local=native?.deviceId?.();
+    if(local && ![...select.options].some(o=>o.value===local)) select.add(new Option(native.deviceName(),local));
+    if(cfg.device_id && ![...select.options].some(o=>o.value===cfg.device_id)) select.add(new Option('已绑定手机',cfg.device_id));
+    select.value=cfg.device_id||local||''; $('lookAtMeToggle').checked=cfg.enabled;
+    const r=cfg.request;
+    const labels={queued:'邀请等待送达',offered:'邀请已展示，等待选择',accepted:'已接受，等待聊天就绪',active:'陪伴已开始',finished:'本次已结束'};
+    let detail=r?labels[r.status]:'';
+    if(r?.status==='queued' && cfg.server_now>=r.expires_at) detail='邀请已过期，未收到完整展示回执';
+    if(r?.status==='offered' && cfg.server_now>=r.choice_deadline) detail='邀请选择期已过，等待手机回执';
+    if(r?.status==='active' && cfg.server_now>=r.expected_end_at) detail='约定时间已过，等待结束回执';
+    if(r?.status==='finished') detail=({rejected:'邀请被拒绝',timed_out:'邀请未回应'}[r.decision] || {completed:'陪伴正常结束',ended_early:'陪伴提前结束'}[r.outcome] || '邀请已结束，未开始陪伴');
+    $('lookAtMeStatus').textContent=(cfg.enabled?'已开启':'已关闭')+(detail?' · '+detail:'');
+  } catch(e) {$('lookAtMeStatus').textContent='读取失败，请刷新重试';}
+}
+async function saveLookAtMe() {
+  const enabled=$('lookAtMeToggle').checked;
+  if(!enabled) window.ObsidianLookAtMe?.end?.();
+  try {
+    await api('PUT','/api/look-at-me/config',{enabled,device_id:$('lookAtMeDevice').value});
+    await loadLookAtMe();
+  } catch(e) {showToast('未能保存，请先选择手机');await loadLookAtMe();}
+}
+function openLookAtMePermissions() {
+  if(window.ObsidianLookAtMe?.settings) window.ObsidianLookAtMe.settings();
+  else showToast('请在新 APK 中打开此页，设置悬浮窗、使用情况、通知、来电中断及厂商后台权限',6000);
+}
+loadLookAtMe();
 </script>
 </body>
 </html>

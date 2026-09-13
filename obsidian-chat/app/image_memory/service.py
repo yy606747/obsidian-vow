@@ -191,9 +191,12 @@ async def process_image(message_id: str, url: str) -> str:
 
 
 async def process_message(message_id: str) -> None:
+    from app.chat.audio_input import parse_attachments
+    from app.stickers.attachments import is_sticker
     async with get_db() as db:
         row = await (await db.execute("SELECT attachments FROM messages WHERE id=? AND role='user'", (message_id,))).fetchone()
-    for url in repo.images(row[0] if row else []):
+    ordinary = [item for item in parse_attachments(row[0] if row else []) if not is_sticker(item)]
+    for url in repo.images(ordinary):
         await process_image(message_id, url)
 
 

@@ -476,9 +476,9 @@ def _build_dom_toy_output_contract() -> str:
 
 def _build_no_device_capability(user_name: str) -> str:
     return (
-        f"【重要】当前为普通聊天模式，你没有控制任何玩具或设备的能力。"
-        f"即使记忆中提到过相关内容，那也是特定模式下的互动记录，不代表当前状态。"
-        f"不要提及、暗示或假装你能操控{user_name}身上的任何设备。"
+        "【玩具状态】当前未启用玩具控制，其他能力按本轮列出的可用项使用。"
+        "过去的玩具互动记录不代表当前已开启控制，"
+        f"不要假装能操控{user_name}身上的玩具。"
     )
 
 
@@ -565,14 +565,7 @@ def build_opportunity_ability_block(
     if mobile_screen_target is None:
         available_tools.discard("mobile.screen_check")
     if kind == "night":
-        abilities: list[str] = [
-            (
-                f"{ai_name}今晚不向{user_name}说话；本轮不得输出任何正文，"
-                "写了整轮作废。"
-            )
-            if presence_requires_human
-            else f"{ai_name}今晚不需要向{user_name}说话；任何自然语言正文都不会送达。"
-        ]
+        abilities: list[str] = [f"{ai_name}今晚不需要向{user_name}说话；任何自然语言正文都不会送达。"]
     elif kind == "summon":
         abilities = [
             f"本轮不向{user_name}发送正文；{ai_name}只决定是否在桌面出现。"
@@ -616,7 +609,7 @@ def build_opportunity_ability_block(
     if kind == "night" and "desktop.presence.draw" in actual_tools:
         if presence_requires_human:
             abilities.append(
-                f"{ai_name}还没有留下自己的正式形象；本轮唯一的动作就是画下这第一张，"
+                f"{ai_name}还没有留下自己的正式形象；若选择桌面绘图，第一张须为人形，"
                 "视觉规格要完整写出脸、身形、头发、衣着、配色和视角六项。"
             )
         else:
@@ -625,9 +618,15 @@ def build_opportunity_ability_block(
                 "不要照着示例选形象。"
             )
         abilities.append(
-            "画面用扁平色块、清晰轮廓和干净剪影，主体完整、边缘干净便于去背，"
-            "缩到很小的时候也要一眼认得出。"
+            "若选择桌面形象绘图，主体完整、轮廓清楚、边缘便于去背；人形在桌面小尺寸下也要看清五官与神态，"
+            "不要把脸简化成空白、纯剪影或无五官面罩。"
+            "夜间只是制作时间，形象是留待以后出现的；画面可以明亮、有日常生活感，不必总画深夜或守夜。"
         )
+        if not presence_requires_human:
+            abilities.append(
+                "选择人形时，已有的人形参考图会交给绘图模型，保持同一张脸、身体比例和画风；"
+                "本次可以改变姿态、表情、衣着和配色。非人形无需套用人形五官。"
+            )
     if profile.allows_marker(MARKER_OPPORTUNITY_NONE):
         abilities.append(
             f"{OPPORTUNITY_NONE_TOKEN} — 如果此刻什么都不想做，精确输出这个标记。"
@@ -649,25 +648,16 @@ def build_opportunity_ability_block(
         "工具标记只用于后台动作，不要解释语法、输出思考过程或伪造执行结果。"
     )
     if kind == "night":
-        if presence_requires_human:
-            block += (
-                "这是空形象库的一次初始化，本轮唯一合法出口是一个人形 PRESENCE_DRAW；"
-                "不得输出其他控制标记或任何正文。"
-            )
-        else:
-            # Never name an exit the profile has not enabled: with reflection
-            # switched off, a hardcoded three-way sentence advertises
-            # OPPORTUNITY_REFLECT and every use of it voids the night.
-            exits = ["一个 PRESENCE_DRAW"]
-            if profile.allows_marker(MARKER_OPPORTUNITY_REFLECT):
-                exits.append(f"单独的 {OPPORTUNITY_REFLECT_TOKEN}")
-            if profile.allows_marker(MARKER_OPPORTUNITY_NONE):
-                exits.append(f"单独的 {OPPORTUNITY_NONE_TOKEN}")
-            choice = {1: "只有这一个出口", 2: "二选一", 3: "三选一"}[len(exits)]
-            block += (
-                f"本轮只能在{'、'.join(exits)} 之间{choice}；"
-                "任何正文或混用都会让整轮作废。"
-            )
+        exits = []
+        if "desktop.presence.draw" in actual_tools:
+            exits.append("一个 PRESENCE_DRAW")
+        if "sticker.create" in actual_tools:
+            exits.append("一个【做表情：自由描述】")
+        if profile.allows_marker(MARKER_OPPORTUNITY_REFLECT):
+            exits.append(f"单独的 {OPPORTUNITY_REFLECT_TOKEN}")
+        if profile.allows_marker(MARKER_OPPORTUNITY_NONE):
+            exits.append(f"单独的 {OPPORTUNITY_NONE_TOKEN}")
+        block += f"本轮从{'、'.join(exits)}中单独选择一个出口；任何正文或混用都会让整轮作废。"
     elif kind == "summon":
         block += (
             "本轮只能在一个 PRESENCE_SHOW 与单独的 OPPORTUNITY_NONE 之间二选一；"
@@ -693,7 +683,10 @@ def build_opportunity_ability_block(
     )
 
 
-async def build_send_ability_block(*, conv_id: str, body: Any, user_name: str, capabilities: Collection[str] | None = None, control_context: ControlPromptContext | None = None, model_key: str = "") -> str:
+async def build_send_ability_block(*, conv_id: str, body: Any, user_name: str, ai_name: str | None = None, capabilities: Collection[str] | None = None, control_context: ControlPromptContext | None = None, model_key: str = "") -> str:
+    if not ai_name:
+        from .worldbook import load_worldbook_names
+        ai_name = load_worldbook_names()[1]
     capability_set = _resolve_capabilities(
         capabilities,
         whisper_mode=body.whisper_mode,
@@ -746,6 +739,7 @@ async def build_send_ability_block(*, conv_id: str, body: Any, user_name: str, c
         capabilities=capability_set,
         context={
             "user_name": user_name,
+            "ai_name": ai_name,
             "monitor_variant": "send",
             "image_memory_available": image_memory_available(model_key),
             "activity_available": activity_available,
@@ -892,6 +886,7 @@ async def build_regenerate_ability_block(
     *,
     conv_id: str,
     user_name: str,
+    ai_name: str | None = None,
     ai_dom_mode: bool,
     safeword: str,
     dom_history: str,
@@ -913,6 +908,9 @@ async def build_regenerate_ability_block(
     control_context: ControlPromptContext | None = None,
     model_key: str = "",
 ) -> str:
+    if not ai_name:
+        from .worldbook import load_worldbook_names
+        ai_name = load_worldbook_names()[1]
     capability_set = _resolve_capabilities(
         capabilities,
         whisper_mode=whisper_mode,
@@ -965,6 +963,7 @@ async def build_regenerate_ability_block(
         capabilities=capability_set,
         context={
             "user_name": user_name,
+            "ai_name": ai_name,
             "monitor_variant": "regenerate",
             "image_memory_available": image_memory_available(model_key),
             "activity_available": activity_available,

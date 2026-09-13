@@ -1,6 +1,6 @@
 // ── Whisper Toy 懒加载门面 ──
 (function (global) {
-  const WHISPER_TOY_SCRIPT = "/static/js/chat/whisper_toy.js?v=20260905-brand";
+  const WHISPER_TOY_SCRIPT = "/static/js/chat/whisper_toy.js?v=20260913-markdown";
   let whisperToyLoadPromise = null;
 
   function getWhisperToyModule() {

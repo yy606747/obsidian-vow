@@ -17,7 +17,6 @@ let msgDebugData = {};  // { msgId: { model, recalled_memories, prompt_messages,
 let systemLogs = [];    // 系统日志（会话级，刷新清空）
 let _msgMoods = {};     // { msgId: 'happy'|'sad'|... } AI 消息情绪
 let _pendingRetract = false;  // 用户撤回了消息，下次 send 通知 AI
-let _whisperPool = [];  // 心语池，定时飘字用
 let _lastUserMood = 'neutral'; // 用户最近消息的情绪，影响打字动画
 let msgMusicCards = {}; // { msgId: [{ id, name, artist, album, cover, audio_url, candidates }] }
 let hasMoreMessages = false;   // 是否还有更早的消息可加载

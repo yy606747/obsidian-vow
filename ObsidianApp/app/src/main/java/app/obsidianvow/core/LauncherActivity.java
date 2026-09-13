@@ -135,7 +135,7 @@ public class LauncherActivity extends AppCompatActivity {
     private void launchWebView(String url, String token) {
         startPushService(url, token);
 
-        Intent intent = new Intent(this, WebViewActivity.class);
+        Intent intent = WebViewActivity.openChatIntent(this);
         intent.putExtra("url", url);
         intent.putExtra("token", token);
         startActivity(intent);

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import sqlite3
 import threading
 import time
@@ -45,6 +46,23 @@ class DailySignalStore:
             ).fetchall()
         return [str(row["local_date"]) for row in rows]
 
+    def read_range(self, first_date: str, last_date: str) -> list[dict]:
+        """Prompt-time read: no schema creation, backfill, or write connection.
+
+        A short SQLite timeout prevents a busy daily writer from stalling a
+        conversation. The provider treats an unavailable store as no baseline.
+        """
+        if not self.db_path.is_file():
+            return []
+        uri = self.db_path.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=0.25)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM daily_signal_summaries WHERE local_date BETWEEN ? AND ? ORDER BY local_date",
+                (first_date, last_date),
+            ).fetchall()
+        return [_decode_row(row) for row in rows]
+
     def count(self) -> int:
         self._ensure_schema()
         with self._connect() as conn:
@@ -66,6 +84,8 @@ class DailySignalStore:
         def merge(payload: dict) -> dict:
             for key in ("activity", "environment"):
                 payload[key] = _json_copy(reconciled[key])
+            if "device_usage" in reconciled:
+                payload["device_usage"] = _json_copy(reconciled["device_usage"])
             if not preserve_biometrics:
                 payload["biometrics"] = _json_copy(reconciled["biometrics"])
 

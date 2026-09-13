@@ -137,6 +137,7 @@ def test_startup_failure_cleans_already_registered_resources(monkeypatch):
 
     monkeypatch.setattr(main, "TEST_MODE", False)
     monkeypatch.setattr(main, "init_db", noop)
+    monkeypatch.setattr("app.daily_chat.service.daily_chat.ensure_current", noop)
     monkeypatch.setattr(sprite_library, "ensure_seed_sprites", noop)
     monkeypatch.setattr(sprite_library, "reconcile_seed_lifecycle", noop)
     monkeypatch.setattr(web_search_service, "resume_queued", resumed)

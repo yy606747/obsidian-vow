@@ -10,6 +10,8 @@ SELF_WAKE_SURFACE_CAPABILITIES = frozenset(
         "device.ring_touch",
         "pc.screen_check",
         "mobile.screen_check",
+        "mobile.look_at_me",
+        "sticker.send",
         "memory.remember",
         "heart.whisper",
         "location.poi_search",

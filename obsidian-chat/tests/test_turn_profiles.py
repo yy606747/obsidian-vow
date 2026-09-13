@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import pytest
 
 from app.chat.action_executor import execute_postprocessed_actions
 from app.chat.postprocess import PostProcessResult
 from app.chat.turn_profiles import (
     chat_turn_profile,
     classify_opportunity_control_output,
+    classify_self_wake_control_output,
+    initiative_turn_profile,
     opportunity_turn_profile,
+    self_wake_turn_profile,
 )
 from app.tools.schemas import ToolContext, ToolIntent, ToolStatus
 
@@ -55,7 +59,7 @@ def test_opportunity_control_markers_are_exact_and_profile_gated():
     ).allows_tool("schedule.delete")
 
 
-def test_presence_bootstrap_profile_rejects_none_and_reflection():
+def test_presence_bootstrap_profile_keeps_none_and_reflection_available():
     profile = opportunity_turn_profile(
         runtime_capabilities={"desktop.presence.draw"},
         reflection_allowed=True,
@@ -63,13 +67,39 @@ def test_presence_bootstrap_profile_rejects_none_and_reflection():
         presence_bootstrap_required=True,
     )
     assert profile.allowed_tool_capabilities == frozenset({"desktop.presence.draw"})
-    assert profile.allowed_markers == frozenset()
+    assert profile.allowed_markers == frozenset({'opportunity_none', 'opportunity_reflect'})
     assert classify_opportunity_control_output(
         "[OPPORTUNITY_NONE]", profile=profile
-    ) == "invalid"
+    ) == "none"
     assert classify_opportunity_control_output(
         "[OPPORTUNITY_REFLECT]", profile=profile
-    ) == "invalid"
+    ) == "reflect"
+
+
+@pytest.mark.parametrize("raw", [
+    "【陪我：20｜聊聊[OPPORTUNITY_NONE]的含义】",
+    "正文 [陪我:20|聊聊【OPPORTUNITY_REFLECT】和[OPPORTUNITY_BROKEN]的含义]",
+    "【陪我：20｜[OPPORTUNITY_NONE]",  # an unfinished payload is still inert
+    '{"assistant_text":"【陪我：20｜聊聊[OPPORTUNITY_NONE]的含义】","actions":[]}',
+])
+def test_control_classification_ignores_invitation_prose_but_not_top_level_markers(raw):
+    for profile in (_profile(reflect=True), initiative_turn_profile(toy_enabled=False)):
+        assert classify_opportunity_control_output(raw, profile=profile) == "ordinary"
+    complete = "【陪我：20｜聊聊[OPPORTUNITY_NONE]的含义】"
+    for mixed in (complete + "[OPPORTUNITY_NONE]", "[OPPORTUNITY_NONE]" + complete):
+        assert classify_opportunity_control_output(mixed, profile=_profile()) == "invalid"
+    self_wake = self_wake_turn_profile({"mobile.look_at_me"})
+    invitation = "【陪我：20｜聊聊[SELF_WAKE_NONE]的含义】"
+    assert classify_self_wake_control_output(invitation, profile=self_wake) == "ordinary"
+    assert classify_self_wake_control_output(invitation + "[SELF_WAKE_NONE]", profile=self_wake) == "invalid"
+
+
+@pytest.mark.parametrize("kind", ["idle", "look_at_me_accept", "summon", "night"])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_web_search_profile_matches_its_advertised_turns(kind, enabled):
+    profile = opportunity_turn_profile(runtime_capabilities=(), reflection_allowed=False,
+                                       web_search_allowed=enabled, kind=kind)
+    assert profile.allows_marker("web_search_intent") == (enabled and kind in {"idle", "look_at_me_accept"})
 
 
 def test_executor_denies_capability_before_adapter_and_reuses_outer_msg_id():

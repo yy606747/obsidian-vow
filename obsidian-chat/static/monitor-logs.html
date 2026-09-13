@@ -3,12 +3,12 @@
 <head>
 <script src="/static/brand_compat.js?v=20260905-brand"></script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>监控日志 - Obsidian Vow</title>
 <link rel="stylesheet" href="/static/common.css">
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#1a1714">
+<meta name="theme-color" content="#13151d">
 <style>
 .sentinel-panel { background:linear-gradient(135deg, var(--surface) 0%, rgba(42,36,32,0.95) 100%); border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:12px; }
 .sentinel-panel-title { font-size:14px; font-weight:600; margin-bottom:10px; display:flex; align-items:center; gap:6px; }
@@ -48,6 +48,10 @@
 .shadow-labels button { flex:1; padding:4px 6px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text2); font-size:11px; cursor:pointer; }
 .shadow-labels button.active { border-color:var(--accent); color:var(--accent); background:rgba(212,148,58,0.08); }
 </style>
+<link rel="stylesheet" href="/static/vow.css?v=20260913-enamel">
+<script src="/static/vow.js?v=20260913-gold-dust"></script>
+<link rel="stylesheet" href="/static/gold-dust.css?v=20260913-gold-dust">
+<script src="/static/gold-dust.js?v=20260913-gold-dust" defer></script>
 </head>
 <body>
 <div class="sub-page">
@@ -125,7 +129,7 @@
     </div>
   </div>
 </div>
-<script src="/static/common.js?v=20260905-brand"></script>
+<script src="/static/common.js?v=20260913-refined"></script>
 <script src="/static/web_push.js?v=20260905-brand"></script>
 <script>
 connectCommonWS(msg => {

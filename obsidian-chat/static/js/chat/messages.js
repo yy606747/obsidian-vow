@@ -20,10 +20,10 @@ function editMsg(id) {
   if (!msg) return;
   const row = document.getElementById(`m_${id}`);
   if (!row) return;
-  // 编辑时合并多气泡为单气泡
-  const bubbles = row.querySelector('.msg-bubbles');
-  if (bubbles) { const single = document.createElement('div'); single.className = 'msg-bubble'; bubbles.replaceWith(single); }
-  const bubble = row.querySelector('.msg-bubble');
+  const content = row.querySelector('[data-msg-content]');
+  if (!content) return;
+  content.innerHTML = '<div class="msg-bubble"></div>';
+  const bubble = content.querySelector('.msg-bubble');
   const safeId = escHtml(id);
   bubble.innerHTML = '<textarea class="edit-textarea" id="edit_' + safeId + '"></textarea>' +
     '<div class="edit-actions">' +
@@ -42,10 +42,10 @@ function cancelEdit(id) { renderMessages(); }
 async function saveEdit(id) {
   const ta = document.getElementById('edit_' + id);
   if (!ta) return;
-  const newText = ta.value.trim();
+  const newText = ta.value;
   const msg = currentMessages.find(m => m.id === id);
   if (!msg) return;
-  if (newText && newText !== msg.content) {
+  if (newText.trim() && newText !== msg.content) {
     const res = await api("PUT", `/api/messages/${id}`, { content: newText });
     // 后端只允许编辑 user 消息（誓约可见性不变量）；被拒时不在本地假装改成功
     if (!res || res.ok !== false) msg.content = newText;
@@ -131,10 +131,7 @@ async function regenerateMsg(aiMsgId) {
             _stopTypingAnim();
             if (d.content.includes('\x00RETRY\x00')) {
               aiContent = '';
-              const mi2 = currentMessages.findIndex(m => m.id === newId);
-              if (mi2 >= 0) currentMessages[mi2].content = '...';
-              const b2 = document.querySelector(`#m_${newId} .msg-bubble`);
-              if (b2) b2.textContent = '...';
+              resetStreamingAssistantMessage(newId);
               _startTypingAnim(newId);
               continue;
             }
@@ -143,12 +140,17 @@ async function regenerateMsg(aiMsgId) {
               hasError = true;
               markTransientErrorMessage(newId, aiContent);
             }
-            const display = cleanAssistantContent(aiContent);
-            const mi = currentMessages.findIndex(m => m.id === newId);
-            if (mi >= 0) currentMessages[mi].content = display;
-            const b = document.querySelector(`#m_${newId} .msg-bubble`);
-            if (b) b.textContent = display;
-            scrollBottom();
+            updateStreamingAssistantMessage(newId, aiContent);
+          } else if (d.type === "tool_delivery") {
+            _stopTypingAnim();
+            currentMessages = currentMessages.filter(message => message.id !== d.id);
+            renderMessages();
+          } else if (d.type === "look_at_me") {
+            showToast('陪伴邀请已发往手机');
+          } else if (d.type === "message" && d.message) {
+            _stopTypingAnim();
+            aiContent = String(d.message.content || "");
+            upsertSystemMessage(d.message);
           } else if (d.type === "debug" && newId) {
             msgDebugData[newId] = d;
             if (d.has_error) {
@@ -178,7 +180,7 @@ async function regenerateMsg(aiMsgId) {
           } else if (d.type === "toy_command_rejected") {
             ControlToyRouter.reportRejected(d);
           } else if (d.type === "heart_whisper") {
-            showHeartWhisperHint(d.msg_id, d.content);
+            showHeartWhisperHint(d.msg_id, d.content, d);
           } else if (d.type === "generation_blocked") {
             hasError = true;
             handleGenerationBlocked(d);
@@ -202,9 +204,12 @@ async function regenerateMsg(aiMsgId) {
     showToast(err.message || "重新生成失败", 3600);
     addErrorToSystemLog(`重新生成失败: ${err.message || err}`, $("modelSelect")?.value);
   } finally {
+    _stopTypingAnim();
+    window.ChatMarkdown?.finish(streamingAiId);
     sending = false;
     streamingAiId = null;
     $("sendBtn").disabled = false;
+    window.ChatHeartNotes?.sync();
   }
 }
 

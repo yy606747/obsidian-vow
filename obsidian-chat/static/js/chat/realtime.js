@@ -1,14 +1,92 @@
 // ── WebSocket 同步 ──
+let wsReconnectTimer = null;
+let wsHeartbeatTimer = null;
+let wsPongTimer = null;
+
+function clearChatSocketTimers() {
+  clearTimeout(wsReconnectTimer);
+  clearInterval(wsHeartbeatTimer);
+  clearTimeout(wsPongTimer);
+  wsReconnectTimer = wsHeartbeatTimer = wsPongTimer = null;
+}
+
+function reconnectChatSocket() {
+  clearChatSocketTimers();
+  const previous = ws;
+  ws = null;
+  if (previous) {
+    previous.onopen = previous.onmessage = previous.onclose = previous.onerror = null;
+    try { previous.close(); } catch (_) {}
+  }
+  if (isChatForeground()) connectWS();
+}
+
+function pingChatSocket() {
+  if (!isChatForeground() || !ws || ws.readyState !== 1 || wsPongTimer) return;
+  const socket = ws;
+  try { socket.send(JSON.stringify({ type: 'ping' })); }
+  catch (_) { reconnectChatSocket(); return; }
+  wsPongTimer = setTimeout(() => {
+    wsPongTimer = null;
+    if (ws === socket && isChatForeground()) reconnectChatSocket();
+  }, 10000);
+}
+
 function connectWS() {
+  if (ws && ws.readyState === 0) {
+    if (!wsPongTimer) watchChatSocketConnection(ws);
+    return;
+  }
+  if (ws && ws.readyState === 1) return;
+  clearChatSocketTimers();
+  if (ws) {
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    try { ws.close(); } catch (_) {}
+  }
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
-  ws.onmessage = e => handleSync(JSON.parse(e.data));
-  ws.onopen = () => {
+  const socket = new WebSocket(`${proto}//${location.host}/ws`);
+  ws = socket;
+  socket.onmessage = e => {
+    if (ws !== socket) return;
+    try {
+      const message = JSON.parse(e.data);
+      if (message.type === 'pong') {
+        clearTimeout(wsPongTimer);
+        wsPongTimer = null;
+        return;
+      }
+      handleSync(message);
+    } catch (error) { console.warn('[chat] WebSocket event failed', error); }
+  };
+  socket.onopen = () => {
+    if (ws !== socket) return;
+    clearChatSocketTimers();
+    wsHeartbeatTimer = setInterval(pingChatSocket, 20000);
     window.ChatPerf?.markOnce("ws_connected");
     recoverInterruptedStream();
+    if (chatInitialized && isChatForeground()) refreshChat();
     if (window.ControlRuntime) ControlRuntime.recover().catch(() => {});
   };
-  ws.onclose = () => setTimeout(connectWS, 2000);
+  socket.onclose = () => {
+    if (ws !== socket) return;
+    clearChatSocketTimers();
+    wsReconnectTimer = setTimeout(() => {
+      wsReconnectTimer = null;
+      if (isChatForeground()) connectWS();
+    }, 2000);
+  };
+  socket.onerror = () => {
+    if (ws === socket) socket.close();
+  };
+  watchChatSocketConnection(socket);
+}
+
+function watchChatSocketConnection(socket) {
+  // CONNECTING 状态也可能在后台恢复后卡住，返回前台时必须重新安排检测。
+  wsPongTimer = setTimeout(() => {
+    wsPongTimer = null;
+    if (ws === socket && socket.readyState === 0 && isChatForeground()) reconnectChatSocket();
+  }, 10000);
 }
 
 // 流式中断恢复：WS 重连后把服务器上已完成的消息内容覆盖回当前页
@@ -41,9 +119,15 @@ function _forwardWsToSubPage(msg) {
 function handleSync(msg) {
   const { type, data } = msg;
 
+  if (chatRefreshEvents && ['msg_created', 'msg_updated', 'msg_deleted'].includes(type) && data) {
+    chatRefreshEvents.push({ type, data: { ...data } });
+  }
+
   _forwardWsToSubPage(msg);
 
-  if (type === "conv_created") {
+  if (type === 'daily_chat_rollover') {
+    receiveDailyRollover(data);
+  } else if (type === "conv_created") {
     if (!conversations.find(c => c.id === data.id)) {
       conversations.unshift(data);
       renderConvList();
@@ -52,6 +136,7 @@ function handleSync(msg) {
     const c = conversations.find(c => c.id === data.id);
     if (c) { Object.assign(c, data); renderConvList(); }
     if (data.id === currentConvId && data.title) $("chatTitle").textContent = data.title;
+    if (data.id === currentConvId && data.model) $("modelSelect").value = data.model;
   } else if (type === "conv_deleted") {
     conversations = conversations.filter(c => c.id !== data.id);
     renderConvList();
@@ -61,9 +146,9 @@ function handleSync(msg) {
     }
   } else if (type === "msg_created") {
     if (data.conv_id === currentConvId) {
-      const incoming = data.role === "assistant" && msgDebugData[data.id]?.has_error
-        ? { ...data, transient_error: true, persisted: false, error_text: msgDebugData[data.id].error_text || data.content }
-        : data;
+      const incoming = data.role === "assistant" && (data.transient_error || data.persisted === false || msgDebugData[data.id]?.has_error)
+        ? { ...data, transient_error: true, persisted: false, error_text: data.error_text || msgDebugData[data.id]?.error_text || data.content }
+        : { ...data, persisted: true };
       // 正在流式的 AI 消息 → 用完整内容替换
       if (data.id === streamingAiId) {
         const mi = currentMessages.findIndex(m => m.id === data.id);
@@ -88,7 +173,7 @@ function handleSync(msg) {
         if (data.role === 'assistant' && activityCheckMsgId) dismissActivityCheckIndicator();
         renderMessages();
         // TTS：语音通话中自动播报 AI 回复 / Core 主动发言（带 tts 标记）
-        if (data.role === 'assistant' && (voiceInCall || msg.tts)) {
+        if (data.role === 'assistant' && !incoming.transient_error && (voiceInCall || msg.tts)) {
           ttsSpeak(data.content, data.id);
         } else if (data.role === 'assistant' && voiceInCall && !ttsEnabled) {
           // TTS 未启用但在通话中，通知语音模块 AI 说完了
@@ -98,7 +183,7 @@ function handleSync(msg) {
       scrollBottom();
     }
     const ci = conversations.findIndex(c => c.id === data.conv_id);
-    if (ci >= 0) {
+    if (ci >= 0 && !data.transient_error && data.persisted !== false) {
       if (conversations[ci].message_count != null) conversations[ci].message_count++;
       if (ci > 0) { const [c] = conversations.splice(ci, 1); conversations.unshift(c); }
       renderConvList();
@@ -106,7 +191,7 @@ function handleSync(msg) {
   } else if (type === "msg_updated") {
     if (data.conv_id === currentConvId) {
       const mi = currentMessages.findIndex(m => m.id === data.id);
-      if (mi >= 0) { currentMessages[mi] = data; renderMessages(); }
+      if (mi >= 0) { currentMessages[mi] = { ...currentMessages[mi], ...data, conv_id: currentConvId }; renderMessages(); }
     }
   } else if (type === "msg_deleted") {
     if (data.conv_id === currentConvId) {
@@ -117,11 +202,7 @@ function handleSync(msg) {
     if (dc && dc.message_count != null && dc.message_count > 0) { dc.message_count--; renderConvList(); }
   } else if (type === "file_synced") {
     if (data.conv_id === currentConvId) {
-      api("GET", `/api/conversations/${currentConvId}/messages?limit=${MSG_PAGE_SIZE}`).then(msgs => {
-        currentMessages = msgs;
-        hasMoreMessages = msgs.length >= MSG_PAGE_SIZE;
-        renderMessages();
-      });
+      refreshChat();
     }
   } else if (type === "voice_state") {
     // 远程模式下忽略后端的语音状态广播（PC sounddevice 的状态不应覆盖手机麦克风的状态）
@@ -196,8 +277,8 @@ function handleSync(msg) {
     }
   } else if (type === "heart_whisper") {
     // 通过 WebSocket 收到心语（语音发送时前端没有 SSE 流）
-    if (data.msg_id && !streamingAiId) {
-      showHeartWhisperHint(data.msg_id, data.content);
+    if (data.msg_id) {
+      showHeartWhisperHint(data.msg_id, data.content, data);
     }
   }
 }

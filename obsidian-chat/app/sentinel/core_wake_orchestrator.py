@@ -272,7 +272,16 @@ async def run_core_wake_orchestrator_full_execute(
     )
 
 
-async def _execute_core_wake_flow(
+async def _execute_core_wake_flow(**kwargs) -> dict[str, Any]:
+    try:
+        return await _execute_core_wake_flow_inner(**kwargs)
+    finally:
+        release = getattr(kwargs['ports'], 'release_expression_turn', None)
+        if release is not None:
+            await release()
+
+
+async def _execute_core_wake_flow_inner(
     *,
     preflight_payload: Mapping[str, Any],
     ports: Any,
@@ -442,6 +451,13 @@ async def _execute_core_wake_flow(
         + web_messages
         + messages[-1:]
     )
+    prepare_expression = getattr(ports, 'prepare_expression_turn', None)
+    if prepare_expression is not None:
+        await prepare_expression(messages=core_messages,
+            conv_id=preflight_payload['conv_id'], model_key=preflight_payload['model_key'],
+            request_id=request_id or f'sentinel:{int(ports.now() * 1000)}',
+            control_active=bool(preflight_payload.get('control_status') == 'active'
+                                or preflight_payload.get('toy_capability_allowed')))
     if execution_policy["pre_core_delay_sec"] > 0:
         await ports.sleep(execution_policy["pre_core_delay_sec"])
         state["timing_events"].append({
@@ -481,6 +497,19 @@ async def _execute_core_wake_flow(
     mobile_screen_checks = stream_result.get("mobile_screen_checks") or []
     ring_touch_descriptions = stream_result.get("ring_touch_descriptions") or []
     web_search_intent = str(stream_result.get("web_search_intent") or "")
+    expression_delivery = {'content': full_content, 'attachments': [], 'delivered': False}
+    complete_expression = getattr(ports, 'complete_expression_reply', None)
+    if complete_expression is not None:
+        expression_delivery = await complete_expression(
+            content=full_content, messages=core_messages, temperature=temperature)
+        full_content = expression_delivery['content']
+    if not full_content and not expression_delivery.get('attachments') and not expression_delivery.get('delivered'):
+        state.update(status='core_empty', would_write_monitor_log='core_empty',
+                     error_type='empty_expression_delivery', error='no text, sticker or invitation delivered')
+        _skip_after_stream_failure(state)
+        await _write_result_monitor_log(ports, state, preflight_payload,
+            record_production_side_effects=record_production_side_effects)
+        return state
     if toy_commands:
         state["toy_commands"] = list(toy_commands)
     if screen_check_reasons:
@@ -490,115 +519,117 @@ async def _execute_core_wake_flow(
     if ring_touch_descriptions:
         state["ring_touch_descriptions"] = list(ring_touch_descriptions)
 
-    # Do not tell the user that Sentinel woke Core until Core has produced a
-    # usable reply. A deploy/shutdown may cancel the slow provider call; keeping
-    # all visible wake effects after it prevents an orphan system notice.
-    await ports.broadcast_monitor_alert(
-        preflight_payload["core_request"].get("monitor_alert")
-        or preflight_payload["core_request"]["system_notice"]
-    )
-    _record_step_effect(
-        state,
-        "broadcast_monitor_alert",
-        record_production_side_effects=record_production_side_effects,
-    )
-    _mark_step(state, "broadcast_monitor_alert", "succeeded")
+    assistant_message = {'id': expression_delivery.get('message_id') or request_id}
+    if full_content or expression_delivery.get('attachments'):
+        # Do not tell the user that Sentinel woke Core until Core has produced a
+        # usable reply. A deploy/shutdown may cancel the slow provider call; keeping
+        # all visible wake effects after it prevents an orphan system notice.
+        await ports.broadcast_monitor_alert(
+            preflight_payload["core_request"].get("monitor_alert")
+            or preflight_payload["core_request"]["system_notice"]
+        )
+        _record_step_effect(
+            state,
+            "broadcast_monitor_alert",
+            record_production_side_effects=record_production_side_effects,
+        )
+        _mark_step(state, "broadcast_monitor_alert", "succeeded")
 
-    system_message = await ports.insert_system_wake_notice(
-        conv_id=preflight_payload["conv_id"],
-        content=preflight_payload["core_request"]["system_notice"],
-        created_at=ports.now(),
-    )
-    system_message = stored_message_to_dict(system_message, label="system")
-    _record_step_effect(
-        state,
-        "insert_system_wake_notice",
-        record_production_side_effects=record_production_side_effects,
-    )
-    state["system_msg_id"] = system_message["id"]
-    _mark_step(state, "insert_system_wake_notice", "succeeded")
+        system_message = await ports.insert_system_wake_notice(
+            conv_id=preflight_payload["conv_id"],
+            content=preflight_payload["core_request"]["system_notice"],
+            created_at=ports.now(),
+        )
+        system_message = stored_message_to_dict(system_message, label="system")
+        _record_step_effect(
+            state,
+            "insert_system_wake_notice",
+            record_production_side_effects=record_production_side_effects,
+        )
+        state["system_msg_id"] = system_message["id"]
+        _mark_step(state, "insert_system_wake_notice", "succeeded")
 
-    await ports.broadcast_msg_created(system_message)
-    _record_step_effect(
-        state,
-        "broadcast_system_msg_created",
-        record_production_side_effects=record_production_side_effects,
-    )
-    _mark_step(state, "broadcast_system_msg_created", "succeeded")
+        await ports.broadcast_msg_created(system_message)
+        _record_step_effect(
+            state,
+            "broadcast_system_msg_created",
+            record_production_side_effects=record_production_side_effects,
+        )
+        _mark_step(state, "broadcast_system_msg_created", "succeeded")
 
-    assistant_message = await ports.insert_assistant_message(
-        conv_id=preflight_payload["conv_id"],
-        content=full_content,
-        created_at=ports.now(),
-    )
-    assistant_message = stored_message_to_dict(assistant_message, label="assistant")
-    _record_step_effect(
-        state,
-        "insert_assistant_message",
-        record_production_side_effects=record_production_side_effects,
-    )
-    state["core_msg_id"] = assistant_message["id"]
-    _mark_step(state, "insert_assistant_message", "succeeded")
+        assistant_message = await ports.insert_assistant_message(
+            conv_id=preflight_payload["conv_id"],
+            content=full_content,
+            created_at=ports.now(),
+        )
+        assistant_message = stored_message_to_dict(assistant_message, label="assistant")
+        _record_step_effect(
+            state,
+            "insert_assistant_message",
+            record_production_side_effects=record_production_side_effects,
+        )
+        state["core_msg_id"] = assistant_message["id"]
+        _mark_step(state, "insert_assistant_message", "succeeded")
 
-    record_timeline_usage = getattr(ports, "record_timeline_injection_usage", None)
-    if record_timeline_usage is None:
-        _mark_step(state, "record_timeline_usage", "skipped")
-    else:
-        try:
-            await record_timeline_usage(
-                timeline_meta,
-                conv_id=preflight_payload["conv_id"],
-                assistant_message_id=assistant_message["id"],
-                response_text=full_content,
-            )
-            _record_step_effect(
-                state,
-                "record_timeline_usage",
-                record_production_side_effects=record_production_side_effects,
-            )
-            _mark_step(state, "record_timeline_usage", "succeeded")
-        except Exception as exc:
-            _record_step_effect(
-                state,
-                "record_timeline_usage",
-                record_production_side_effects=record_production_side_effects,
-            )
-            state["context_errors"].append(
-                f"timeline_usage_record_failed: {type(exc).__name__}: {exc}"
-            )
-            _mark_step(state, "record_timeline_usage", "failed_non_blocking")
+        record_timeline_usage = getattr(ports, "record_timeline_injection_usage", None)
+        if record_timeline_usage is None:
+            _mark_step(state, "record_timeline_usage", "skipped")
+        else:
+            try:
+                await record_timeline_usage(
+                    timeline_meta,
+                    conv_id=preflight_payload["conv_id"],
+                    assistant_message_id=assistant_message["id"],
+                    response_text=full_content,
+                )
+                _record_step_effect(
+                    state,
+                    "record_timeline_usage",
+                    record_production_side_effects=record_production_side_effects,
+                )
+                _mark_step(state, "record_timeline_usage", "succeeded")
+            except Exception as exc:
+                _record_step_effect(
+                    state,
+                    "record_timeline_usage",
+                    record_production_side_effects=record_production_side_effects,
+                )
+                state["context_errors"].append(
+                    f"timeline_usage_record_failed: {type(exc).__name__}: {exc}"
+                )
+                _mark_step(state, "record_timeline_usage", "failed_non_blocking")
 
-    finalize_web_search = getattr(ports, "finalize_web_search_turn", None)
-    if finalize_web_search is not None:
-        try:
-            web_result = await finalize_web_search(
-                conv_id=preflight_payload["conv_id"],
-                bound_turn_id=str(web_search_meta.get("bound_turn_id") or ""),
-                assistant_message_id=assistant_message["id"],
-                intent_text=web_search_intent,
-            )
-            if isinstance(web_result, Mapping):
-                state["web_search"] = dict(web_result)
-        except Exception as exc:
-            state["context_errors"].append(
-                f"web_search_finalize_failed: {type(exc).__name__}: {exc}"
-            )
+        finalize_web_search = getattr(ports, "finalize_web_search_turn", None)
+        if finalize_web_search is not None:
+            try:
+                web_result = await finalize_web_search(
+                    conv_id=preflight_payload["conv_id"],
+                    bound_turn_id=str(web_search_meta.get("bound_turn_id") or ""),
+                    assistant_message_id=assistant_message["id"],
+                    intent_text=web_search_intent,
+                )
+                if isinstance(web_result, Mapping):
+                    state["web_search"] = dict(web_result)
+            except Exception as exc:
+                state["context_errors"].append(
+                    f"web_search_finalize_failed: {type(exc).__name__}: {exc}"
+                )
 
-    await ports.update_conversation(conv_id=preflight_payload["conv_id"], updated_at=assistant_message["created_at"])
-    _record_step_effect(
-        state,
-        "update_conversation",
-        record_production_side_effects=record_production_side_effects,
-    )
-    _mark_step(state, "update_conversation", "succeeded")
+        await ports.update_conversation(conv_id=preflight_payload["conv_id"], updated_at=assistant_message["created_at"])
+        _record_step_effect(
+            state,
+            "update_conversation",
+            record_production_side_effects=record_production_side_effects,
+        )
+        _mark_step(state, "update_conversation", "succeeded")
 
-    await ports.broadcast_msg_created(assistant_message)
-    _record_step_effect(
-        state,
-        "broadcast_msg_created",
-        record_production_side_effects=record_production_side_effects,
-    )
-    _mark_step(state, "broadcast_msg_created", "succeeded")
+        await ports.broadcast_msg_created(assistant_message)
+        _record_step_effect(
+            state,
+            "broadcast_msg_created",
+            record_production_side_effects=record_production_side_effects,
+        )
+        _mark_step(state, "broadcast_msg_created", "succeeded")
 
     if screen_check_reasons:
         screen_requests = await _request_screen_checks(
@@ -984,6 +1015,10 @@ async def _stream_core_with_retry(
                 "error": visible_error,
             }
 
+        expression_pending = False
+        extract_expression = getattr(ports, 'extract_expression_reply', None)
+        if extract_expression is not None:
+            full_content, expression_pending = await extract_expression(full_content)
         full_content, _structured_actions = _extract_structured_reply(full_content)
         # strip 先于 toy / screen / ring 提取（誓约设计 §4.4 硬约束）：本路径不允许
         # 立约，[VOW:] 内部是惰性文本，剥除后其中的工具标记绝不进入解析。
@@ -994,9 +1029,11 @@ async def _stream_core_with_retry(
         full_content, toy_commands = _strip_toy_commands(full_content)
         full_content, screen_check_reasons = _strip_screen_check_commands(full_content)
         full_content, mobile_screen_checks = _strip_mobile_screen_check_commands(full_content)
+        from app.chat.control_syntax import strip_control_markers
+        full_content = strip_control_markers(full_content).strip()
         if not full_content and (screen_check_reasons or mobile_screen_checks):
             full_content = _screen_tool_only_fallback_text(screen_check_reasons, mobile_screen_checks)
-        if not full_content:
+        if not full_content and not expression_pending:
             attempt_record["status"] = "empty_after_tool_strip"
             if attempt < max_attempts:
                 attempt_record["retry_after_sec"] = execution_policy["retry_delay_sec"]
@@ -1873,7 +1910,7 @@ def _build_core_prompt(package: Mapping[str, Any], context: Mapping[str, Any]) -
         f"信号不足不代表没话说——翻翻你们的记忆和最近聊天，找一个{user_name}会在意的点自然地搭话。"
         f"实在没有切入点，就用你了解的{user_name}的习惯或日常节点来关心{user_name}。"
         f"不要提 Sentinel、Attention、Gate 或系统内部结构。"
-        f"不要说「我来看看你」「想你了所以来找你」这种暴露哨兵机制的话。"
+        f"想念、关心或想陪{user_name}一会儿，都可以用自己的口吻直接表达。"
     )
     return "\n".join(core_parts)
 

@@ -31,11 +31,11 @@ def test_control_scripts_are_cache_busted_for_app_webview():
     html = _read_static("static/chat.html")
     facade = _read_static("static/js/chat/ai_dom_facade.js")
 
-    assert "/static/js/chat/control_runtime.js?v=20260905-brand" in html
+    assert "/static/js/chat/control_runtime.js?v=20260908-daily" in html
     assert "/static/js/chat/toy_bridge.js?v=20260905-brand" in html
     assert "/static/js/chat/control_toy_router.js?v=20260905-brand" in html
-    assert "/static/js/chat/realtime.js?v=20260905-brand" in html
-    assert "/static/js/chat/send.js?v=20260905-brand" in html
+    assert "/static/js/chat/realtime.js?v=20260909-dailyfix" in html
+    assert "/static/js/chat/send.js?v=20260908-daily" in html
     assert "/static/js/chat/messages.js?v=20260905-brand" in html
     assert "/static/js/chat/whisper_toy_facade.js?v=20260905-brand" in html
     assert "/static/js/chat/ai_dom_facade.js?v=20260905-brand" in html

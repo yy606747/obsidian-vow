@@ -1,0 +1,70 @@
+/* A quiet note beside its reply. Texture and light are static. */
+.msg-avatar-col .heart-whisper-hint {
+  position: absolute; top: -4px; right: -4px; z-index: 3;
+  display: grid; place-items: center; width: 18px; height: 18px; min-height: 0;
+  margin: 0; padding: 0; border: 0; border-radius: 4px;
+  color: #f5f2eb; background: transparent; box-shadow: none;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 14px; line-height: 1; cursor: pointer; pointer-events: auto;
+  animation: none; filter: drop-shadow(0 1px 2px #00000026);
+}
+.heart-whisper-hint::before { content: ""; position: absolute; inset: -11px; }
+.msg-avatar-col .heart-whisper-hint:hover,
+.msg-avatar-col .heart-whisper-hint[aria-expanded="true"] { background: transparent; box-shadow: none; }
+.heart-whisper-hint:focus-visible { outline: 2px solid #e3c68d; outline-offset: 3px; }
+.heart-note {
+  position: relative; box-sizing: border-box; width: 100%; max-width: 390px;
+  margin: 12px 0 2px; padding: 15px 17px 12px 18px;
+  border: 1px solid #ceb78035; border-radius: 4px 14px 14px 9px;
+  background: linear-gradient(122deg, #3d3b3194, #242e34f5 42%, #202a31f7);
+  box-shadow: 0 5px 16px #0002, inset 0 1px 0 #f6dca810;
+  color: #e8e1d3; isolation: isolate; overflow-wrap: anywhere;
+}
+.heart-note::before {
+  content: ""; position: absolute; left: -1px; top: 13px; bottom: 13px; width: 2px;
+  background: linear-gradient(transparent, #e6c58ab3 22%, #c29a5b9c 80%, transparent);
+  border-radius: 2px; pointer-events: none;
+}
+.heart-note::after {
+  content: ""; position: absolute; right: 30px; left: 14px; top: 0; height: 1px;
+  background: linear-gradient(90deg, #efd8a300, #efd8a342, #efd8a300); pointer-events: none;
+}
+.heart-note:focus { outline: none; }
+.heart-note:focus-visible { outline: 1px solid #d4b37b88; outline-offset: 3px; }
+.heart-note .heart-note-preview {
+  display: block; width: 100%; min-height: 0; border: 0; border-radius: 3px;
+  margin: 0; padding: 0; color: inherit; background: transparent;
+  box-shadow: none; text-align: left; cursor: pointer; font-weight: 400;
+}
+.heart-note .heart-note-preview:hover { background: transparent; color: #f7efde; }
+.heart-note-preview:focus-visible { outline: 1px solid #d4b37b99; outline-offset: 5px; }
+.heart-note-excerpt, .heart-note-content {
+  font-family: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", serif;
+  font-size: 14px; line-height: 1.85; letter-spacing: .3px; font-weight: 400;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.heart-note-excerpt {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; padding-right: 17px;
+}
+.heart-note-more { display: block; margin-top: 8px; font-size: 10px; letter-spacing: .5px; color: #ceb58a; }
+.heart-note .heart-note-close {
+  position: absolute; right: 3px; top: 3px; z-index: 1;
+  display: grid; place-items: center; width: 29px; height: 29px; min-height: 0;
+  padding: 0; border: 0; border-radius: 8px; background: transparent; color: #b6ac97;
+}
+.heart-note .heart-note-close .vow-icon { width: 12px; height: 12px; }
+.heart-note .heart-note-close:hover { background: #efdab00c; color: #f2d9ad; }
+.heart-note-close:focus-visible { outline: 1px solid #e3c68d; outline-offset: -3px; }
+.heart-note-open { max-width: 460px; padding-top: 20px; }
+.heart-note-content { margin: 0; padding-right: 10px; }
+.heart-note-entry + .heart-note-entry { margin-top: 15px; padding-top: 15px; border-top: 1px solid #d2b78320; }
+.heart-note-time { display: block; margin-top: 10px; font-size: 10px; line-height: 1.5; color: #b3aa98; }
+.heart-note-enter { animation: heartNoteEnter .35s ease-out both; }
+@keyframes heartNoteEnter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .heart-note-enter { animation: none; } }
+@media (max-width: 480px) {
+  .heart-note { padding: 13px 13px 10px 14px; }
+  .heart-note-open { padding-top: 20px; }
+  .heart-note-excerpt, .heart-note-content { font-size: 13px; line-height: 1.85; }
+}

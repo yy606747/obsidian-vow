@@ -9,7 +9,9 @@ monitor logs, clock and settings.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from dataclasses import replace
 from collections.abc import AsyncIterable, Callable, Mapping, Sequence
 from typing import Any
 
@@ -118,6 +120,96 @@ class LegacyCoreWakePorts:
         self._observation_request_id = str(observation_request_id or "").strip()
         self._linked_invocation_id = str(linked_invocation_id or "").strip()
         self._last_core_observation: tuple[Any, str] | None = None
+        self._expression_context = None
+        self._expression_reply = None
+        self._expression_delivery = None
+        self._expression_feedback = {}
+        self._expression_look_at_me = {}
+        self._expression_committed = False
+        self._invitation_delivered = False
+
+    async def prepare_expression_turn(self, *, messages, conv_id, model_key, request_id, control_active):
+        from app.chat.worldbook import load_worldbook_names
+        from app.chat.turn_profiles import TurnProfile
+        from app.tools.schemas import ToolContext
+        from app.tools.prompt_renderers import render_registered_capabilities
+        from app.tools.registry import validate_turn_advertisement
+        from app.stickers.service import chat_capabilities
+        from app.stickers import autonomous as sticker_turn
+        from app.look_at_me.service import available, is_current, inject_context
+
+        self._expression_names = load_worldbook_names()
+        user_name, ai_name = self._expression_names
+        capabilities = set()
+        if not control_active and 'sticker.send' in chat_capabilities():
+            capabilities.add('sticker.send')
+        if available() and await is_current(conv_id):
+            capabilities.add('mobile.look_at_me')
+        self._expression_profile = TurnProfile('sentinel_core', frozenset(), frozenset(capabilities))
+        self._expression_context = ToolContext(
+            conv_id=conv_id, msg_id=f'msg_{time.time_ns()}_sentinel', request_id=request_id,
+            model_key=model_key, capabilities=tuple(sorted(capabilities)),
+            metadata={'source': 'sentinel_core', 'source_chain': 'sentinel',
+                      'advertised_tools': tuple(sorted(capabilities))})
+        entries = render_registered_capabilities('sentinel_v2', capabilities=capabilities,
+            context={'user_name': user_name, 'ai_name': ai_name})
+        validate_turn_advertisement(capabilities, [name for name, _ in entries])
+        if entries:
+            messages[-1] = {**messages[-1], 'content': messages[-1]['content'] + '\n\n'
+                            + '\n'.join(prose for _, prose in entries)}
+        if 'sticker.send' in capabilities:
+            self._expression_feedback = await sticker_turn.inject_feedback(
+                messages, conv_id=conv_id, turn_id=request_id,
+                user_name=user_name, ai_name=ai_name)
+        companionship_messages = []
+        self._expression_look_at_me = await inject_context(
+            companionship_messages, conv_id=conv_id, turn_id=request_id, user_name=user_name, ai_name=ai_name)
+        messages[-1:-1] = companionship_messages
+
+    async def extract_expression_reply(self, raw):
+        if self._expression_context is None:
+            return raw, False
+        from app.stickers.autonomous import extract_expressions
+        remaining, self._expression_reply = await extract_expressions(
+            raw, profile=self._expression_profile, context=self._expression_context)
+        return remaining, bool(self._expression_reply.tool_intents)
+
+    async def complete_expression_reply(self, *, content, messages, temperature):
+        if self._expression_reply is None:
+            return {'content': content, 'attachments': [], 'delivered': False}
+        from app.chat.action_executor import execute_postprocessed_actions
+        from app.stickers import autonomous as sticker_turn
+        context = self._expression_context
+        context = replace(context, metadata={**context.metadata,
+            'invocation_id': self._action_invocation_id(context.conv_id),
+            'sticker_context': {'source': 'sentinel', 'message': content[:500]}})
+        reply = replace(self._expression_reply, content=content)
+        execution = await execute_postprocessed_actions(reply, profile=self._expression_profile,
+            context=context, only_capabilities=self._expression_profile.allowed_tool_capabilities)
+        self._invitation_delivered = bool(execution.results_for('mobile.look_at_me') and any(
+            r.tool_name == 'mobile.look_at_me' for r in execution.executed))
+
+        async def supplement_stream(history, model_key, _usage, temp):
+            async for chunk in self._core_streamer(history, model_key, temperature=temp):
+                yield chunk
+
+        self._expression_delivery = await sticker_turn.complete_delivery(
+            reply, execution=execution, profile=self._expression_profile, context=context,
+            history=messages, user_name=self._expression_names[0], ai_name=self._expression_names[1],
+            stream_model=supplement_stream, temperature=temperature,
+            pending_followup=self._invitation_delivered)
+        return {'content': self._expression_delivery.supplement_text or content,
+                'attachments': self._expression_delivery.attachments,
+                'delivered': self._invitation_delivered, 'message_id': context.msg_id,
+                'failed': self._expression_delivery.failed}
+
+    async def release_expression_turn(self):
+        from app.stickers import autonomous as sticker_turn
+        from app.look_at_me.repository import repository
+        await sticker_turn.release_feedback(self._expression_feedback)
+        await repository.settle(self._expression_look_at_me,
+            message_id=self._expression_context.msg_id if self._expression_context else '',
+            success=self._expression_committed or self._invitation_delivered)
 
     def _action_invocation_id(self, conv_id: str) -> str:
         if self._last_core_observation is not None:
@@ -860,23 +952,38 @@ class LegacyCoreWakePorts:
         suffix: str,
     ) -> dict[str, Any]:
         conv_id = _required_text(conv_id, "conversation id")
-        content = _required_text(content, f"{role} message content")
+        attachments = (self._expression_delivery.attachments
+                       if role == 'assistant' and self._expression_delivery else [])
+        if not isinstance(content, str) or (not content.strip() and not attachments):
+            raise ValueError(f'{role} message requires text or attachment')
+        content = content.strip()
         created_at = _required_timestamp(created_at, f"{role} message created_at")
         msg_id = f"msg_{int(created_at * 1000)}{suffix}"
+        if role == 'assistant' and self._expression_context is not None:
+            msg_id = self._expression_context.msg_id
         message = {
             "id": msg_id,
             "conv_id": conv_id,
             "role": role,
             "content": content,
             "created_at": created_at,
-            "attachments": [],
+            "attachments": attachments,
         }
         async with self._db_factory() as db:
             await db.execute(
                 "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                (msg_id, conv_id, role, content, created_at, "[]"),
+                (msg_id, conv_id, role, content, created_at, json.dumps(attachments, ensure_ascii=False)),
             )
+            if role == 'assistant':
+                from app.stickers import autonomous as sticker_turn
+                from app.look_at_me.repository import repository
+                await sticker_turn.finalize_in_tx(db, feedback=self._expression_feedback,
+                    message_id=msg_id, delivery=self._expression_delivery)
+                if self._expression_look_at_me:
+                    await repository.finalize_in_tx(db, self._expression_look_at_me, msg_id)
             await db.commit()
+        if role == 'assistant':
+            self._expression_committed = True
         return message
 
     def _legacy_monitor_log_entry(self, entry: Mapping[str, Any]) -> dict[str, Any]:
@@ -986,6 +1093,8 @@ def _advertised_tools_from_messages(
         ("device.ring_touch", "[RING:"),
         ("pc.screen_check", "[SCREEN_CHECK:"),
         ("mobile.screen_check", "[MOBILE_SCREEN_CHECK:"),
+        ("sticker.send", "【发图："),
+        ("mobile.look_at_me", "【陪我："),
     )
     return tuple(tool_name for tool_name, marker in candidates if marker in text)
 

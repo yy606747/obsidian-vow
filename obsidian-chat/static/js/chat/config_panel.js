@@ -54,6 +54,9 @@ function bindConfigPanelControls() {
 
   bind("modelSelect", "change", () => changeModel());
   bind("contextSlider", "input", event => setContextLimit(event.target.value));
+  bind('dailyChatEnabled', 'change', event => saveDailyChatSettings({ enabled: event.target.checked }));
+  bind('dailyContextSlider', 'input', event => { $('dailyContextValue').textContent = event.target.value + '条'; });
+  bind('dailyContextSlider', 'change', event => saveDailyChatSettings({ inherit_count: Number(event.target.value) }));
   bind("tempSlider", "input", event => {
     setTemperature(event.target.value);
     syncTemperature();

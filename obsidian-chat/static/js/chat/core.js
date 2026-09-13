@@ -47,10 +47,12 @@
     "ALARM", "REMINDER", "Monitor", "SCHEDULE_DEL", "TOY", "HEART",
     "RING", "REMEMBER", "VOW", "UPDATE_MODEL", "查看动态",
     "PRESENCE_DRAW", "PRESENCE_SHOW", "SELF_WAKE",
+    "发图", "做表情",
   ];
   const CHAT_LITERAL_CONTROL_NAMES = [
     "CAM_CHECK", "SCHEDULE_LIST", "SELF_WAKE_CANCEL",
     "OPPORTUNITY_NONE", "OPPORTUNITY_REFLECT", "SELF_WAKE_NONE",
+    "偷图",
   ];
   const CHAT_PAIRED_CONTROL_NAMES = [
     "WORKING_MODEL_REQUEST", "RECALL_INTENT", "WEB_SEARCH_INTENT",
@@ -99,6 +101,8 @@
     const left = Math.max(text.lastIndexOf("["), text.lastIndexOf("【"));
     if (left < 0) return text;
     let tail = text.slice(left + 1).trimStart();
+    // Completed Markdown labels such as [MUSIC](...) are not unfinished commands.
+    if (/[\]】]/.test(tail)) return text;
     if (tail.startsWith("/")) tail = tail.slice(1).trimStart();
     const name = tail.split(/[\s:：\]】]/, 1)[0].toUpperCase();
     if (!name || CHAT_ALL_CONTROL_NAMES.some(item => item.toUpperCase().startsWith(name))) {
@@ -108,9 +112,25 @@
   }
 
   function cleanAssistantContent(text) {
+    // Same depth rule as control_syntax._balanced_value_end: both bracket widths nest.
+    const raw = String(text || "");
+    const stickerHead = /[\[【]\s*(?:发图|做表情)\s*[:：]\s*/g;
+    let withoutStickers = "", cursor = 0, match;
+    while ((match = stickerHead.exec(raw))) {
+      withoutStickers += raw.slice(cursor, match.index);
+      let depth = 1, end = stickerHead.lastIndex;
+      while (end < raw.length && depth) {
+        const char = raw[end++];
+        if (char === "[" || char === "【") depth++;
+        else if (char === "]" || char === "】") depth--;
+      }
+      cursor = end;
+      stickerHead.lastIndex = end;
+    }
+    withoutStickers += raw.slice(cursor);
     let cleaned = CHAT_CONTROL_PATTERNS.reduce(
       (value, pattern) => value.replace(pattern, ""),
-      String(text || ""),
+      withoutStickers,
     );
     cleaned = cleaned.replace(CHAT_UNFINISHED_PRIVATE_PATTERN, "");
     cleaned = CHAT_UNFINISHED_BLOCK_PATTERNS.reduce(
@@ -118,7 +138,8 @@
       cleaned,
     );
     cleaned = stripTrailingControlPrefix(cleaned);
-    return cleaned.trim();
+    // Preserve indentation used by Markdown code blocks, while removing empty lead-in lines.
+    return cleaned.replace(/^(?:[\t ]*\r?\n)+/, '').trimEnd();
   }
 
   function avatarUrl(kind) {

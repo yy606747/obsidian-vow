@@ -1,0 +1,21 @@
+/* Small sprites, with a bounded update rate in gold-dust.js. */
+.gold-dust-layer {
+  position: absolute; inset: 0; z-index: 3;
+  overflow: hidden; pointer-events: none; user-select: none;
+  contain: layout style paint;
+}
+.gold-dust-layer[hidden] { display: none !important; }
+#screen > .gold-dust-layer { z-index: 0; }
+.gold-dust-dot {
+  position: absolute; top: 0; left: 0; width: 8px; height: 8px;
+  border-radius: 50%; opacity: 0; pointer-events: none;
+  background: radial-gradient(circle, #fff6d2 0 .8px, #ebc476d9 1.1px, #e8b35738 2.4px, transparent 4px);
+  will-change: transform, opacity;
+}
+.gold-dust-dot:nth-child(3n)::after {
+  content: ''; position: absolute; left: 3px; top: 2px; width: 1px; height: 3px;
+  border-radius: 1px; background: #ffe7ac; transform: rotate(32deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .gold-dust-layer { display: none !important; }
+}

@@ -220,6 +220,11 @@ async def init_db():
         from app.image_memory.repository import init_tables as init_image_memory_tables
 
         await init_image_memory_tables(db)
+        from app.stickers.repository import init_tables as init_sticker_tables
+
+        await init_sticker_tables(db)
+        from app.look_at_me.repository import init_tables as init_look_at_me_tables
+        await init_look_at_me_tables(db)
         # ── 心语表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS heart_whispers (
@@ -231,6 +236,9 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_heart_whispers_created ON heart_whispers(created_at DESC)")
+        from app.daily_chat.schema import init_daily_chat_tables
+
+        await init_daily_chat_tables(db)
         await db.commit()
         write_migration_report(
             working_model_migration_report,

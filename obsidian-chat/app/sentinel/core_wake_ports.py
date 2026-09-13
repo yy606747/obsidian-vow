@@ -174,13 +174,15 @@ def stored_message_to_dict(message: Mapping[str, Any], *, label: str) -> dict[st
     if missing:
         raise ValueError(f"core wake {label} message missing fields: {missing!r}")
     result = dict(message)
+    attachments = list(result.get("attachments") or [])
     for key in ("content", "conv_id", "id", "role"):
-        if not isinstance(result[key], str) or not result[key].strip():
+        if not isinstance(result[key], str) or (not result[key].strip()
+                and not (key == 'content' and result.get('role') == 'assistant' and attachments)):
             raise ValueError(f"core wake {label} message {key} must be non-empty text")
         result[key] = result[key].strip()
     if isinstance(result["created_at"], bool) or not isinstance(result["created_at"], int | float):
         raise ValueError(f"core wake {label} message created_at must be a number")
-    result["attachments"] = list(result.get("attachments") or [])
+    result["attachments"] = attachments
     return result
 
 

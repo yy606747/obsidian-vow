@@ -200,6 +200,11 @@ async def load_prompt_context(
 
 
 def render_prompt_status(context: Mapping[str, Any]) -> str:
+    ai_name = str(context.get("ai_name") or "").strip()
+    if not ai_name:
+        from app.chat.worldbook import load_worldbook_names
+
+        ai_name = load_worldbook_names()[1]
     status = dict(context.get("self_wake_status") or {})
     timezone_name = str(context.get("self_wake_timezone") or owner_timezone_name())
     quiet = dict(context.get("self_wake_quiet_hours") or {})
@@ -211,39 +216,35 @@ def render_prompt_status(context: Mapping[str, Any]) -> str:
     used = quota.get("used", 0)
     remaining = quota.get("remaining", MAX_WAKE_CALLS_PER_DAY)
     lines = [
-        "【你留给未来自己的约定】",
-        f"现在是 {context.get('self_wake_now_local')}（{timezone_name}）。",
+        f"【{ai_name}的回来约定·实时状态】",
+        f"现在：{context.get('self_wake_now_local')}（{timezone_name}）。",
         (
-            f"今天系统允许你在所有对话中合计尝试主动回来 {limit} 次；"
-            f"已经尝试 {used} 次，还能再尝试 {remaining} 次。"
+            f"今天所有对话合计可尝试回来{limit}次；"
+            f"已尝试{used}次，剩余{remaining}次。"
         ),
         (
-            "那时可以预留的动作名：" + ("、".join(legal) or "无") +
-            "。也可以一个都不预留，只回来看看或说句话。"
+            "未来唤醒可预留动作名：" + ("、".join(legal) or "无") +
+            "。可留空，只回来看看或说话。"
         ),
     ]
     if quiet.get("enabled"):
         lines.insert(
             2,
-            f"安静时段是 {quiet.get('start')}–{quiet.get('end')}；"
-            "不要把回来时间留在这段时间里。",
+            f"安静时段：{quiet.get('start')}–{quiet.get('end')}，不能约在此时回来。",
         )
     else:
         lines.insert(2, "目前没有安静时段限制。")
     if isinstance(pending, Mapping):
         requested = pending.get("requested_capabilities") or ()
         lines.append(
-            "你已经约好在 "
-            f"{format_owner_time(float(pending.get('wake_at')), timezone_name=timezone_name)} "
-            f"回来，留给那时自己的念头是：“{str(pending.get('intent') or '')[:300]}”。"
+            f"已约：{format_owner_time(float(pending.get('wake_at')), timezone_name=timezone_name)}；"
+            f"念头：“{str(pending.get('intent') or '')[:300]}”。"
         )
         lines.append(
-            "希望那时可用的动作："
-            f"{','.join(str(item) for item in requested) or '没有预留动作'}。"
-            "如果现在留下新的回来时间，之前这次约定会被覆盖。"
+            f"已预留动作：{','.join(str(item) for item in requested) or '无'}。"
         )
     else:
-        lines.append("你现在没有给未来的自己留下回来时间。")
+        lines.append(f"{ai_name}目前没有待执行的回来约定。")
     if isinstance(recent, Mapping):
         outcome_text = {
             "daily_quota_exhausted": "当天所有对话合计的主动回来次数已经用完",
@@ -251,9 +252,9 @@ def render_prompt_status(context: Mapping[str, Any]) -> str:
             "provider_failed": "那次生成没有成功",
         }.get(str(recent.get("outcome") or ""), "那次没有完成")
         lines.append(
-            "最近两天有一次没有回来：原本想在 "
-            f"{format_owner_time(float(recent.get('wake_at')), timezone_name=timezone_name)} "
-            f"回来做“{str(recent.get('intent') or '')[:300]}”，但{outcome_text}。"
+            "最近两天有一次未能回来："
+            f"{format_owner_time(float(recent.get('wake_at')), timezone_name=timezone_name)}；"
+            f"念头：“{str(recent.get('intent') or '')[:300]}”；原因：{outcome_text}。"
         )
     return "\n".join(lines)
 

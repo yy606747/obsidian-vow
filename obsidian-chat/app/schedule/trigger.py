@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from datetime import datetime
+from dataclasses import replace
 
 import aiosqlite
 
@@ -23,6 +24,8 @@ from app.memory_v3.timeline import timeline_service
 from app.chat.worldbook import build_worldbook_prefix, resolve_worldbook_names
 from app.tools.ledger import tool_invocation_ledger
 from app.tools.schemas import ToolContext, ToolResult, ToolStatus
+from app.stickers import autonomous as sticker_turn
+from app.stickers.chat import StickerDelivery
 from app.web_push import service as web_push_service
 
 from . import alarm_context, evidence, prompt, store
@@ -160,15 +163,33 @@ async def _fire(items: list[dict]) -> None:
             "source_chain": "schedule",
             "invocation_id": invocation_id,
             "advertised_tools": advertised_tools,
+            "sticker_context": {'source': 'schedule', 'message': '；'.join(str(item['content']) for item in items)[:500]},
         },
     )
+    # Receipts are committed only with the resulting visible message.
+    sticker_feedback = await sticker_turn.inject_feedback(
+        messages, conv_id=conv_id, turn_id=request_id, user_name=user_name, ai_name=ai_name
+    ) if 'sticker.send' in advertised_tools else {}
+    try:
+        await _deliver_reply(items, conv_id=conv_id, model_key=model_key,
+            messages=messages, trigger_prompt=trigger_prompt, context_meta=context_meta,
+            evidence_errors=evidence_errors,
+            tool_context=tool_context, advertised_tools=advertised_tools, invocation_id=invocation_id,
+            user_name=user_name, ai_name=ai_name, sticker_feedback=sticker_feedback)
+    finally:
+        await sticker_turn.release_feedback(sticker_feedback)
+
+
+async def _deliver_reply(items, *, conv_id, model_key, messages, trigger_prompt, context_meta, evidence_errors,
+                         tool_context, advertised_tools, invocation_id, user_name, ai_name, sticker_feedback):
+    from app.chat.action_executor import execute_postprocessed_actions
+    from app.chat.turn_profiles import TurnProfile
+    from app.chat.control_syntax import strip_control_markers
+    request_id = tool_context.request_id
     await tool_invocation_ledger.record_model_request(
-        tool_context,
-        invocation_id=invocation_id,
-        request_snapshot=messages,
+        tool_context, invocation_id=invocation_id, request_snapshot=messages,
         advertised_tools=advertised_tools,
-        metadata={"schedule_ids": [item["id"] for item in items]},
-    )
+        metadata={"schedule_ids": [item["id"] for item in items]})
     full_text, stream_error, raw_output = await _stream_reply(messages, model_key, items)
     await tool_invocation_ledger.record_model_output(
         tool_context,
@@ -179,13 +200,33 @@ async def _fire(items: list[dict]) -> None:
         ),
         error=stream_error,
     )
+    expression_profile = TurnProfile('schedule', frozenset(),
+        frozenset({'sticker.send'} & set(advertised_tools)))
+    full_text, expression_reply = await sticker_turn.extract_expressions(
+        full_text, profile=expression_profile, context=tool_context)
     full_text, music_cards = await _postprocess_reply(
         full_text,
         conv_id,
         tool_context=tool_context,
         ai_name=ai_name,
     )
-    if not full_text.strip():
+    full_text = strip_control_markers(full_text).strip()
+    expression_reply = replace(expression_reply, content=full_text)
+    execution = await execute_postprocessed_actions(expression_reply,
+        profile=expression_profile, context=tool_context,
+        only_capabilities=frozenset({'sticker.send'}), has_error=bool(stream_error))
+
+    async def supplement_stream(history, key, _usage, temperature):
+        async for chunk in stream_ai(history, key, temperature=temperature):
+            yield chunk
+
+    sticker_delivery = await sticker_turn.complete_delivery(
+        expression_reply, execution=execution, profile=expression_profile,
+        context=tool_context, history=messages, user_name=user_name, ai_name=ai_name,
+        stream_model=supplement_stream, temperature=SETTINGS.get('temperature'),
+        other_attachments=music_cards)
+    full_text = sticker_delivery.supplement_text or full_text
+    if not full_text.strip() and not sticker_delivery.attachments and not music_cards:
         await tool_invocation_ledger.record_turn(
             tool_context,
             prompt_source="schedule",
@@ -194,7 +235,8 @@ async def _fire(items: list[dict]) -> None:
         )
         await _log_monitor_failure(items, "core_empty", "core_empty", "⚠️ 定时查岗 Core 返回空内容。目的：{content}")
         return
-    ai_msg_id = await _write_and_broadcast_messages(items, conv_id, ai_name, trigger_prompt, full_text, music_cards)
+    ai_msg_id = await _write_and_broadcast_messages(items, conv_id, ai_name, trigger_prompt, full_text, music_cards,
+        sticker_delivery=sticker_delivery, sticker_feedback=sticker_feedback)
     visible_context = ToolContext(
         conv_id=conv_id,
         msg_id=ai_msg_id,
@@ -245,8 +287,11 @@ async def _fire(items: list[dict]) -> None:
 async def _latest_conversation() -> dict | None:
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 1")
-        row = await cur.fetchone()
+        from app.daily_chat.service import active_conversation_in_tx
+        row = await active_conversation_in_tx(db)
+        if row is None:
+            cur = await db.execute("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 1")
+            row = await cur.fetchone()
         return dict(row) if row else None
 
 
@@ -270,8 +315,12 @@ async def _build_messages(
         if has_monitor
         else []
     )
+    if has_monitor:
+        from app.daily_chat.service import cross_day_prompt
+        history = await cross_day_prompt(conv_id, user_name=user_name,
+                                         ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db) + history
     schedule_text = store.build_schedule_prompt(await store.list_active())
-    ability_block = prompt.build_abilities_block(user_name, schedule_text)
+    ability_block = prompt.build_abilities_block(user_name, schedule_text, ai_name=resolve_worldbook_names(wb)[1])
     cap_idx = len(prefix) if prefix else 0
     if vow_block:
         history.insert(cap_idx, {"role": "user", "content": vow_block})
@@ -533,26 +582,31 @@ def _strip_trigger_alarm_commands(text: str) -> str:
     return ALARM_CMD.sub("", text).strip()
 
 
-async def _write_and_broadcast_messages(items: list[dict], conv_id: str, ai_name: str, trigger_prompt: str, full_text: str, music_cards: list[dict]) -> str:
+async def _write_and_broadcast_messages(items: list[dict], conv_id: str, ai_name: str, trigger_prompt: str, full_text: str, music_cards: list[dict],
+                                      *, sticker_delivery: StickerDelivery | None = None,
+                                      sticker_feedback: dict | None = None) -> str:
     now = time.time()
     kind = _message_kind(items)
     sys_msg_id = f"msg_{int(now*1000)}_{kind['system']}"
     trigger_msg_id = f"msg_{int(now*1000)}_{kind['trigger']}"
     sys_content = prompt.build_system_message(items, ai_name)
+    now2 = now + 0.002
+    ai_msg_id = f"msg_{int(now2*1000)}_{kind['assistant']}"
+    music_atts = [{"type": "music", "name": s["name"], "artist": s["artist"], "id": s["id"]} for s in music_cards] if music_cards else []
+    attachments = [*music_atts, *(sticker_delivery.attachments if sticker_delivery else [])]
+    if not full_text.strip() and not attachments:
+        raise ValueError('empty_schedule_reply')
     async with get_db() as db:
         await db.execute("INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)", (sys_msg_id, conv_id, "system", sys_content, now, "[]"))
         await db.execute("INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)", (trigger_msg_id, conv_id, "trigger", trigger_prompt, now + 0.001, "[]"))
+        await db.execute("INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)", (ai_msg_id, conv_id, "assistant", full_text, now2, json.dumps(attachments, ensure_ascii=False)))
+        await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
+        await sticker_turn.finalize_in_tx(db, feedback=sticker_feedback,
+            message_id=ai_msg_id, delivery=sticker_delivery)
         await db.commit()
     await manager.broadcast({"type": "msg_created", "data": {"id": sys_msg_id, "conv_id": conv_id, "role": "system", "content": sys_content, "created_at": now, "attachments": []}})
-    now2 = time.time()
-    ai_msg_id = f"msg_{int(now2*1000)}_{kind['assistant']}"
-    music_atts = [{"type": "music", "name": s["name"], "artist": s["artist"], "id": s["id"]} for s in music_cards] if music_cards else []
-    async with get_db() as db:
-        await db.execute("INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)", (ai_msg_id, conv_id, "assistant", full_text, now2, json.dumps(music_atts, ensure_ascii=False) if music_atts else "[]"))
-        await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
-        await db.commit()
-    ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant", "content": full_text, "created_at": now2, "attachments": music_atts}
-    await manager.broadcast({"type": "msg_created", "data": ai_msg, "tts": True})
+    ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant", "content": full_text, "created_at": now2, "attachments": attachments}
+    await manager.broadcast({"type": "msg_created", "data": ai_msg, "tts": bool(full_text.strip())})
     timeline_service.start_background_refresh()
     return ai_msg_id
 

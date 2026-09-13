@@ -48,6 +48,7 @@ def _prompt_context():
             sorted(SELF_WAKE_SURFACE_CAPABILITIES)
         ),
         "user_name": "owner",
+        "ai_name": "Arden",
         "pc_screen_available": True,
         "mobile_screen_available": True,
         "mobile_screen_target": {"device_id": "phone", "label": "手机"},
@@ -147,11 +148,18 @@ def test_self_wake_surface_and_prompt_are_exact_and_dynamic():
         context=_prompt_context(),
     )
     text = "\n".join(prose for _name, prose in opportunity_entries)
-    assert "给未来的自己留一个时刻" in text
-    assert "想回来时才留，不留也是自然的选择" in text
-    assert "之前这次约定会被覆盖" in text
-    assert "所有对话中合计尝试主动回来 3 次" in text
-    assert "已经尝试 1 次，还能再尝试 2 次" in text
+    assert "Arden想晚些回到与owner的这段对话" in text
+    assert "不想回来就不设置" in text
+    assert "同一对话的新约定覆盖旧约定" in text
+    assert "今天所有对话合计可尝试回来3次" in text
+    assert "已尝试1次，剩余2次" in text
+    assert "未来30天内，可带秒和时区偏移" in text
+    assert "最后一个 | 必须保留" in text
+    assert "念头可含 |，最后一个 | 后始终是动作列表" in text
+    assert "未知名称会使约定失败" in text
+    assert "安静时段：00:00–07:00" in text
+    assert "到时会提供预留且仍可用的动作" in text
+    assert "发表情和当天窗口的腻歪邀请无需预留" in text
     assert "旧意图" in text
     assert "memory.remember" in text
     assert "wake_old" not in text
@@ -168,6 +176,7 @@ def test_self_wake_prompt_translates_recent_nonexecution_outcomes():
         "daily_quota_exhausted": "当天所有对话合计的主动回来次数已经用完",
         "expired": "系统醒来时已经比约定晚了两个小时以上",
         "provider_failed": "那次生成没有成功",
+        "unrecognized_outcome": "那次没有完成",
     }
 
     for outcome, explanation in translations.items():
@@ -187,6 +196,29 @@ def test_self_wake_prompt_translates_recent_nonexecution_outcomes():
         assert explanation in text
         assert outcome not in text
         assert "wake_internal" not in text
+
+
+def test_self_wake_status_keeps_empty_and_exhausted_states_and_quoted_intent():
+    context = _prompt_context()
+    context["self_wake_status"]["pending"] = None
+    context["self_wake_status"]["quota"] = {"limit": 3, "used": 3, "remaining": 0}
+    context["self_wake_quiet_hours"] = {"enabled": False}
+    context["self_wake_legal_capabilities"] = ()
+    text = self_wake_service.render_prompt_status(context)
+    assert "Arden目前没有待执行的回来约定" in text
+    assert "目前没有安静时段限制" in text
+    assert "已尝试3次，剩余0次" in text
+    assert "未来唤醒可预留动作名：无" in text
+
+    # Stored prose is quoted, not rewritten as part of the prompt-name migration.
+    intent = "你先忙，晚点看 A|B。" + "长" * 310
+    context["self_wake_status"]["pending"] = {
+        "wake_at": 1_800_003_600, "intent": intent, "requested_capabilities": [],
+    }
+    text = self_wake_service.render_prompt_status(context)
+    assert f"念头：“{intent[:300]}”。" in text
+    assert intent[:301] not in text
+    assert "已预留动作：无。" in text
 
 
 def test_schedule_adapter_injects_context_and_rejects_unknown_capability(monkeypatch):

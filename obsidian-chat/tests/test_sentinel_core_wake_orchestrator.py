@@ -344,7 +344,8 @@ def test_core_wake_orchestrator_disabled_trace_has_no_side_effects_or_prompt_pay
     assert trace["conv_id"] == "conv_sentinel"
     assert trace["model_key"] == "mock-model"
     assert trace["preflight"]["status"] == "ready"
-    assert trace["core_request"]["persona_message_count"] == 0
+    # The shared chat presentation pair exists even without a configured persona.
+    assert trace["core_request"]["persona_message_count"] == 2
     assert trace["core_request"]["history_message_count"] == 2
     assert trace["core_request"]["prompt_char_count"] > 0
     assert trace["core_request"]["system_notice"].startswith("💭 Arden的哨兵唤醒了主脑")

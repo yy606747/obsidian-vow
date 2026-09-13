@@ -5,7 +5,7 @@ import json
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
@@ -21,6 +21,7 @@ from app.vows.service import VowReadError, vow_service
 
 from .action_executor import execute_postprocessed_actions
 from .commands import _SYSTEM_MSG_CONTEXT_KEYWORDS
+from .control_syntax import ControlMarkerStreamFilter
 from .error_text import looks_like_model_error_text
 from .postprocess import PostProcessor, looks_like_structured_reply, strip_retry_marker
 from .streaming import (
@@ -101,7 +102,8 @@ async def _load_model_and_history(*, conv_id: str, context_limit: int, get_db: C
     for row in reversed(rows):
         item = _message_from_row(row)
         if item is not None:
-            item["attachments"] = []
+            from app.documents.service import is_document
+            item["attachments"] = [att for att in item.get('attachments', []) if is_document(att)]
             history.append(item)
     return model_key, history
 
@@ -129,6 +131,9 @@ async def stream_initiative_response(
     broadcast: Callable[[dict], Awaitable[None]], export_conversation: Callable[[str], Awaitable[Any]],
     store_remember_notes: Callable[[list[str], str], Awaitable[Any]], toy_sys_msg: Callable[[str, list[str]], Awaitable[Any]],
 ) -> StreamingResponse | dict:
+    from app.daily_chat.service import daily_chat, cross_day_prompt
+    from .worldbook import resolve_worldbook_names
+    conv_id = daily_chat.resolve(conv_id)
     model_key, history = await _load_model_and_history(conv_id=conv_id, context_limit=spec.context_limit, get_db=get_db)
     if not model_key:
         return {"error": "conversation not found"}
@@ -141,14 +146,23 @@ async def stream_initiative_response(
         print(f"[Initiative] 誓约读取失败，跳过本次生成: {exc}")
         return {"error": "vow_read_failed"}
 
+    user_name, ai_name = resolve_worldbook_names(worldbook)
+    history = await cross_day_prompt(conv_id, user_name=user_name, ai_name=ai_name, db_factory=get_db) + history
     history, cap_idx = _with_worldbook_prefix(history, worldbook)
+    from app.look_at_me.service import available, is_current, inject_context as inject_look_at_me
+    from app.look_at_me.prompts import ability as look_at_me_ability
+    from app.look_at_me.repository import repository as look_at_me_repository
+    look_at_me_enabled = available() and await is_current(conv_id)
+    if look_at_me_enabled:
+        spec = replace(spec, ability_block=spec.ability_block+'\n'+look_at_me_ability(user_name=user_name,ai_name=ai_name),
+                       advertised_tools=(*spec.advertised_tools,'mobile.look_at_me'))
     _insert_system_blocks(history, cap_idx=cap_idx, spec=spec, vow_block=vow_block)
 
     ai_msg_id = f"msg_{int(time.time() * 1000)}_{spec.msg_suffix}"
     invocation_id = tool_invocation_ledger.new_invocation_id(
         "initiative_core"
     )
-    turn_profile = initiative_turn_profile(toy_enabled=spec.toy_enabled)
+    turn_profile = initiative_turn_profile(toy_enabled=spec.toy_enabled,look_at_me_enabled=look_at_me_enabled)
     mode = ("device_control" if spec.kind == "dom" else "intimate") if spec.toy_enabled else "normal"
     toy_context = ToolContext(
         conv_id=conv_id,
@@ -169,13 +183,17 @@ async def stream_initiative_response(
             "owner_client_id": spec.owner_client_id,
         },
     )
+    look_at_me_meta = await inject_look_at_me(history,conv_id=conv_id,turn_id=ai_msg_id,user_name=user_name,ai_name=ai_name)
     usage_meta: dict = {}
     queue: asyncio.Queue = asyncio.Queue()
 
     async def _bg_generate() -> None:
+        nonlocal conv_id
+        conv_id = daily_chat.resolve(conv_id)
         full_text = ""
         has_error = False
         assistant_persisted = False
+        invitation_delivered = False
         turn_outcome = "pipeline_failed"
         provider_error_text = ""
         buffering_structured_reply: bool | None = None
@@ -183,6 +201,7 @@ async def stream_initiative_response(
         tide_filter = _TideIntentStreamFilter()
         recall_filter = _RecallIntentStreamFilter()
         vow_filter = _VowStreamFilter()
+        control_filter = ControlMarkerStreamFilter()
         try:
             await queue.put({"id": ai_msg_id, "type": "start"})
             try:
@@ -205,14 +224,14 @@ async def stream_initiative_response(
                         buffering_structured_reply = looks_like_structured_reply(probe)
                         if not buffering_structured_reply:
                             visible = vow_filter.feed(
-                                tide_filter.feed(recall_filter.feed(full_text))
+                                tide_filter.feed(recall_filter.feed(control_filter.feed(full_text)))
                             )
                             if visible:
                                 await queue.put({"type": "chunk", "content": visible})
                         continue
                     if not buffering_structured_reply:
                         visible = vow_filter.feed(
-                            tide_filter.feed(recall_filter.feed(chunk))
+                            tide_filter.feed(recall_filter.feed(control_filter.feed(chunk)))
                         )
                         if visible:
                             await queue.put({"type": "chunk", "content": visible})
@@ -231,7 +250,8 @@ async def stream_initiative_response(
             elif not has_error:
                 turn_outcome = "succeeded" if full_text.strip() else "invalid_output"
             if not buffering_structured_reply and not buffering_disabled_command:
-                tail = vow_filter.feed(tide_filter.feed(recall_filter.flush()))
+                tail = vow_filter.feed(tide_filter.feed(recall_filter.feed(control_filter.flush())))
+                tail += vow_filter.feed(tide_filter.feed(recall_filter.flush()))
                 tail += vow_filter.feed(tide_filter.flush()) + vow_filter.flush()
                 if tail:
                     await queue.put({"type": "chunk", "content": tail})
@@ -313,6 +333,22 @@ async def stream_initiative_response(
                 adapter_overrides={"memory.remember": _store_remember},
                 tool_service_override=tool_service,
             )
+            if not has_error:
+                lam_execution = await execute_postprocessed_actions(postprocessed,profile=turn_profile,context=toy_context,
+                    only_capabilities=frozenset({'mobile.look_at_me'}))
+                invitation_delivered = bool(lam_execution.executed)
+                if invitation_delivered:
+                    await queue.put({'type':'look_at_me','data':dict(lam_execution.executed[0].result or {})})
+                    if not full_text:
+                        await queue.put({'type':'tool_delivery','id':ai_msg_id,'tool':'mobile.look_at_me'})
+                elif lam_execution.results:
+                    error = str(lam_execution.results[0].error or 'invitation_failed')
+                    await queue.put({
+                        'type': 'tool_error', 'id': ai_msg_id, 'tool': 'mobile.look_at_me',
+                        'error': error, 'empty_reply': not full_text.strip(),
+                        'message': ('手机已有待处理的陪伴邀请或正在陪伴中' if error.startswith('device_busy')
+                                    else '陪伴邀请未能发出'),
+                    })
             toy_payload = _toy_payload_from_results(toy_results)
             toy_delivery = _toy_delivery_debug(toy_intents, toy_results, toy_payload)
             _log_toy_delivery(
@@ -363,6 +399,8 @@ async def stream_initiative_response(
             import traceback
             traceback.print_exc()
         finally:
+            await look_at_me_repository.settle(look_at_me_meta,message_id=ai_msg_id,
+                success=not has_error and (assistant_persisted or invitation_delivered))
             await tool_invocation_ledger.record_turn(
                 toy_context,
                 prompt_source="initiative",

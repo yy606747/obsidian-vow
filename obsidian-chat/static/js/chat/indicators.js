@@ -141,28 +141,8 @@ function handleScreenCheck(payload, msgId) {
 }
 
 // ── [HEART] 心语提示 ──
-const _heartWhisperMsgIds = new Set();
-function showHeartWhisperHint(msgId, content) {
-  if (!msgId) return;
-  _heartWhisperMsgIds.add(msgId);
-  _applyHeartHint(msgId);
-  // 新心语加入飘字池；若飘字定时器未启动则启动
-  if (content && !_whisperPool.includes(content)) {
-    const wasEmpty = !_whisperPool.length;
-    _whisperPool.push(content);
-    if (wasEmpty && !_whisperTimer) _scheduleNextWhisper();
-  }
-}
-function _applyHeartHint(msgId) {
-  const msgRow = document.getElementById('m_' + msgId);
-  if (!msgRow) return;
-  const avatarCol = msgRow.querySelector('.msg-avatar-col');
-  if (!avatarCol || avatarCol.querySelector('.heart-whisper-hint')) return;
-  const hint = document.createElement('span');
-  hint.className = 'heart-whisper-hint';
-  hint.textContent = '💭';
-  hint.addEventListener('animationend', () => { hint.style.opacity = '1'; hint.style.animation = 'none'; }, { once: true });
-  avatarCol.appendChild(hint);
+function showHeartWhisperHint(msgId, content, record = {}) {
+  window.ChatHeartNotes?.receive({ ...record, msg_id: msgId, content });
 }
 
 function showCamOfflineNotice() {
