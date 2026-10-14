@@ -166,7 +166,7 @@ def test_send_and_regenerate_include_the_same_context_delivery_runtime_block(mon
     assert context_block not in send.stable_block
     assert context_block not in regenerate.stable_block
     assert "设备直接观测只能证明设备报告了对应状态" in send.stable_block
-    assert "不能单独证明她在宿舍、教室、是否上课" in send.stable_block
+    assert "不能单独证明用户A在宿舍、教室、是否上课" in send.stable_block
     assert "数据缺席只表示系统不知道" in regenerate.stable_block
 
 
@@ -258,7 +258,6 @@ def test_send_ability_block_exposes_schedule_list_and_hides_unavailable_runtime_
     _patch_prompt_builder_context(monkeypatch)
     monkeypatch.setattr(prompt_builder, "is_activity_tracking_enabled", lambda: False)
     monkeypatch.setattr(prompt_builder, "is_screen_capture_enabled", lambda: False)
-    monkeypatch.setattr(prompt_builder.mobile_screen_service, "is_enabled", lambda: False)
     monkeypatch.setattr(location_module, "load_location_config", lambda: {"enabled": False})
 
     block = asyncio.run(prompt_builder.build_send_ability_block(
@@ -351,7 +350,9 @@ def test_send_ability_block_puts_dom_toy_contract_at_end(monkeypatch):
     assert "【主控输出硬约束】" in block
     assert "每一条可见回复必须恰好包含一个 [TOY:...] 动作标记" in block
     assert "格式必须使用半角英文方括号和半角冒号" in block
-    assert block.rindex("【主控输出硬约束】") > block.rindex("<meta>标签内为消息元数据")
+    assert "【主控输出硬约束】" in block.dynamic_block
+    assert "【主控输出硬约束】" not in block.stable_block
+    assert block.index("【主控输出硬约束】") > len(block.stable_block)
 
 
 def test_send_ability_block_puts_tide_contract_at_end(monkeypatch):
@@ -378,7 +379,9 @@ def test_send_ability_block_puts_tide_contract_at_end(monkeypatch):
     assert "【潮汐输出硬约束】" in block
     assert "每一条可见回复必须包含一个 [TIDE_INTENT:...[/TIDE_INTENT] 隐藏意图" in block
     assert "【主控输出硬约束】" not in block
-    assert block.rindex("【潮汐输出硬约束】") > block.rindex("<meta>标签内为消息元数据")
+    assert "【潮汐输出硬约束】" in block.dynamic_block
+    assert "【潮汐输出硬约束】" not in block.stable_block
+    assert block.index("【潮汐输出硬约束】") > len(block.stable_block)
 
 
 def test_send_ability_block_aftercare_suppresses_tide_capability(monkeypatch):
@@ -658,6 +661,12 @@ def test_prepare_chat_history_skips_previous_tail_after_current_chat_has_started
 def test_prepare_send_prompt_builds_ability_memory_and_debug_meta(monkeypatch):
     _patch_empty_vow_context(monkeypatch)
     _patch_no_control_context(monkeypatch)
+    async def recent_companionship(**names):
+        return f"【近期共同经历】{names['ai_name']}陪{names['user_name']}待了 2 分钟。已结束。"
+    monkeypatch.setattr("app.together.recent.load_recent", recent_companionship)
+    async def recent_scene(**names):
+        return f"【近期亲密经历】{names['ai_name']}与{names['user_name']}刚结束的小剧场。"
+    monkeypatch.setattr("app.scenes.recent.load_recent", recent_scene)
 
     async def fake_prepare_chat_history(conv_id, *, context_limit, attachment_policy, retracted=False):
         assert conv_id == "conv_send"
@@ -717,6 +726,8 @@ def test_prepare_send_prompt_builds_ability_memory_and_debug_meta(monkeypatch):
     assert "device.toy" not in meta["capabilities"]
     assert meta["prompt_count"] == len(history)
     assert meta["prompt_messages"][0]["content"] == "[系统能力] send"
+    assert sum("【近期共同经历】" in str(message.get("content")) for message in history) == 1
+    assert sum("【近期亲密经历】" in str(message.get("content")) for message in history) == 1
 
 
 def test_prepare_send_prompt_puts_web_search_in_runtime_tail(monkeypatch):
@@ -736,6 +747,9 @@ def test_prepare_send_prompt_puts_web_search_in_runtime_tail(monkeypatch):
         )
 
     class WebSearch:
+        def enabled(self):
+            return True
+
         async def prepare_dialogue_turn(self, **kwargs):
             assert kwargs["bound_turn_id"] == "send:user-current"
             return {
@@ -794,7 +808,7 @@ def test_prepare_send_prompt_puts_web_search_in_runtime_tail(monkeypatch):
         if "PRIVATE_READY_WEB_RESULT" in str(message.get("content") or "")
     )
     assert web_index >= meta["cache_layout"]["runtime_insert_index"]
-    assert "WEB_SEARCH_INTENT" in history[web_index]["content"]
+    assert any('[联网:' in row['content'] for row in history[:web_index])
     assert "WEB_SEARCH_INTENT" not in str(meta["prompt_messages"])
     assert meta["web_search"]["ids"] == ["web-1"]
 
@@ -944,6 +958,9 @@ def test_prepare_send_prompt_claims_presence_outcome_only_for_natural_send(monke
             }
 
     class WebSearch:
+        def enabled(self):
+            return False
+
         async def prepare_dialogue_turn(self, **_kwargs):
             return {"status": "disabled", "block": "", "ids": []}
 
@@ -1071,7 +1088,8 @@ def test_prepare_send_prompt_timeline_replaces_handoff_before_memory(monkeypatch
         raise AssertionError("timeline-enabled path must not call handoff")
 
     class FakeTimelineService:
-        async def prompt_context(self, *, visible_messages, config_snapshot):
+        async def prompt_context(self, *, visible_messages, config_snapshot, user_name, ai_name):
+            assert (user_name, ai_name) == ("用户A", "Arden")
             assert visible_messages[0]["id"] == "u1"
             assert config_snapshot["timeline_enabled"] is True
             return {
@@ -1490,6 +1508,14 @@ def test_prepare_send_prompt_safety_tombstone_forces_normal_mode(monkeypatch):
 def test_prepare_regenerate_prompt_uses_last_user_attachment_policy(monkeypatch, retry_feedback):
     _patch_empty_vow_context(monkeypatch)
     _patch_no_control_context(monkeypatch)
+    async def recent_companionship(**names):
+        assert names == {"user_name": "用户B", "ai_name": "知秋"}
+        return "【近期共同经历】知秋陪用户B待了 2 分钟。已结束。"
+    monkeypatch.setattr("app.together.recent.load_recent", recent_companionship)
+    async def recent_scene(**names):
+        assert names == {"user_name": "用户B", "ai_name": "知秋"}
+        return "【近期亲密经历】知秋与用户B刚结束的小剧场。"
+    monkeypatch.setattr("app.scenes.recent.load_recent", recent_scene)
 
     async def fake_prepare_chat_history(conv_id, *, context_limit, attachment_policy, retracted=False):
         assert conv_id == "conv_regen"
@@ -1578,6 +1604,54 @@ def test_prepare_regenerate_prompt_uses_last_user_attachment_policy(monkeypatch,
         assert meta['sticker_feedback']['bound_turn_id'] == 'regenerate:source'
         assert any('举着[OK]的牌子' in message['content'] for message in history)
     assert meta["prompt_messages"][0]["content"] == "[系统能力] regen"
+    assert sum("【近期共同经历】" in str(message.get("content")) for message in history) == 1
+    assert sum("【近期亲密经历】" in str(message.get("content")) for message in history) == 1
     assert meta["chat_mode"] == "normal"
     assert meta["mode_source"] == "legacy_disabled"
     assert "device.toy" not in meta["capabilities"]
+
+
+
+@pytest.mark.parametrize('fast_mode', [False, True])
+def test_regenerate_injects_timeline_and_reports_fast_mode(monkeypatch, fast_mode):
+    _patch_empty_vow_context(monkeypatch)
+    _patch_no_control_context(monkeypatch)
+    calls = []
+
+    async def history(*args, **kwargs):
+        return SimpleNamespace(model_key='fixture', history=[{'role':'user','content':'再说一次'}],
+            actual_recent=[{'id':'visible'}], visible_message_ids=['visible'], cap_idx=0,
+            wb={'user_name':'南枝','ai_name':'予安'}, latest_user_message_id=None)
+
+    async def ability(**kwargs):
+        return '[系统能力]'
+
+    async def working(history, **kwargs):
+        return kwargs['inject_offset']
+
+    async def memory(history, **kwargs):
+        return kwargs['inject_offset'], {}
+
+    async def timeline(**kwargs):
+        calls.append(kwargs)
+        assert kwargs['visible_messages'] == [{'id':'visible'}]
+        assert (kwargs['user_name'],kwargs['ai_name']) == ('南枝','予安')
+        return {'status':'injected','block':'[最近三天的事]南枝和予安的约定。','entries':[{'index':0}]}
+
+    monkeypatch.setattr(chat_turn, 'prepare_chat_history', history)
+    monkeypatch.setattr(chat_turn, 'build_regenerate_ability_block', ability)
+    monkeypatch.setattr(chat_turn, 'inject_working_model_prompt', working)
+    monkeypatch.setattr(chat_turn, 'inject_memory_prompt', memory)
+    monkeypatch.setattr(chat_turn.timeline_service, 'prompt_context', timeline)
+    monkeypatch.setattr(chat_turn, 'load_memory_v3_config', lambda: normalize_memory_v3_config({'timeline_enabled':True}))
+    _, messages, meta = asyncio.run(chat_turn.prepare_regenerate_prompt(
+        'conv', context_limit=20, whisper_mode=False, fast_mode=fast_mode, ai_dom_mode=False,
+        safeword='', dom_history='', cnc_enabled=False, cnc_weakness='', resist_hits=0,
+        short_streak=0, reply_delay_ms=0, compliance_streak=0, session_elapsed=0,
+        scene_name='', scene_elapsed=0, since_last_punish=None, ratchet_valley=0,
+        debt=0.0, stubborn_streak=0,
+    ))
+    assert meta['timeline']['status'] == ('fast_mode' if fast_mode else 'injected')
+    assert len(calls) == (0 if fast_mode else 1)
+    assert sum('[最近三天的事]' in m.get('content','') for m in messages) == (0 if fast_mode else 1)
+    assert meta['prompt_source'] == 'regenerate' and meta['turn_id']

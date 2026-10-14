@@ -307,10 +307,10 @@ def test_request_stream_filter_hides_every_chunk_boundary_and_unfinished_tail():
 
 
 def test_cp2_prompt_actively_invites_interpretation_without_stale_full_rewrite():
-    framework = prompt_builder.build_thinking_framework_block()
+    framework = prompt_builder.build_thinking_framework_block(user_name="小栀", ai_name="阿澈")
     assert "[WORKING_MODEL_REQUEST]" in framework
     assert '"statement"' in framework and '"source"' in framework
-    assert "她是什么样的人" in framework
+    assert "小栀是什么样的人" in framework
     assert "整篇认识层" in framework
     assert "[UPDATE_MODEL:" not in framework
 

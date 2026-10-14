@@ -147,8 +147,9 @@ async def stream_initiative_response(
         return {"error": "vow_read_failed"}
 
     user_name, ai_name = resolve_worldbook_names(worldbook)
-    history = await cross_day_prompt(conv_id, user_name=user_name, ai_name=ai_name, db_factory=get_db) + history
+    history = await cross_day_prompt(conv_id, user_name=user_name, ai_name=ai_name, context_limit=spec.context_limit, current_message_count=len(history), db_factory=get_db) + history
     history, cap_idx = _with_worldbook_prefix(history, worldbook)
+    creation_context = list(history) + ([{'role': 'user', 'content': vow_block}] if vow_block else [])
     from app.look_at_me.service import available, is_current, inject_context as inject_look_at_me
     from app.look_at_me.prompts import ability as look_at_me_ability
     from app.look_at_me.repository import repository as look_at_me_repository
@@ -159,6 +160,10 @@ async def stream_initiative_response(
     _insert_system_blocks(history, cap_idx=cap_idx, spec=spec, vow_block=vow_block)
 
     ai_msg_id = f"msg_{int(time.time() * 1000)}_{spec.msg_suffix}"
+    from app.heart_works.entry import attach, IntentStreamFilter
+    heart_entry = attach(history, source='initiative_' + spec.kind, turn_id=ai_msg_id, conv_id=conv_id,
+        model_key=model_key, msg_id=ai_msg_id, user_name=user_name, ai_name=ai_name,
+        context_messages=creation_context)
     invocation_id = tool_invocation_ledger.new_invocation_id(
         "initiative_core"
     )
@@ -184,6 +189,10 @@ async def stream_initiative_response(
         },
     )
     look_at_me_meta = await inject_look_at_me(history,conv_id=conv_id,turn_id=ai_msg_id,user_name=user_name,ai_name=ai_name)
+    from app.together.recent import inject_recent
+    await inject_recent(history, user_name=user_name, ai_name=ai_name)
+    from app.scenes.recent import inject_recent as inject_scene_recent
+    await inject_scene_recent(history, user_name=user_name, ai_name=ai_name)
     usage_meta: dict = {}
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -202,6 +211,7 @@ async def stream_initiative_response(
         recall_filter = _RecallIntentStreamFilter()
         vow_filter = _VowStreamFilter()
         control_filter = ControlMarkerStreamFilter()
+        heart_filter = IntentStreamFilter()
         try:
             await queue.put({"id": ai_msg_id, "type": "start"})
             try:
@@ -211,6 +221,7 @@ async def stream_initiative_response(
                         continue
                     chunk = str(chunk)
                     full_text += chunk
+                    chunk = heart_filter.feed(chunk)
                     if not spec.toy_enabled:
                         if buffering_disabled_command:
                             continue
@@ -224,7 +235,7 @@ async def stream_initiative_response(
                         buffering_structured_reply = looks_like_structured_reply(probe)
                         if not buffering_structured_reply:
                             visible = vow_filter.feed(
-                                tide_filter.feed(recall_filter.feed(control_filter.feed(full_text)))
+                                tide_filter.feed(recall_filter.feed(control_filter.feed(chunk)))
                             )
                             if visible:
                                 await queue.put({"type": "chunk", "content": visible})
@@ -250,7 +261,8 @@ async def stream_initiative_response(
             elif not has_error:
                 turn_outcome = "succeeded" if full_text.strip() else "invalid_output"
             if not buffering_structured_reply and not buffering_disabled_command:
-                tail = vow_filter.feed(tide_filter.feed(recall_filter.feed(control_filter.flush())))
+                tail = vow_filter.feed(tide_filter.feed(recall_filter.feed(control_filter.feed(heart_filter.flush()))))
+                tail += vow_filter.feed(tide_filter.feed(recall_filter.feed(control_filter.flush())))
                 tail += vow_filter.feed(tide_filter.feed(recall_filter.flush()))
                 tail += vow_filter.feed(tide_filter.flush()) + vow_filter.flush()
                 if tail:
@@ -259,6 +271,7 @@ async def stream_initiative_response(
             # Initiative has no control markers of its own. Any opportunity
             # control syntax here is reserved/misrouted and must fail closed
             # before PostProcessor or an adapter sees the output.
+            full_text = heart_entry.extract(full_text)
             if classify_opportunity_control_output(
                 full_text,
                 profile=turn_profile,
@@ -304,6 +317,9 @@ async def stream_initiative_response(
                 ):
                     await queue.put({"type": "chunk", "content": provider_error_text})
                 return
+            heart_work = await heart_entry.commit()
+            if heart_work and not full_text.strip():
+                await queue.put({'type': 'tool_delivery', 'id': ai_msg_id, 'tool': 'heart_work'})
             toy_intents = _toy_command_intents(postprocessed)
 
             async def _store_remember(

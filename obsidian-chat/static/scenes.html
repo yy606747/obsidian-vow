@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#15120f">
+  <title>小剧场 · Obsidian Vow</title>
+  <link rel="stylesheet" href="/static/common.css">
+  <link rel="stylesheet" href="/static/vow.css?v=20260913-enamel">
+  <link rel="stylesheet" href="/static/scenes.css?v=20260927-scene-finish">
+</head>
+<body>
+<main class="sub-page scene-page" id="scenePage" data-stage="setup">
+  <div class="page-content scene-content">
+    <header class="scene-masthead">
+      <span class="scene-wordmark">OBSIDIAN VOW</span>
+      <span class="scene-badge"><i aria-hidden="true"></i><span id="sceneDeviceKind">模拟设备版</span></span>
+    </header>
+    <section class="scene-hero" aria-labelledby="sceneTitle">
+      <div>
+        <h1 id="sceneTitle">小剧场<span aria-hidden="true">.</span></h1>
+        <p id="sceneIntro">按彼此的了解，准备这一次。</p>
+        <p class="scene-hero-note" id="sceneHeroNote">不用一直回应，想调整时再说。</p>
+      </div>
+      <img class="scene-emblem" src="/public/optimized/scene-theater-v1.png" alt="" width="160" height="160" decoding="async">
+    </section>
+    <ol class="scene-steps" aria-label="本场进度">
+      <li id="sceneStep1" aria-current="step"><span>01</span> 入场</li>
+      <li id="sceneStep2" aria-current="false"><span>02</span> 此刻</li>
+      <li id="sceneStep3" aria-current="false"><span>03</span> 揭晓</li>
+    </ol>
+    <p id="sceneError" role="alert" hidden></p>
+    <section id="sceneSetup" class="scene-setup" aria-labelledby="sceneSetupTitle">
+      <div class="scene-preparation">
+        <div class="scene-section-heading">
+          <div><h2 id="sceneSetupTitle">开始前</h2></div>
+          <label class="scene-enable"><span>启用</span><input type="checkbox" id="sceneEnabled"><span class="scene-switch" aria-hidden="true"></span></label>
+        </div>
+        <div class="scene-field-heading"><h3>本次使用的设备</h3><span id="sceneSelectedCount">已选 0 台</span></div>
+        <p class="hint">先连接，再勾选。本场只使用明确选中的设备。</p>
+        <div id="sceneDevices" class="scene-devices"></div>
+        <div class="scene-safeword">
+          <label class="form-label" for="sceneSafeword">安全词</label>
+          <input class="form-input" type="text" id="sceneSafeword" maxlength="64" autocomplete="off" placeholder="填写本场安全词" aria-describedby="sceneSafewordHelp">
+          <p class="hint" id="sceneSafewordHelp">安全词会停下并锁住设备，仍可继续聊天；手动继续才恢复设备。揭卡由你决定。</p>
+        </div>
+      </div>
+      <aside class="scene-ticket" aria-label="随机抽卡并开始">
+        <div class="scene-ticket-top"><span>随机抽取</span><span aria-hidden="true">✦</span></div>
+        <div class="scene-seal" aria-hidden="true"><span>?</span></div>
+        <p class="scene-ticket-caption">准备卡</p>
+        <h2>结束后再看</h2>
+        <p class="scene-ticket-note">卡里写着这次的打算，<br>现在先不展开。</p>
+        <div class="scene-ticket-stub">
+          <p class="scene-ticket-count" id="sceneEntryHint">先连接并选择设备</p>
+          <button type="button" id="sceneEnter" class="scene-primary" aria-label="随机抽卡并开始" disabled>开始 <span aria-hidden="true">↗</span></button>
+          <p class="scene-ticket-foot">没有匹配的卡，就当场准备一张。</p>
+        </div>
+      </aside>
+      <div class="scene-model-notice"><p id="sceneModelHint" class="hint"></p><button type="button" class="scene-text-button" id="sceneOpenSettings">模型设置 ↗</button></div>
+    </section>
+    <section id="sceneLive" class="scene-live" aria-labelledby="sceneStatus" hidden>
+      <div class="scene-live-toolbar">
+        <div class="scene-live-heading"><span class="scene-status-light" aria-hidden="true"></span><h2 id="sceneStatus">正在准备</h2><span id="sceneElapsed"></span></div>
+        <div class="scene-actions"><button type="button" id="scenePause">暂停</button><button type="button" id="sceneEnd" class="scene-stop">结束并揭卡</button></div>
+      </div>
+      <p class="hint scene-reason" id="sceneReason" role="status"></p>
+      <button type="button" id="sceneReconnect" hidden>重新确认本场设备</button>
+      <div class="scene-stage">
+        <p class="scene-eyebrow">本场消息</p>
+        <p class="scene-quiet" id="sceneQuiet">有想说的，直接说就好。</p>
+        <div id="sceneMessages" class="scene-messages" aria-live="polite" aria-relevant="additions text" aria-label="本场消息"></div>
+      </div>
+      <details id="sceneOutputPanel" class="scene-output-panel">
+        <summary><span>设备此刻</span><span id="sceneOutputStatus" class="hint">等待安排</span></summary>
+        <p class="hint scene-output-note" id="sceneOutputNote">以下为实际模拟输出，不代表真实设备强度。</p>
+        <div id="scenePlayback" class="scene-playback"></div>
+      </details>
+      <form id="sceneMessageForm" class="scene-compose">
+        <label class="scene-sr-only" for="sceneMessage">本场反馈</label>
+        <textarea class="form-input" id="sceneMessage" maxlength="8000" rows="1" placeholder="有想说的，直接说。"></textarea>
+        <button type="submit" id="sceneSend" aria-label="发送本场反馈">发送 <span aria-hidden="true">↑</span></button>
+      </form>
+      <p id="scenePrivacy" class="scene-privacy-note">安全词随时有效 · 本场过程不自动写入长期记忆。</p>
+    </section>
+    <section id="sceneReveal" class="scene-reveal" aria-labelledby="sceneRevealTitle" hidden>
+      <div class="scene-reveal-heading"><h2 id="sceneRevealTitle">原来是这样安排的</h2><p class="hint">这是开始前写下的原文。</p></div>
+      <div class="scene-letter"><span class="scene-letter-label">准备笔记</span><pre id="sceneCardText" class="scene-prose"></pre><span class="scene-letter-end" aria-hidden="true">— ✦ —</span></div>
+      <div class="scene-feedback">
+        <h3>这次感觉怎么样？</h3><p class="hint">喜欢的、想调整的，都可以留给下次参考。不写也没关系。</p>
+        <div class="scene-actions scene-votes"><button type="button" data-scene-vote="up" aria-pressed="false">喜欢</button><button type="button" data-scene-vote="down" aria-pressed="false">不喜欢</button><button type="button" data-scene-vote="" aria-pressed="true">不选赞踩</button></div>
+        <label class="scene-sr-only" for="sceneFeedbackReason">评价原因（可选）</label>
+        <textarea class="form-input" id="sceneFeedbackReason" rows="3" maxlength="4000" placeholder="想说的原因，可以写在这里（可选）。"></textarea>
+        <div class="scene-feedback-footer"><button type="button" id="sceneFeedbackSave">保存评价</button><button type="button" id="sceneAgain" class="scene-text-button">再来一次 ↗</button></div>
+        <p id="sceneFeedbackStatus" class="hint" role="status"></p>
+      </div>
+    </section>
+    <footer class="scene-backstage">
+      <details class="scene-drawer"><summary><span>以前的卡</span><span class="hint">已结束的场景</span></summary><div id="sceneHistory"></div></details>
+      <details class="scene-drawer" id="sceneSettings"><summary><span>设置</span><span class="hint">设备简介与模型</span></summary>
+        <p class="hint">简介告诉主模型每台设备是什么、可以怎样动作，可以暂时留空。修改在下次入场生效。</p>
+        <div id="sceneDeviceDescriptions"></div><button type="button" id="sceneConfigSave">保存简介</button>
+        <button type="button" id="sceneAddHardware" disabled>补齐已支持的五台设备</button>
+        <p class="hint">真机需要新版 Android 后台播放器；可用通道与范围以保存的设备配置为准。</p>
+        <p id="sceneConfigStatus" class="hint" role="status"></p>
+        <p class="hint">编译模型在“设置 → 槽位 / 模型 → 场景设备编译”配置。夜间写卡还需要启用现有夜间机会轮。</p>
+      </details>
+      <p class="scene-colophon" id="sceneDeviceFootnote">仅模拟输出 · 不连接真实设备</p>
+    </footer>
+  </div>
+</main>
+<script src="/static/js/scenes.js?v=20260927-scene-finish"></script>
+</body>
+</html>

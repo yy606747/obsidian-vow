@@ -203,3 +203,29 @@ def test_screen_agent_online_uses_poll_heartbeat():
 
     assert service.screen_agent_online(190.0)
     assert not service.screen_agent_online(191.0)
+
+
+def test_retired_mobile_temp_cleanup_keeps_fresh_and_unrelated_uploads(monkeypatch, tmp_path):
+    screenshots = tmp_path / "screenshots"
+    mobile_tmp = screenshots / "mobile_tmp"
+    uploads = tmp_path / "uploads"
+    mobile_tmp.mkdir(parents=True)
+    uploads.mkdir()
+    monkeypatch.setattr(service, "SCREENSHOTS_DIR", screenshots)
+    monkeypatch.setattr(service, "SCREEN_TMP_DIR", screenshots / "missing_pc_tmp")
+    monkeypatch.setattr(service, "UPLOADS_DIR", uploads)
+    now = time.time()
+    for name in ("old.jpg", "fresh.jpg"):
+        (mobile_tmp / name).write_bytes(b"temporary capture")
+        (uploads / name).write_bytes(b"temporary upload copy")
+    (uploads / "chat_photo.jpg").write_bytes(b"permanent chat attachment")
+    old = now - service.SCREENSHOT_TTL_SEC - 1
+    os.utime(mobile_tmp / "old.jpg", (old, old))
+    os.utime(uploads / "chat_photo.jpg", (old, old))
+
+    assert service.cleanup_expired_files(now=now) == 1
+    assert not (mobile_tmp / "old.jpg").exists()
+    assert not (uploads / "old.jpg").exists()
+    assert (mobile_tmp / "fresh.jpg").exists()
+    assert (uploads / "fresh.jpg").exists()
+    assert (uploads / "chat_photo.jpg").read_bytes() == b"permanent chat attachment"

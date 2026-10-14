@@ -40,6 +40,8 @@ def test_gemini_defaults_are_tier_safe_and_memory_efficient(monkeypatch):
     assert config["batch_size"] == 32
     assert config["request_interval_sec"] == 1.0
     assert config["max_retries"] == 8
+    assert config["timeout_sec"] == 90.0
+    assert config["query_timeout_sec"] == 4.0
     assert config["signature"] == "gemini:gemini-embedding-2:768:retrieval-v1"
 
 
@@ -86,7 +88,8 @@ def test_429_honors_retry_after_then_recovers(monkeypatch):
         async def __aexit__(self, *args):
             return None
 
-        async def post(self, url, *, json, headers):
+        async def post(self, url, *, json, headers, timeout):
+            assert timeout == 10.0
             posted.append((url, json, headers))
             return responses.pop(0)
 

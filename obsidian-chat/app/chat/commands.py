@@ -17,7 +17,7 @@ from schedule import (
 HEART_CMD_PATTERN = re.compile(r'\[HEART:([^\]]+)\]')
 ACTIVITY_CHECK_PATTERN = re.compile(r'\[查看动态:(\d+)\]')
 SCREEN_CHECK_PATTERN = re.compile(r'\[SCREEN_CHECK:([^\]]+)\]')
-# 移动端截图：[MOBILE_SCREEN_CHECK:目标|原因]，目标可为设备名/类型/留空
+# Retired marker: retained only to strip old/model-emitted control text; never executable.
 MOBILE_SCREEN_CHECK_PATTERN = re.compile(r'\[MOBILE_SCREEN_CHECK:([^\]]+)\]')
 REMEMBER_CMD_PATTERN = re.compile(r'\[REMEMBER:([^\]]+)\]')
 VIEW_IMAGE_PATTERN = re.compile(r'\[VIEW_IMAGE:([^|\]\s]+)\|([^\]\s]+)\]')

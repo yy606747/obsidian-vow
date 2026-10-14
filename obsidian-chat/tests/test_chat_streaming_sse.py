@@ -96,7 +96,7 @@ class _FakeControlGateway:
 def test_empty_response_is_transient_in_sse_and_websocket_and_never_persisted(monkeypatch, raw):
     executed, broadcasts = _patch_streaming_io(monkeypatch)
 
-    async def fake_stream(*_args):
+    async def fake_stream(*_args, **_kwargs):
         yield raw
 
     monkeypatch.setattr(streaming, 'stream_ai', fake_stream)
@@ -207,7 +207,7 @@ def test_stream_chat_response_hides_and_records_tide_intent(monkeypatch):
     assert not any(payload["type"] == "toy_command" for payload in broadcasts)
 
 
-def test_stream_chat_response_hides_recall_intent_and_commits_it_with_reply(
+def test_stream_chat_response_hides_legacy_recall_but_creates_no_pending_job(
     monkeypatch,
 ):
     executed, _broadcasts = _patch_streaming_io(monkeypatch)
@@ -221,7 +221,7 @@ def test_stream_chat_response_hides_recall_intent_and_commits_it_with_reply(
 
     async def fake_apply(_db, **kwargs):
         pending_calls.append(kwargs)
-        return {"consumed": False, "created_pending_id": "pending-new"}
+        return {"consumed": False, "created_pending_id": None}
 
     monkeypatch.setattr(streaming, "stream_ai", fake_stream_ai)
     monkeypatch.setattr(
@@ -265,8 +265,8 @@ def test_stream_chat_response_hides_recall_intent_and_commits_it_with_reply(
     assert assistant_inserts[0][3] == "先说正文。继续。"
     assert pending_calls[0]["recall_intent"] == "找南京误车那次"
     assert pending_calls[0]["current_user_message_id"] == "user-current"
-    assert pending_calls[0]["allow_new_intent"] is True
-    assert started == ["pending-new"]
+    assert pending_calls[0]["allow_new_intent"] is False
+    assert started == []
 
 
 def test_stream_chat_response_toy_uses_tool_service_adapter(monkeypatch):

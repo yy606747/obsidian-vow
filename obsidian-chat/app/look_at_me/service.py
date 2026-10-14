@@ -43,7 +43,8 @@ async def is_current(conv_id):
 
 async def scoped_snapshot(snapshot, conv_id):
     capabilities = set(snapshot.capabilities)
-    if not available() or not await is_current(conv_id):
+    from app.together.coexist import is_active
+    if not available() or await is_active() or not await is_current(conv_id):
         capabilities.discard('mobile.look_at_me')
     return replace(snapshot, capabilities=tuple(sorted(capabilities)))
 
@@ -64,8 +65,11 @@ async def execute_invitation(intent, context, *, origin_conv_id=None):
         source_turn=context.request_id or context.msg_id or '', source_intent=intent.id,
         expression=str(args['expression']).strip(), duration_seconds=seconds)
     from ws import manager
-    await manager.broadcast({'type':'look_at_me','data':public_request(row)})
-    return {'ok':True, **public_request(row)}
+    from app.together.coexist import is_active
+    deferred = await is_active()
+    if not deferred:
+        await manager.broadcast({'type':'look_at_me','data':public_request(row)})
+    return {'ok':True, **public_request(row), 'deferred':deferred}
 
 
 def public_request(row):

@@ -185,17 +185,6 @@ async def read_core_wake_execution_context(
             conv_id=conversation["conv_id"],
             limit=_positive_limit(recent_message_limit, key="recent_message_limit"),
         )
-        try:
-            from app.mobile_screen.autonomous import autonomous_mobile_screen_target
-
-            mobile_target = await autonomous_mobile_screen_target(
-                model_key=payload["model_key"],
-                now=reference,
-            )
-            if mobile_target:
-                payload["autonomous_mobile_screen_target"] = mobile_target
-        except Exception:
-            pass
 
     last_user_ts = await _read_last_user_message_ts(db_factory)
     if last_user_ts > 0:

@@ -127,6 +127,11 @@ class LegacyCoreWakePorts:
         self._expression_look_at_me = {}
         self._expression_committed = False
         self._invitation_delivered = False
+        self._together_deferred = set()
+        self._together_conversations = set()
+
+    def set_heart_creation_context(self, messages):
+        self._heart_creation_context = list(messages)
 
     async def prepare_expression_turn(self, *, messages, conv_id, model_key, request_id, control_active):
         from app.chat.worldbook import load_worldbook_names
@@ -140,6 +145,12 @@ class LegacyCoreWakePorts:
 
         self._expression_names = load_worldbook_names()
         user_name, ai_name = self._expression_names
+        from app.heart_works.entry import attach
+        from config import load_worldbook
+        from app.chat.worldbook import build_worldbook_prefix
+        self._heart_entry = attach(messages, source='sentinel_core', turn_id=request_id,
+            conv_id=conv_id, model_key=model_key, user_name=user_name, ai_name=ai_name,
+            context_messages=getattr(self, '_heart_creation_context', build_worldbook_prefix(load_worldbook())))
         capabilities = set()
         if not control_active and 'sticker.send' in chat_capabilities():
             capabilities.add('sticker.send')
@@ -164,15 +175,19 @@ class LegacyCoreWakePorts:
         companionship_messages = []
         self._expression_look_at_me = await inject_context(
             companionship_messages, conv_id=conv_id, turn_id=request_id, user_name=user_name, ai_name=ai_name)
+        from app.together.recent import inject_recent
+        await inject_recent(companionship_messages, user_name=user_name, ai_name=ai_name)
         messages[-1:-1] = companionship_messages
 
     async def extract_expression_reply(self, raw):
         if self._expression_context is None:
             return raw, False
         from app.stickers.autonomous import extract_expressions
+        if getattr(self, '_heart_entry', None):
+            raw = self._heart_entry.extract(raw)
         remaining, self._expression_reply = await extract_expressions(
             raw, profile=self._expression_profile, context=self._expression_context)
-        return remaining, bool(self._expression_reply.tool_intents)
+        return remaining, bool(self._expression_reply.tool_intents or (getattr(self, '_heart_entry', None) and self._heart_entry.intent.strip()))
 
     async def complete_expression_reply(self, *, content, messages, temperature):
         if self._expression_reply is None:
@@ -197,10 +212,11 @@ class LegacyCoreWakePorts:
             reply, execution=execution, profile=self._expression_profile, context=context,
             history=messages, user_name=self._expression_names[0], ai_name=self._expression_names[1],
             stream_model=supplement_stream, temperature=temperature,
-            pending_followup=self._invitation_delivered)
+            pending_followup=self._invitation_delivered, heart_entry=getattr(self, '_heart_entry', None))
+        heart_work = await self._heart_entry.commit() if getattr(self, '_heart_entry', None) else None
         return {'content': self._expression_delivery.supplement_text or content,
                 'attachments': self._expression_delivery.attachments,
-                'delivered': self._invitation_delivered, 'message_id': context.msg_id,
+                'delivered': self._invitation_delivered or bool(heart_work), 'message_id': context.msg_id,
                 'failed': self._expression_delivery.failed}
 
     async def release_expression_turn(self):
@@ -342,6 +358,9 @@ class LegacyCoreWakePorts:
         )
 
     async def broadcast_monitor_alert(self, content: str) -> None:
+        from app.together.coexist import is_active
+        if await is_active(db_factory=self._db_factory):
+            return
         content = _required_text(content, "monitor alert content")
         await self._broadcaster({"type": "monitor_alert", "data": {"content": content}})
 
@@ -367,6 +386,9 @@ class LegacyCoreWakePorts:
         model_key: str,
         temperature: Any = None,
     ) -> str:
+        from app.together.coexist import is_active
+        if await is_active(db_factory=self._db_factory):
+            raise RuntimeError("together_active")
         model_key = _required_text(model_key, "core model_key")
         normalized_messages = _validated_core_messages(messages)
         selected_temperature = self._default_temperature if temperature is None else temperature
@@ -472,6 +494,8 @@ class LegacyCoreWakePorts:
         return message
 
     async def update_conversation(self, *, conv_id: str, updated_at: float) -> None:
+        if conv_id in self._together_conversations:
+            return
         conv_id = _required_text(conv_id, "conversation id")
         updated_at = _required_timestamp(updated_at, "conversation updated_at")
         async with self._db_factory() as db:
@@ -479,6 +503,8 @@ class LegacyCoreWakePorts:
             await db.commit()
 
     async def broadcast_msg_created(self, message: Mapping[str, Any]) -> None:
+        if message.get("id") in self._together_deferred:
+            return
         payload = stored_message_to_dict(message, label="broadcast")
         await self._broadcaster({"type": "msg_created", "data": payload})
 
@@ -594,6 +620,8 @@ class LegacyCoreWakePorts:
             model_key=model_key,
             reason=reason,
         )
+        if request is not None and getattr(self, '_heart_entry', None):
+            request.heart_work_origin = self._heart_entry.metadata()
         if request is None:
             payload = {
                 "type": "screen_check_rejected",
@@ -652,81 +680,6 @@ class LegacyCoreWakePorts:
         )
         return payload
 
-    async def request_mobile_screen_check(
-        self,
-        *,
-        conv_id: str,
-        msg_id: str,
-        model_key: str,
-        target: str,
-        reason: str,
-        request_id: str | None = None,
-        wake_id: str | None = None,
-    ) -> Mapping[str, Any]:
-        conv_id = _required_text(conv_id, "mobile screen check conversation id")
-        msg_id = _required_text(msg_id, "mobile screen check message id")
-        model_key = _required_text(model_key, "mobile screen check model key")
-        reason = " ".join(_required_text(reason, "mobile screen check reason").split())[:200]
-        target = " ".join(str(target or "").split())[:80]
-
-        from app.background_tasks import create_tracked_task
-        from app.chat.side_effects import perform_mobile_screen_check
-        from app.chat.streaming import _resolve_mobile_target
-        from app.mobile_screen import mobile_screen_service
-
-        device_id, err = await _resolve_mobile_target(target)
-        if err:
-            # 未解析到设备/歧义：构造 rejected 请求，仍跑 follow-up 给出自然语言解释。
-            request = mobile_screen_service.build_rejected_request(
-                conv_id=conv_id, msg_id=msg_id, model_key=model_key,
-                target_label=target, reason=reason, reject_reason=err,
-            )
-        else:
-            request = await mobile_screen_service.create_request(
-                conv_id=conv_id, msg_id=msg_id, model_key=model_key,
-                target_device_id=device_id, reason=reason,
-            )
-            if request.status == "pending":
-                try:
-                    from app.mobile_screen.autonomous import record_autonomous_mobile_screen_request
-
-                    record_autonomous_mobile_screen_request(self.now())
-                except Exception:
-                    pass
-
-        payload = {
-            "type": "screen_check_pending" if request.status == "pending" else "screen_check_rejected",
-            "status": request.status,
-            "reject_reason": request.reject_reason,
-            "conv_id": request.conv_id,
-            "msg_id": request.msg_id,
-            "reason": request.reason,
-            "target": target,
-            "target_device_id": request.target_device_id,
-            "target_device_name": request.target_device_name,
-            "request_id": request.request_id,
-            "wake_id": wake_id or request_id or request.request_id,
-            "broadcast": True,
-        }
-        create_tracked_task(
-            perform_mobile_screen_check(request),
-            name=f"sentinel_mobile_screen_check:{conv_id}:{msg_id}:{request.request_id}",
-        )
-        if request.status == "pending":
-            await self._broadcaster({"type": "screen_check_pending", "data": payload})
-        await _record_observed_tool_result(
-            self._action_observation(
-                conv_id=conv_id,
-                msg_id=msg_id,
-                request_id=str(request_id or request.request_id),
-                model_key=model_key,
-                capability="mobile.screen_check",
-            ),
-            tool_name="mobile.screen_check",
-            raw_text=f"[MOBILE_SCREEN_CHECK:{target}|{reason}]",
-            payload=payload,
-        )
-        return payload
 
     async def execute_ring_touch(
         self,
@@ -970,6 +923,18 @@ class LegacyCoreWakePorts:
             "attachments": attachments,
         }
         async with self._db_factory() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            from app.together.delivery import defer_in_tx
+            if await defer_in_tx(db, [message],
+                    feedback=self._expression_feedback if role == 'assistant' else None,
+                    delivery=self._expression_delivery if role == 'assistant' else None,
+                    look_at_me=self._expression_look_at_me if role == 'assistant' else None):
+                self._together_deferred.add(msg_id)
+                self._together_conversations.add(conv_id)
+                if role == 'assistant':
+                    self._expression_committed = True
+                await db.commit()
+                return message
             await db.execute(
                 "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
                 (msg_id, conv_id, role, content, created_at, json.dumps(attachments, ensure_ascii=False)),
@@ -1092,7 +1057,6 @@ def _advertised_tools_from_messages(
         ("device.toy", "[TOY:"),
         ("device.ring_touch", "[RING:"),
         ("pc.screen_check", "[SCREEN_CHECK:"),
-        ("mobile.screen_check", "[MOBILE_SCREEN_CHECK:"),
         ("sticker.send", "【发图："),
         ("mobile.look_at_me", "【陪我："),
     )

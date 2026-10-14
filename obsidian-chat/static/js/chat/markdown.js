@@ -11,12 +11,13 @@
     'tbody', 'tr', 'th', 'td', 'div', 'span', 'button', 'img'];
   const attributes = ['class', 'href', 'title', 'target', 'rel', 'type', 'data-md-copy',
     'role', 'aria-label', 'tabindex', 'align', 'start', 'src', 'alt', 'loading',
-    'decoding', 'referrerpolicy'];
+    'decoding', 'referrerpolicy', 'data-math-source', 'data-math-display', 'data-math-pending'];
 
   function getParser() {
     if (parser) return parser;
     if (!window.markdownit || !window.DOMPurify) return null;
     parser = window.markdownit({ html: false, breaks: true, linkify: false, typographer: false });
+    window.ChatMath?.install(parser);
     const originalValidate = parser.validateLink;
     parser.validateLink = url => originalValidate(url) && !/^data:/i.test(url);
     const code = (tokens, index) => {
@@ -59,6 +60,8 @@
       else if (['text', 'code_inline', 'html_inline'].includes(token.type)) text += token.content;
       else if (token.type === 'image') text += textFromTokens(token.children || []) || token.content;
       else if (token.type === 'fence' || token.type === 'code_block') text += '\n' + token.content + '\n';
+      else if (token.type === 'math_inline') text += '公式';
+      else if (token.type === 'math_block' || token.type === 'math_pending') text += '\n公式\n';
       else if (['softbreak', 'hardbreak', 'paragraph_close', 'heading_close', 'tr_close', 'hr'].includes(token.type)) text += '\n';
       else if (token.type === 'td_close' || token.type === 'th_close') text += ' ';
     }
@@ -71,16 +74,23 @@
       const hit = cache.get(key); cache.delete(key); cache.set(key, hit);
       return hit.result;
     }
-    let result;
+    let result, mathPending = false;
     const md = plain ? null : getParser();
     if (!md) {
       result = { expanded: false, body: escHtml(source).replace(/\n/g, '<br>'),
         paragraphs: [escHtml(source).replace(/\n/g, '<br>')], text: source };
     } else {
       const env = {}, tokens = md.parse(source, env);
-      const expanded = tokens.some(token => blocks.has(token.type));
-      const purify = html => DOMPurify.sanitize(html, { ALLOWED_TAGS: tags, ALLOWED_ATTR: attributes,
-        ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false });
+      const expanded = !!env.mathDisplay || tokens.some(token => blocks.has(token.type));
+      const purify = html => {
+        const clean = DOMPurify.sanitize(html, { ALLOWED_TAGS: tags, ALLOWED_ATTR: attributes,
+          ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false });
+        if (!env.hasMath) return clean;
+        // KaTeX fills only parser-owned placeholders after untrusted Markdown is sanitized.
+        const math = ChatMath.finishHtml(clean);
+        mathPending ||= math.pending;
+        return math.html;
+      };
       const body = purify(md.renderer.render(tokens, md.options, env));
       const paragraphs = [];
       if (!expanded) {
@@ -96,7 +106,7 @@
         text: textFromTokens(tokens).replace(/\n{3,}/g, '\n\n').trim() };
     }
     const size = key.length + result.body.length + result.text.length + result.paragraphs.join('').length;
-    if (useCache && size < cacheLimit) {
+    if (useCache && !mathPending && size < cacheLimit) {
       cache.set(key, { result, size }); cacheSize += size;
       while (cache.size > 256 || cacheSize > cacheLimit) {
         const oldest = cache.keys().next().value;
@@ -183,6 +193,7 @@
   }
   function resume() {
     if (foreground() && [...streams.values()].some(s => s.dirty)) flush();
+    window.ChatMath?.resume();
   }
   function plainText(source) { return compile(String(source || ''), false, true).text; }
 
@@ -203,6 +214,7 @@
       catch (_) { showToast('复制失败，可以长按选择代码'); }
     });
   }, { once: true });
-  window.ChatMarkdown = { prepare, queue, finish, reset, didRender, suspend, resume, plainText };
-  ChatApp.registerModule('markdown', window.ChatMarkdown);
+  window.ChatMarkdown = { prepare, queue, finish, reset, didRender, suspend, resume, plainText,
+    renderDocument: source => compile(String(source || ''), false, true).body };
+  window.ChatApp?.registerModule('markdown', window.ChatMarkdown);
 })();

@@ -17,13 +17,12 @@ log = logging.getLogger(__name__)
 async def resolve_autonomous_capabilities(
     *,
     model_key: str,
-    mobile_screen_target: Mapping[str, str] | None,
     now: float | None = None,
 ) -> frozenset[str]:
     """Freeze the autonomous runtime capability set for one provider turn."""
 
     current = time.time() if now is None else float(now)
-    capabilities = {"heart.whisper", "memory.remember"}
+    capabilities = {"memory.remember"}
     normal = set(mode_service.snapshot("normal", source="autonomous").capabilities)
 
     if "device.ring_touch" in normal and not is_smart_ring_quiet_hours():
@@ -37,8 +36,6 @@ async def resolve_autonomous_capabilities(
         vision = model_supports_vision(model_key)
         if vision and is_screen_capture_enabled():
             capabilities.add("pc.screen_check")
-        if vision and mobile_screen_target:
-            capabilities.add("mobile.screen_check")
     except Exception:
         pass
     try:
@@ -87,6 +84,7 @@ def build_autonomous_runtime_context(
     last_user_ts: float | None = None,
     heading: str = "空闲窗口实时状态",
     context_delivery_text: str | None = None,
+    facts_sink: list[str] | None = None,
 ) -> str:
     parts = [
         f"[{heading}]",
@@ -98,6 +96,7 @@ def build_autonomous_runtime_context(
         minutes = int((elapsed % 3600) // 60)
         last_chat_ago = f"{hours}小时{minutes}分钟" if hours else f"{minutes}分钟"
         parts.append(f"距{user_name}上次说话：{last_chat_ago}")
+    capability_index = len(parts)
     parts.append("本轮已挂载工具：" + ("、".join(sorted(capabilities)) or "无"))
     if autonomous_context_delivery_enabled():
         try:
@@ -134,6 +133,8 @@ def build_autonomous_runtime_context(
         except Exception:
             pass
     parts.append(render_device_proxy_hard_limits(user_name))
+    if facts_sink is not None:
+        facts_sink.append('\n'.join(parts[:capability_index] + parts[capability_index + 1:]))
     return "\n".join(parts)
 
 

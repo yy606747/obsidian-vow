@@ -8,7 +8,7 @@ import json, re, time
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, StrictBool, StrictInt, field_validator
 from typing import Literal, Optional
 
 import httpx
@@ -27,6 +27,7 @@ from provider_status import (
 )
 from location_diagnostics import recent_location_events, summarize_location_events
 from app.chat.image_history import image_history_config
+from model_thinking import THINKING_KEYS, thinking_capabilities, validate_thinking_settings
 
 router = APIRouter()
 SILICONFLOW_BASE = "https://api.siliconflow.cn/v1"
@@ -96,6 +97,8 @@ async def list_models():
                 "model": um.get("model", ""),
                 "audio_input": um.get("audio_input") is True,
                 "thinking_level": um.get("thinking_level"),
+                "enable_thinking": um.get("enable_thinking"),
+                "thinking_budget": um.get("thinking_budget"),
             })
     return out
 
@@ -495,6 +498,22 @@ async def location_diagnostic_summary():
     return summarize_location_events()
 
 # ── Slot 绑定（sentinel / asr ...）────────────────
+def _thinking_endpoint(endpoint_id: str) -> dict:
+    return next((ep for ep in SETTINGS.get("endpoints", []) if ep.get("id") == endpoint_id), {})
+
+
+@router.get("/api/model-thinking")
+async def get_model_thinking(endpoint: str, model: str):
+    return thinking_capabilities(_thinking_endpoint(endpoint), model)
+
+
+def _check_thinking_settings(value: dict):
+    try:
+        validate_thinking_settings(_thinking_endpoint(value["endpoint"]), value["model"], value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/api/slots")
 async def get_slots():
     return SETTINGS.get("slots", {})
@@ -508,9 +527,21 @@ class SlotUpdate(BaseModel):
 @router.put("/api/slots")
 async def put_slot(body: SlotUpdate):
     slots = SETTINGS.setdefault("slots", {})
-    slot = {"endpoint": body.endpoint, "model": body.model}
+    slot = dict(slots.get(body.name) or {})
+    if slot.get("endpoint") != body.endpoint or slot.get("model") != body.model:
+        for key in THINKING_KEYS:
+            slot.pop(key, None)
+    # Preserve non-UI extras (limits, enabled flags, etc.) when saving a slot.
     if body.extras:
         slot.update(body.extras)
+    slot.update(endpoint=body.endpoint, model=body.model)
+    if body.extras and any(key in body.extras for key in THINKING_KEYS):
+        _check_thinking_settings(slot)
+    for key in THINKING_KEYS:
+        if slot.get(key) is None:
+            slot.pop(key, None)
+    if slot.get("thinking_level"):
+        slot["thinking_level"] = slot["thinking_level"].strip().upper()
     slots[body.name] = slot
     if body.name == "vision_summary" and slot.get("enabled") is not True:
         from app.image_memory.service import cancel_scheduled_jobs
@@ -529,7 +560,9 @@ class UserModelUpsert(BaseModel):
     model: str
     audio_input: bool = False
     image_input: Optional[bool] = None
-    thinking_level: Optional[Literal["LOW", "MEDIUM", "HIGH"]] = None
+    enable_thinking: Optional[StrictBool] = None
+    thinking_level: Optional[Literal["MINIMAL", "LOW", "MEDIUM", "HIGH", "MAX"]] = None
+    thinking_budget: Optional[StrictInt] = None
 
     @field_validator("thinking_level", mode="before")
     @classmethod
@@ -539,19 +572,22 @@ class UserModelUpsert(BaseModel):
 @router.put("/api/user_models")
 async def put_user_model(body: UserModelUpsert):
     ums = SETTINGS.setdefault("user_models", {})
-    # 旧客户端未提交新字段时保留设置；显式 null 才恢复模型默认值。
-    thinking_level = (
-        body.thinking_level if "thinking_level" in body.model_fields_set
-        else ums.get(body.key, {}).get("thinking_level")
-    )
-    ums[body.key] = {
+    previous = ums.get(body.key, {})
+    same_model = previous.get("endpoint") == body.endpoint and previous.get("model") == body.model
+    value = {
         "endpoint": body.endpoint,
         "model": body.model,
         "audio_input": body.audio_input is True,
         "image_input": body.image_input,
     }
-    if thinking_level is not None:
-        ums[body.key]["thinking_level"] = thinking_level
+    # Omitted controls survive old-client updates; explicit null clears them.
+    # Changing the actual model never carries incompatible controls forward.
+    for key in THINKING_KEYS:
+        setting = getattr(body, key) if key in body.model_fields_set else previous.get(key) if same_model else None
+        if setting is not None:
+            value[key] = setting
+    _check_thinking_settings(value)
+    ums[body.key] = value
     save_settings(SETTINGS)
     return {"ok": True}
 

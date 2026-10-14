@@ -3,6 +3,7 @@ import base64
 import hashlib
 import io
 import json
+from contextlib import asynccontextmanager
 
 import aiosqlite
 from fastapi import FastAPI
@@ -120,10 +121,14 @@ def test_picker_import_send_history_and_steal_are_distinct(env, monkeypatch):
 def test_sticker_preflight_rejects_missing_files_ids_and_multiple_before_writes(env, monkeypatch):
     monkeypatch.setattr('app.stickers.service.sticker_service', env.service)
 
-    def no_db():
-        raise AssertionError('invalid sticker must fail before chat writes')
+    @asynccontextmanager
+    async def read_only_db():
+        # The companionship gate may read before sticker validation; writes remain forbidden.
+        async with env.db() as db:
+            await db.execute('PRAGMA query_only=ON')
+            yield db
 
-    monkeypatch.setattr(chat_routes, 'get_db', no_db)
+    monkeypatch.setattr(chat_routes, 'get_db', read_only_db)
     from app.chat.models import MsgCreate
 
     async def run():

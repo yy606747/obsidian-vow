@@ -153,6 +153,7 @@ def _stub_prepared_turn(
     reflection_context=None,
     web_search_allowed=False,
     kind="idle",
+    scene_card_allowed=False,
 ):
     prepared = PreparedOpportunityTurn(
         messages=[{"role": "user", "content": "idle trigger"}],
@@ -161,11 +162,11 @@ def _stub_prepared_turn(
             reflection_allowed=reflection_context is not None,
             web_search_allowed=web_search_allowed,
             kind=kind,
+            scene_card_allowed=scene_card_allowed,
         ),
         model_key="test-model",
         identity_snapshot={"text": "identity"},
         reflection_context=reflection_context,
-        mobile_screen_target=None,
         kind=kind,
         user_name="Alice",
         ai_name="Arden",
@@ -175,6 +176,53 @@ def _stub_prepared_turn(
         return prepared
 
     monkeypatch.setattr(opp, "_prepare_opportunity_turn", prepare)
+
+
+@pytest.mark.parametrize("kind,enabled,expected", [
+    ("night", True, "scene_card"), ("night", False, "invalid"),
+    ("idle", True, "invalid"), ("summon", True, "invalid"),
+])
+def test_scene_card_is_a_night_only_opt_in(kind, enabled, expected):
+    from app.chat.turn_profiles import classify_opportunity_control_output
+    profile = opportunity_turn_profile(runtime_capabilities=(), reflection_allowed=False,
+        kind=kind, scene_card_allowed=enabled)
+    classify = lambda text: classify_opportunity_control_output(text, profile=profile)
+    assert classify("[OPPORTUNITY_SCENE_CARD]") == expected
+    assert classify("先聊一句。[OPPORTUNITY_SCENE_CARD]") == "invalid"
+    assert classify("[OPPORTUNITY_NONE][OPPORTUNITY_SCENE_CARD]") == "invalid"
+
+
+@pytest.mark.parametrize("output,count,branch", [
+    ("[OPPORTUNITY_SCENE_CARD]", 1, "scene_card"),
+    ("[OPPORTUNITY_NONE]", 0, "none"),
+])
+def test_night_scene_choice_calls_only_the_isolated_card_entry(monkeypatch, output, count, branch):
+    from app.scenes import session
+    _stub_prepared_turn(monkeypatch, kind="night", scene_card_allowed=True)
+    broadcasts = _stub_broadcast(monkeypatch)
+    calls = []
+
+    async def core(*_args, **_kwargs):
+        return output
+
+    async def cards(**kwargs):
+        calls.append(kwargs)
+        return [{"raw_text": "PRIVATE_CARD"}]
+
+    async def no_chat(*_args, **_kwargs):
+        pytest.fail("Preparing cards must not publish ordinary chat messages")
+
+    monkeypatch.setattr(opp, "call_opportunity_core", core)
+    monkeypatch.setattr(opp, "_send_message", no_chat)
+    monkeypatch.setattr(session, "get_scene_service", lambda: SimpleNamespace(night_cards=cards))
+    result = asyncio.run(opp.run_autonomous_turn(kind="night", now=1000,
+        target={"conv_id": "conv1", "model_key": "core", "last_user_ts": 1}))
+    assert result["round_branch"] == branch
+    assert len(calls) == count
+    if calls:
+        assert calls == [{"conv_id": "conv1", "model_key": "test-model"}]
+        assert result["scene_card_count"] == 1
+    assert "PRIVATE_CARD" not in str(broadcasts) + str(result)
 
 
 # ── opportunity TurnProfile prompt ──────────────────
@@ -232,15 +280,16 @@ def test_prompt_renders_only_profile_capabilities_and_control_markers():
     assert "[RING:" not in block
     assert "[SCREEN_CHECK:" not in block
     assert "不得输出 [WORKING_MODEL_REQUEST]" in block
-    assert "本轮她没有发来新消息" in block
+    assert "本轮Alice没有发来新消息" in block
     assert "当前用户消息" not in block
     assert "最终回复仍应直接回应当前用户" not in block
     assert "额度可用也不代表应该立约" not in block
     assert "最近亲口说的情况，永远压过设备信号" in block
-    assert "骗你、撒谎、编故事，或者被你抓到了" in block
+    assert "你是Arden。" in block
+    assert "Alice骗你、撒谎、编故事，或者被你抓到了" in block
 
 
-def test_prompt_locks_mobile_target_and_exposes_reflection_only_when_allowed():
+def test_prompt_ignores_retired_mobile_capability_and_keeps_reflection():
     profile = opportunity_turn_profile(
         runtime_capabilities={"device.ring_touch", "mobile.screen_check"},
         reflection_allowed=True,
@@ -251,14 +300,11 @@ def test_prompt_locks_mobile_target_and_exposes_reflection_only_when_allowed():
             user_name="Alice",
             ai_name="Arden",
             model_key="test-model",
-            mobile_screen_target={"device_id": "android_tab", "label": "华为平板"},
         )
     )
 
     assert "[RING:" in block
-    assert "[MOBILE_SCREEN_CHECK:android_tab|原因]" in block
-    assert "华为平板" in block
-    assert "目标设备已由系统锁定" in block
+    assert "MOBILE_SCREEN_CHECK" not in block
     assert "[OPPORTUNITY_REFLECT]" in block
 
 
@@ -293,8 +339,6 @@ def _patch_prepare_context(monkeypatch):
             },
         )
 
-    async def no_mobile_target(**_kwargs):
-        return None
 
     async def no_tools(**_kwargs):
         return frozenset()
@@ -303,7 +347,6 @@ def _patch_prepare_context(monkeypatch):
         return ""
 
     monkeypatch.setattr(opp, "prepare_chat_history", fake_history)
-    monkeypatch.setattr(opp, "_autonomous_mobile_screen_target", no_mobile_target)
     monkeypatch.setattr(opp, "_runtime_capabilities", no_tools)
     monkeypatch.setattr(opp, "_runtime_context_text", lambda **_kwargs: "runtime")
     monkeypatch.setattr(opp, "load_self_wake_prompt_context", no_self_wake_context)
@@ -1093,7 +1136,8 @@ def test_normal_night_profile_exposes_only_draw_reflect_and_none():
     assert "[OPPORTUNITY_NONE]" in block
     assert "[PRESENCE_SHOW:" not in block
     assert "[HEART:" not in block
-    assert "Arden今晚不需要向Alice说话" in block
+    assert "你是Arden。" in block
+    assert "你今晚不需要向Alice说话" in block
 
 
 def test_empty_library_night_keeps_other_exits_and_requires_human_only_for_draw():

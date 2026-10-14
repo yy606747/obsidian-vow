@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from playwright.sync_api import sync_playwright
+from test_scenes_frontend import assert_home_icons_on_wall
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = Path('/tmp/obsidian-vow-gold-dust')
@@ -135,14 +136,14 @@ def main() -> None:
             page.screenshot(path=str(OUTPUT / (name + '.png')), animations='disabled')
 
         visit('/')
-        assert page.locator('.phone-screen .app-icon').count() == 11
+        assert page.locator('.phone-screen .app-icon').count() == 12
         assert page.locator('#appGrid .app-icon').count() == 8
-        assert page.locator('#dock .app-icon').count() == 3
+        assert page.locator('#dock .app-icon').count() == 4
         assert page.evaluate('typeof VowUI') == 'undefined'
         assert page.locator('.home-page, .home-orbit, .vow-atmosphere').count() == 0
         assert 'BackGroundN.webp' in page.locator('#screen').evaluate('el => getComputedStyle(el).backgroundImage')
         page.wait_for_function("document.body.dataset.homeClock === 'running'")
-        page.wait_for_timeout(2300)
+        page.wait_for_function("!document.body.classList.contains('home-arrival')")
         assert page.evaluate("document.getAnimations().filter(a => a.playState === 'running').length") == 0
         assert not page.locator('body').evaluate("el => el.classList.contains('home-arrival')")
         page.wait_for_function('window.VowDust?.state().running')
@@ -258,10 +259,11 @@ def main() -> None:
         assert page.locator('.source-modal').is_visible()
         page.evaluate('closeSource()')
 
-        # Check the launcher geometry against the original, not a recreated layout.
+        # The clock and Dock keep their original geometry. The gallery is now
+        # anchored to the wallpaper's wall rather than pushed against the Dock.
         baseline = context.new_page()
         baseline.on('pageerror', lambda error: errors.append(str(error)))
-        geometry = """() => [...document.querySelectorAll('#screen, .clock-widget, #appGrid, #dock, .app-icon .icon-img')].map(el => {
+        geometry = """() => [...document.querySelectorAll('#screen, .clock-widget, #dock')].map(el => {
             const r = el.getBoundingClientRect(); return {x:r.x, y:r.y, width:r.width, height:r.height};
         })"""
         launcher_layouts = []
@@ -273,6 +275,15 @@ def main() -> None:
             baseline.goto('http://design.test/original-launcher', wait_until='load')
             current, original = page.evaluate(geometry), baseline.evaluate(geometry)
             assert current == original, (width, current, original)
+            assert_home_icons_on_wall(page)
+            assert page.locator('#dock img').evaluate_all('imgs => imgs.map(img => img.alt)') == ['聊天', '记忆库', '心语', '小剧场']
+            dock_boxes = [item.bounding_box() for item in page.locator('#dock .icon-img').all()]
+            for i, box in enumerate(dock_boxes):
+                assert box['width'] == box['height'] == 60
+                assert 0 <= box['x'] <= width - box['width']
+                assert box['y'] == dock_boxes[0]['y']
+                if i:
+                    assert box['x'] > dock_boxes[i - 1]['x'] + dock_boxes[i - 1]['width']
             launcher_layouts.append(width)
         baseline.close()
 
@@ -376,12 +387,12 @@ def main() -> None:
         assert not errors, errors
         mutations = [(method, name) for method, name in requests if method not in ('GET', 'HEAD')]
         assert not mutations, mutations
-        (OUTPUT / 'results.json').write_text(json.dumps(dict(layouts=layout_results, launcher_geometry_matches_original=launcher_layouts, idle_animations=idle_results, dust_updates_in_1200ms=dust_ticks, dust_workload=dust_workload, dust_hidden_covered_reduced_motion_and_low_battery_pause=True, dust_preference_persisted=True, hidden_clock_paused=True, reduced_motion=True, page_errors=errors, requests=len(requests)), ensure_ascii=False, indent=2))
+        (OUTPUT / 'results.json').write_text(json.dumps(dict(layouts=layout_results, clock_and_dock_geometry_matches_original=launcher_layouts, wall_anchored_gallery=True, idle_animations=idle_results, dust_updates_in_1200ms=dust_ticks, dust_workload=dust_workload, dust_hidden_covered_reduced_motion_and_low_battery_pause=True, dust_preference_persisted=True, hidden_clock_paused=True, reduced_motion=True, page_errors=errors, requests=len(requests)), ensure_ascii=False, indent=2))
         page.goto('about:blank')
         context.unroute_all(behavior='wait')
         context.close()
         browser.close()
-    print(f'PASS: {len(layout_results)} responsive pages; original launcher geometry; bounded dust, background pause, navigation, retained drafts, stickers and memory. Screenshots: {OUTPUT}')
+    print(f'PASS: {len(layout_results)} responsive pages; original clock/Dock geometry, wall-anchored gallery; bounded dust, background pause, navigation, retained drafts, stickers and memory. Screenshots: {OUTPUT}')
 
 
 if __name__ == '__main__':

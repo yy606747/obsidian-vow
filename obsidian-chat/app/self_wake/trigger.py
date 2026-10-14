@@ -39,7 +39,7 @@ from app.presence.prompt_context import (
     presence_identity_head,
 )
 from app.tools.ledger import execution_outcome, tool_invocation_ledger
-from app.tools.prompt_renderers import render_registered_capabilities
+from app.tools.prompt_renderers import render_registered_capabilities, render_tool_usage_policy
 from app.stickers import autonomous as sticker_turn
 from app.stickers.chat import StickerDelivery
 from app.tools.registry import registered_tools_for_surface, validate_turn_advertisement
@@ -75,8 +75,8 @@ class PreparedSelfWakeTurn:
     requested_capabilities: frozenset[str]
     effective_capabilities: frozenset[str]
     unavailable_capabilities: frozenset[str]
-    mobile_screen_target: Mapping[str, str] | None
     identity_snapshot: Mapping[str, str]
+    creation_context: tuple = ()
 
 
 class SelfWakeTriggerError(RuntimeError):
@@ -122,25 +122,16 @@ async def _load_target(conv_id: str) -> dict[str, Any]:
     }
 
 
-async def _autonomous_mobile_screen_target(
-    *,
-    model_key: str,
-    now: float,
-) -> dict | None:
-    try:
-        from app.mobile_screen.autonomous import autonomous_mobile_screen_target
-
-        return await autonomous_mobile_screen_target(model_key=model_key, now=now)
-    except Exception:
-        return None
-
-
 def _ability_block(
     *,
     profile: TurnProfile,
     user_name: str,
-    mobile_screen_target: Mapping[str, str] | None,
+    ai_name: str | None = None,
 ) -> tuple[str, tuple[str, ...]]:
+    if not ai_name:
+        from app.chat.worldbook import load_worldbook_names
+
+        _, ai_name = load_worldbook_names()
     capabilities = set(profile.allowed_tool_capabilities)
     behavior = load_ai_behavior()
     rendered = render_registered_capabilities(
@@ -148,12 +139,8 @@ def _ability_block(
         capabilities=capabilities,
         context={
             "user_name": user_name,
+            "ai_name": ai_name,
             "pc_screen_available": "pc.screen_check" in capabilities,
-            "mobile_screen_available": (
-                "mobile.screen_check" in capabilities
-                and mobile_screen_target is not None
-            ),
-            "mobile_screen_target": mobile_screen_target,
             "ring_available": "device.ring_touch" in capabilities,
             "heart_prompt": str(behavior.get("heart_whisper_prompt") or "").format(
                 user_name=user_name
@@ -173,7 +160,8 @@ def _ability_block(
             "精确、单独输出这个标记。"
         ),
     ]
-    block = "[Self-Wake 本轮可用能力]\n" + "\n".join(
+    block = render_tool_usage_policy(user_name=user_name, ai_name=ai_name)
+    block += "\n\n[Self-Wake 本轮可用能力]\n" + "\n".join(
         f"{index}. {ability}" for index, ability in enumerate(abilities, 1)
     )
     block += (
@@ -181,7 +169,6 @@ def _ability_block(
         "这是一轮已消费的单次触发；不得设置或取消 self-wake，不得增删日程，"
         "不得输出 [OPPORTUNITY_NONE]、[VOW:]、[WORKING_MODEL_REQUEST] 或 [RECALL_INTENT]。"
         f"{SELF_WAKE_NONE_TOKEN} 只能单独、精确输出；与正文或工具标记混用会让整轮作废。"
-        "工具结果由执行层决定，不要伪造结果或解释标记语法。"
     )
     return block, advertised
 
@@ -205,16 +192,12 @@ async def prepare_self_wake_turn(
     )
     model_key = str(target.get("model_key") or history_ctx.model_key or DEFAULT_MODEL)
     history = list(history_ctx.history)
+    creation_context = tuple(dict(message) for message in history)
     cap_idx = history_ctx.cap_idx
     inject_offset = 0
 
-    mobile_screen_target = await _autonomous_mobile_screen_target(
-        model_key=model_key,
-        now=current,
-    )
     runtime = await resolve_autonomous_capabilities(
         model_key=model_key,
-        mobile_screen_target=mobile_screen_target,
         now=current,
     )
     from app.look_at_me.service import is_current
@@ -233,7 +216,7 @@ async def prepare_self_wake_turn(
     ability_block, advertised = _ability_block(
         profile=profile,
         user_name=user_name,
-        mobile_screen_target=mobile_screen_target,
+        ai_name=ai_name,
     )
 
     vow_block, _vow_ability = await vow_service.load_vow_prompt_context()
@@ -300,6 +283,7 @@ async def prepare_self_wake_turn(
             )
         except Exception:
             context_delivery_text = ""
+    creation_facts = []
     runtime_text = build_autonomous_runtime_context(
         now=current,
         last_user_ts=target.get("last_user_ts"),
@@ -308,6 +292,7 @@ async def prepare_self_wake_turn(
         ai_name=ai_name,
         heading="Self-Wake 实时状态",
         context_delivery_text=context_delivery_text,
+        facts_sink=creation_facts,
     )
     history.append({"role": "user", "content": runtime_text, "attachments": []})
     history.append({"role": "assistant", "content": "（嗯，知道了。）", "attachments": []})
@@ -331,7 +316,16 @@ async def prepare_self_wake_turn(
             "attachments": [],
         }
     )
+    creation_context += tuple({'role': 'user', 'content': text} for text in creation_facts)
+    if presence_identity:
+        creation_context += ({'role': 'user', 'content': presence_identity},)
+    creation_context += ({'role': 'user', 'content': f"{ai_name}原先安排这次回来时的念头：{str(wake.get('intent') or '')}\n"
+        f"原定时间：{format_owner_time(wake_at, timezone_name=timezone_name)}。这不是{user_name}当前状态的证据。"},)
+    if working_model_v2_injection_enabled():
+        creation_context += ({'role': 'user', 'content': build_v2_working_model_block(dict(working_model_head))},
+                             {'role': 'user', 'content': build_desire_block(dict(desire_head))})
     return PreparedSelfWakeTurn(
+        creation_context=creation_context,
         messages=history,
         profile=profile,
         model_key=model_key,
@@ -339,7 +333,6 @@ async def prepare_self_wake_turn(
         requested_capabilities=requested,
         effective_capabilities=effective,
         unavailable_capabilities=unavailable,
-        mobile_screen_target=mobile_screen_target,
         identity_snapshot=identity_snapshot,
     )
 
@@ -351,18 +344,9 @@ async def _broadcast_action_results(execution: ActionExecution) -> None:
             await manager.broadcast({"type": "heart_whisper", "data": payload})
         elif result.tool_name == "location.poi_search" and payload:
             await manager.broadcast({"type": "poi_search", "data": payload})
-        elif result.tool_name in {"pc.screen_check", "mobile.screen_check"} and payload:
+        elif result.tool_name == "pc.screen_check" and payload:
             event_type = str(payload.get("type") or "screen_check_pending")
             await manager.broadcast({"type": event_type, "data": payload})
-            if result.tool_name == "mobile.screen_check" and event_type == "screen_check_pending":
-                try:
-                    from app.mobile_screen.autonomous import (
-                        record_autonomous_mobile_screen_request,
-                    )
-
-                    record_autonomous_mobile_screen_request()
-                except Exception:
-                    pass
 
 
 async def _persist_visible_message(
@@ -382,6 +366,12 @@ async def _persist_visible_message(
         async with get_db() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                from app.together.delivery import defer_in_tx
+                if await defer_in_tx(db, [{"id": msg_id, "conv_id": conv_id, "role": "assistant",
+                        "content": cleaned, "created_at": created_at, "attachments": attachments}],
+                        feedback=sticker_feedback, delivery=sticker_delivery):
+                    await db.commit()
+                    return True
                 await db.execute(
                     "INSERT INTO messages "
                     "(id,conv_id,role,content,created_at,attachments) "
@@ -500,9 +490,19 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
         from app.look_at_me.service import inject_context as inject_look_at_me
         from app.chat.worldbook import load_worldbook_names
         lam_user_name, lam_ai_name = load_worldbook_names()
+        from app.heart_works.entry import attach
+        heart_entry = attach(prepared.messages, source='self_wake', turn_id=wake_id,
+            conv_id=conv_id, model_key=prepared.model_key, msg_id=msg_id,
+            user_name=lam_user_name, ai_name=lam_ai_name,
+            context_messages=getattr(prepared, 'creation_context', ()),
+            identity_text=str(prepared.identity_snapshot.get('text') or ''))
         look_at_me_meta = await inject_look_at_me(
             prepared.messages, conv_id=conv_id, turn_id=msg_id,
             user_name=lam_user_name, ai_name=lam_ai_name)
+        from app.together.recent import inject_recent
+        await inject_recent(prepared.messages, user_name=lam_user_name, ai_name=lam_ai_name)
+        from app.scenes.recent import inject_recent as inject_scene_recent
+        await inject_scene_recent(prepared.messages, user_name=lam_user_name, ai_name=lam_ai_name)
         if prepared.profile.allows_tool('sticker.send'):
             sticker_feedback = await sticker_turn.inject_feedback(
                 prepared.messages, conv_id=conv_id, turn_id=msg_id,
@@ -516,6 +516,7 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
             capabilities=tuple(sorted(prepared.effective_capabilities)),
             metadata={
                 **dict(context.metadata),
+                'heart_work_origin': heart_entry.metadata(),
                 "advertised_tools": prepared.advertised_tools,
                 "sticker_context": {'source': 'self_wake', 'message': str(wake.get('intent') or '')[:500]},
                 "effective_capabilities": tuple(
@@ -524,9 +525,6 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
                 "unavailable_capabilities": tuple(
                     sorted(prepared.unavailable_capabilities)
                 ),
-                "mobile_target_device_id": (
-                    prepared.mobile_screen_target or {}
-                ).get("device_id"),
             },
         )
         await tool_invocation_ledger.record_model_request(
@@ -549,6 +547,9 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
             },
         )
         usage_meta: dict[str, Any] = {}
+        from app.together.coexist import is_active as together_active
+        if await together_active() and await self_wake_repository.defer_unstarted(wake_id):
+            return await conclude("deferred_together")
         try:
             raw = await call_self_wake_core(
                 prepared.model_key,
@@ -603,7 +604,10 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
             metadata={"wake_id": wake_id},
         )
 
+        raw = heart_entry.extract(raw)
         control = classify_self_wake_control_output(raw, profile=prepared.profile)
+        if heart_entry.intent.strip() and control == 'none':
+            control = 'invalid'
         if control == "invalid":
             return await conclude("invalid_control_output")
         if control == "none":
@@ -643,13 +647,15 @@ async def fire_claimed_wake(wake: Mapping[str, Any]) -> dict[str, Any]:
             context=context, history=prepared.messages,
             user_name=lam_user_name, ai_name=lam_ai_name,
             core_call=call_self_wake_core,
-            pending_followup=any(r.tool_name in {'pc.screen_check', 'mobile.screen_check', 'location.poi_search', 'mobile.look_at_me'}
+            heart_entry=heart_entry,
+            pending_followup=any(r.tool_name in {'pc.screen_check', 'location.poi_search', 'mobile.look_at_me'}
                                  for r in execution.executed))
         if sticker_delivery.supplement_text:
             visible_text = sticker_delivery.supplement_text
         if sticker_delivery.failed:
             execution_error = 'sticker_supplement_failed'
-        tool_success = _tool_succeeded(execution)
+        heart_work = await heart_entry.commit()
+        tool_success = _tool_succeeded(execution) or bool(heart_work)
         had_tool_intent = bool(postprocessed.tool_intents)
 
         if visible_text or sticker_delivery.attachments:

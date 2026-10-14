@@ -17,6 +17,7 @@ from app.sentinel import (
     WAKE_BOUNDARY_RESULT_SCHEMA_VERSION,
     evaluate_wake_boundaries,
 )
+import pytest
 
 
 def _record(
@@ -189,3 +190,63 @@ def test_shared_wake_boundaries_are_judgment_free_and_use_normal_cooldown():
     }
     assert "score" not in result
     assert "judgment" not in result
+
+
+def _mobile_screen(event_id, at, state, *, device_id="phone-1", device_type="phone"):
+    return _record(event_id, kind="activity.app", source="android.activity", observed_at=at,
+                   payload={"device_id": device_id, "device_type": device_type, "device": device_type, "screen_state": state})
+
+
+@pytest.mark.parametrize("unlock_first", [False, True])
+def test_identified_screen_and_legacy_unlock_share_one_phone_history(unlock_first):
+    engine = ContextTriggerShadowRuleEngine()
+    engine.evaluate(_mobile_screen("on-initial", 1000, "on"))
+    engine.evaluate(_record("unlock-initial", kind="sensing.unlock", observed_at=1001))
+    engine.evaluate(_mobile_screen("off", 1100, "off"))
+    screen = _mobile_screen("on", 5000 if not unlock_first else 5002, "on")
+    unlock = _record("unlock", kind="sensing.unlock", observed_at=5000 if unlock_first else 5002)
+    results = [engine.evaluate(row) for row in ([unlock, screen] if unlock_first else [screen, unlock])]
+
+    matched = [row for row in results if row is not None and row.evaluation_status == EVALUATION_MATCHED]
+    assert len(matched) == 1
+    assert matched[0].features["device_key"] == "phone-1"
+    assert matched[0].features["interaction_gap_sec"] == 3999
+
+
+def test_phone_identity_arriving_later_migrates_previous_interaction_not_reset_it():
+    engine = ContextTriggerShadowRuleEngine()
+    engine.evaluate(_record("old", kind="sensing.unlock", observed_at=1000))
+    engine.evaluate(_mobile_screen("off", 1100, "off"))
+    result = engine.evaluate(_mobile_screen("on", 5000, "on"))
+    assert result.evaluation_status == EVALUATION_MATCHED
+    assert result.features["interaction_gap_sec"] == 4000
+
+
+def test_tablet_never_inherits_anonymous_phone_interactions():
+    engine = ContextTriggerShadowRuleEngine()
+    engine.evaluate(_record("phone-old", kind="sensing.unlock", observed_at=1000))
+    engine.evaluate(_mobile_screen("tablet-off", 1100, "off", device_id="tablet", device_type="tablet"))
+    result = engine.evaluate(_mobile_screen("tablet-on", 5000, "on", device_id="tablet", device_type="tablet"))
+    assert result.evaluation_status == EVALUATION_UNAVAILABLE
+    assert result.features["device_key"] == "tablet"
+    phone = engine.evaluate(_record("phone-new", kind="sensing.unlock", observed_at=5002))
+    assert phone.evaluation_status == EVALUATION_MATCHED
+    assert phone.features["device_key"] == "android-phone"
+
+
+def test_two_known_phones_make_anonymous_sensing_unavailable_not_a_shared_history():
+    engine = ContextTriggerShadowRuleEngine()
+    engine.evaluate(_mobile_screen("a", 1000, "off", device_id="phone-a"))
+    engine.evaluate(_mobile_screen("b", 1001, "off", device_id="phone-b"))
+    result = engine.evaluate(_record("anonymous", kind="sensing.unlock", observed_at=5000))
+    assert result.evaluation_status == EVALUATION_UNAVAILABLE
+    assert result.evaluation_reason == "ambiguous_device_identity"
+    assert engine.evaluate(_mobile_screen("a-on", 5001, "on", device_id="phone-a")).evaluation_status == EVALUATION_UNAVAILABLE
+    assert engine.evaluate(_mobile_screen("b-on", 5002, "on", device_id="phone-b")).evaluation_status == EVALUATION_UNAVAILABLE
+
+
+def test_delayed_screen_off_does_not_fabricate_a_new_transition():
+    engine = ContextTriggerShadowRuleEngine()
+    engine.evaluate(_mobile_screen("on", 1000, "on"))
+    assert engine.evaluate(_mobile_screen("late-off", 900, "off")) is None
+    assert engine.evaluate(_mobile_screen("on-again", 5000, "on")) is None

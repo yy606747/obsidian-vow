@@ -75,13 +75,18 @@ def test_lifespan_initializes_database_without_starting_background_tasks(monkeyp
     async def init_db():
         called.append("database")
 
+    async def recover_scenes():
+        called.append("scene_recovery")
+
     monkeypatch.setattr(main, "init_db", init_db)
+    from app.scenes.session import get_scene_service
+    monkeypatch.setattr(get_scene_service(), "recover", recover_scenes)
     monkeypatch.setattr(main.sentinel_runtime, "start_monitoring", lambda: pytest.fail("启动了哨兵"))
     monkeypatch.setattr(main.schedule_mgr, "start", lambda: pytest.fail("启动了日程"))
     monkeypatch.setattr(main, "run_startup_cleanup", lambda: pytest.fail("执行了数据清理"))
 
     async def run():
         async with main.lifespan(main.app):
-            assert called == ["database"]
+            assert called == ["database", "scene_recovery"]
 
     asyncio.run(run())

@@ -40,7 +40,9 @@ from app.chat.streaming import (
 )
 from app.vows.service import VowReadError
 from app.stickers.attachments import InvalidStickerAttachment
+from app.heart_works.chat_reference import InvalidHeartWork, resolve_references
 from app.documents.service import InvalidDocument
+from app.together.chat_gate import ordinary_turn
 
 router = APIRouter()
 router.include_router(crud_router)
@@ -71,6 +73,7 @@ def _audio_preflight_response(model_key: str, attachments: list) -> JSONResponse
 
 
 @router.post("/api/conversations/{conv_id}/send")
+@ordinary_turn
 async def send_message(conv_id: str, body: MsgCreate):
     from app.daily_chat.service import daily_chat
 
@@ -80,10 +83,14 @@ async def send_message(conv_id: str, body: MsgCreate):
         await daily_chat.adopt(conv_id)
     try:
         body.attachments = normalize_chat_attachments(body.attachments)
+        from app.heart_works.repository import Repository
+        body.attachments = await resolve_references(body.attachments, repository=Repository(get_db))
         from app.stickers.service import sticker_service
         body.attachments = await sticker_service.resolve_outgoing(body.attachments)
     except InvalidDocument as exc:
         return _chat_audio_error('invalid_document', str(exc))
+    except InvalidHeartWork as exc:
+        return _chat_audio_error('invalid_heart_work', str(exc))
     except InvalidStickerAttachment as exc:
         return _chat_audio_error('invalid_sticker_attachment', str(exc))
     except InvalidAudioAttachment as exc:
@@ -143,6 +150,7 @@ async def send_message(conv_id: str, body: MsgCreate):
 
 
 @router.post("/api/conversations/{conv_id}/regenerate")
+@ordinary_turn
 async def regenerate_message(
     conv_id: str,
     context_limit: int = 30,
@@ -167,7 +175,7 @@ async def regenerate_message(
     stubborn_streak: int = 0,
     replaced_message_id: Optional[str] = None,
 ):
-    # Gate before the regenerate transaction removes the previous answer.  A
+    # ordinary_turn reserves this turn before any previous answer is removed.
     from app.daily_chat.service import daily_chat, inherited_messages_in_tx
     if daily_chat.state:
         await daily_chat.ensure_current()

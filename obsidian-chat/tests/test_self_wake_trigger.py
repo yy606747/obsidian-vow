@@ -47,7 +47,6 @@ def _prepared(*, capabilities=("memory.remember",)):
         requested_capabilities=effective,
         effective_capabilities=effective,
         unavailable_capabilities=frozenset(),
-        mobile_screen_target=None,
         identity_snapshot={"text": "identity"},
     )
 
@@ -162,6 +161,21 @@ def test_none_is_success_without_message_or_tool(monkeypatch):
     assert context.request_id == "self_wake:wake_1"
     assert context.metadata["source_chain"] == "self_wake"
     assert request["metadata"]["intent"] == "回来看看"
+
+
+def test_self_wake_sees_recent_intimacy_without_creating_a_chat_message(monkeypatch):
+    _, _, _, calls, persisted = _install(monkeypatch, raw=SELF_WAKE_NONE_TOKEN)
+    monkeypatch.setattr("app.chat.worldbook.load_worldbook_names", lambda: ("小栀", "阿澈"))
+
+    async def recent_scene(**names):
+        assert names == {"user_name": "小栀", "ai_name": "阿澈"}
+        return "【近期亲密经历】小栀与阿澈刚刚结束小剧场。"
+
+    monkeypatch.setattr("app.scenes.recent.load_recent", recent_scene)
+    result = _run(trigger_module.fire_claimed_wake(_wake()))
+    assert result["status"] == "none_explicit"
+    assert "【近期亲密经历】" in str(calls[0][0][1])
+    assert persisted == []
 
 
 def test_tool_only_success_does_not_create_empty_message(monkeypatch):
@@ -296,11 +310,11 @@ def test_prepare_intersects_requested_runtime_and_registered(monkeypatch, sticke
     async def history(*_args, **_kwargs):
         return history_ctx
 
-    async def no_mobile(**_kwargs):
-        return None
 
     async def runtime(**_kwargs):
-        return frozenset({"memory.remember"} | ({'sticker.send'} if sticker_available else set()))
+        # A persisted pre-retirement wake cannot restore the removed tool,
+        # even if a stale runtime capability report still includes it.
+        return frozenset({"memory.remember", "mobile.screen_check"} | ({'sticker.send'} if sticker_available else set()))
 
     async def vow_context():
         return "", ""
@@ -318,7 +332,6 @@ def test_prepare_intersects_requested_runtime_and_registered(monkeypatch, sticke
 
     monkeypatch.setattr(trigger_module, "_load_target", load_target)
     monkeypatch.setattr(trigger_module, "prepare_chat_history", history)
-    monkeypatch.setattr(trigger_module, "_autonomous_mobile_screen_target", no_mobile)
     monkeypatch.setattr(trigger_module, "resolve_autonomous_capabilities", runtime)
     monkeypatch.setattr(
         trigger_module.vow_service,
@@ -347,16 +360,17 @@ def test_prepare_intersects_requested_runtime_and_registered(monkeypatch, sticke
     )
     prepared = _run(
         trigger_module.prepare_self_wake_turn(
-            _wake(capabilities=("memory.remember", "desktop.presence.show")),
+            _wake(capabilities=("memory.remember", "desktop.presence.show", "mobile.screen_check")),
             now=1_800_000_100.0,
         )
     )
     expected = frozenset({"memory.remember"} | ({'sticker.send'} if sticker_available else set()))
     assert prepared.effective_capabilities == expected
     assert prepared.unavailable_capabilities == frozenset(
-        {"desktop.presence.show"}
+        {"desktop.presence.show", "mobile.screen_check"}
     )
     assert set(prepared.advertised_tools) == expected
+    assert "MOBILE_SCREEN_CHECK" not in "\n".join(m["content"] for m in prepared.messages)
     assert ('【发图：' in '\n'.join(m['content'] for m in prepared.messages)) is sticker_available
     assert not prepared.profile.allows_tool("self_wake.schedule")
     final_prompt = prepared.messages[-1]["content"]

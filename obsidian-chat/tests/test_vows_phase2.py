@@ -482,7 +482,7 @@ def test_schedule_build_messages_injects_vow_before_ability(monkeypatch):
         list_active=_noop_async,
     ))
     monkeypatch.setattr(trigger, "prompt", SimpleNamespace(
-        build_abilities_block=lambda _u, _s: "ABILITY-BLOCK",
+        build_abilities_block=lambda _u, _s, *, ai_name: "ABILITY-BLOCK",
         build_alarm_trigger_prompt=lambda _i, _n, _u: "TRIGGER",
     ))
     async def missing_alarm_context(*_args, **_kwargs):
@@ -709,8 +709,6 @@ def test_opportunity_prompt_injects_vow_before_ability_and_heads(monkeypatch):
             {"id": "desire-head", "content": "我想诚实地陪着她。"},
         )
 
-    async def no_mobile(**_kwargs):
-        return None
 
     async def capabilities(**_kwargs):
         return frozenset({"heart.whisper"})
@@ -732,7 +730,6 @@ def test_opportunity_prompt_injects_vow_before_ability_and_heads(monkeypatch):
         "working_model_v2_injection_enabled",
         lambda: True,
     )
-    monkeypatch.setattr(opportunity_mod, "_autonomous_mobile_screen_target", no_mobile)
     monkeypatch.setattr(opportunity_mod, "_runtime_capabilities", capabilities)
     monkeypatch.setattr(
         opportunity_mod,
@@ -781,7 +778,6 @@ def _patch_opportunity_env(monkeypatch, vow_service_obj, raw_reply):
             model_key="gemini-3-flash",
             identity_snapshot={"text": "identity"},
             reflection_context=None,
-            mobile_screen_target=None,
         )
 
     monkeypatch.setattr(opportunity_mod, "vow_service", vow_service_obj)

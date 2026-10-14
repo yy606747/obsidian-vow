@@ -74,6 +74,8 @@ def _item_text(item: dict, *, max_item_chars: int) -> str:
 
 
 def _source_label(item: dict) -> str:
+    if item.get("source_type") == "heart_work" or item.get("work_id"):
+        return "心语事件"
     if item.get("source_type") == "image":
         return "图片观察"
     return "原文" if item.get("source_type") == "chunk" or item.get("kind") == "raw_chunk" else "摘要"
@@ -127,6 +129,7 @@ def _item_meta(item: dict) -> dict:
     }
     for key in (
         "candidate_id",
+        "work_id",
         "lane",
         "readout_type",
         "card_id",

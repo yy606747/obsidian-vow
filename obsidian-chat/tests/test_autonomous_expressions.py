@@ -91,7 +91,7 @@ async def run_route(route, env, monkeypatch, *, raw, matched, supplement='偷偷
             messages=[{'role': 'user', 'content': '一个空闲的瞬间'}],
             profile=opportunity_turn_profile(runtime_capabilities={'sticker.send'},
                 reflection_allowed=False, kind=route), model_key='core',
-            identity_snapshot={}, reflection_context=None, mobile_screen_target=None,
+            identity_snapshot={}, reflection_context=None,
             kind=route, advertised_tools=('sticker.send',), **NAMES)
 
         async def prepare(**_kwargs):
@@ -107,7 +107,7 @@ async def run_route(route, env, monkeypatch, *, raw, matched, supplement='偷偷
             messages=[{'role': 'user', 'content': '回来看看'}],
             profile=self_wake_turn_profile(caps), model_key='core', advertised_tools=tuple(caps),
             requested_capabilities=frozenset(), effective_capabilities=caps,
-            unavailable_capabilities=frozenset(), mobile_screen_target=None, identity_snapshot={})
+            unavailable_capabilities=frozenset(), identity_snapshot={})
 
         async def prepare(*_args, **_kwargs):
             return prepared
@@ -257,7 +257,7 @@ def test_sentinel_invitation_only_is_scoped_and_never_saved_as_empty(runtime, mo
     assert len(runtime.invitations) == int(current)
     assert result['status'] == ('core_succeeded' if success else 'core_empty')
     prompt = '\n'.join(m['content'] for m in runtime.core_calls[0])
-    assert ('【腻歪时间】' in prompt) is current
+    assert ('【邀约】' in prompt) is current
     assert all('陪我' not in str(event) for event in runtime.broadcasts)
     if success:
         assert runtime.invitations[0][0].arguments['expression'] == '一起看看[OK]这几个字'

@@ -113,6 +113,7 @@ def build_recall_trace(
         "candidate_count": candidate_count,
         "selected_count": selected_count,
         "semantic_query": bool(plan_result.get("semantic_query")),
+        "recall_timing": dict(plan_result.get("recall_timing") or {}),
         "abstain_reason": abstain_reason,
         "selected": [summarize_recall_item(item) for item in selected],
         "debug_top": [
@@ -175,6 +176,7 @@ def summarize_recall_plan(plan_result: dict | None, *, max_items: int = 5) -> di
         "candidate_count": int(plan_result.get("candidate_count") or 0),
         "selected_count": len(plan_result.get("selected") or []),
         "semantic_query": bool(plan_result.get("semantic_query")),
+        "recall_timing": dict(plan_result.get("recall_timing") or {}),
         "abstain_reason": plan_result.get("abstain_reason"),
         "selected": [
             summarize_recall_item(item, preview_length=96)

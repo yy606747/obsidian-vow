@@ -26,6 +26,100 @@ AI_NAME = "阿澈"
 
 
 @pytest.mark.parametrize('names', [(USER_NAME, AI_NAME), ('青禾', '临川')])
+def test_heart_work_prompts_and_event_bind_runtime_names(names):
+    from app.heart_works.prompts import intention_prompt, creation_prompt, feedback_prompt
+    from app.heart_works.protocol import event_text
+    user_name, ai_name = names
+    identity = {'user_name': user_name, 'ai_name': ai_name}
+    texts = [intention_prompt(**identity, capabilities=set()),
+             creation_prompt(**identity, intent_raw='写一份故事', capabilities=set()),
+             feedback_prompt(**identity, results='图片生成失败'),
+             event_text(**identity, note='', body=[{'type': 'text', 'text': '真实正文'}], cover=[], published_at=100)]
+    for text in texts:
+        assert ai_name in text and user_name in text
+        assert not any(generic in text for generic in ('用户', 'AI', '对方', 'TA'))
+    assert all(text.startswith(f'你是{ai_name}') for text in texts[:3])
+
+
+@pytest.mark.parametrize('names', [(USER_NAME, AI_NAME), ('青禾', '临川')])
+def test_heart_work_context_and_followup_keep_identity_and_original_subjects(monkeypatch, names):
+    from app.heart_works.entry import attach, attach_followup
+    monkeypatch.setattr('app.heart_works.entry.capabilities', lambda: set())
+    user_name, ai_name = names
+    original = '历史原话：小明说“我是用户，这张画是 AI 画的”。'
+    messages = [{'role': 'user', 'content': '这次的触发事实'}]
+    entry = attach(messages, source='self_wake', turn_id='wake-1', conv_id='conv', model_key='core',
+        user_name=user_name, ai_name=ai_name, identity_text='固定人设',
+        context_messages=[{'role': 'user', 'content': original, 'attachments': ['/expired-screen.png']}])
+    assert entry.snapshot['messages'][0]['content'].startswith(f'你是{ai_name}')
+    assert entry.snapshot['messages'][1] == {'role': 'user', 'content': original}
+    followup_messages = [{'role': 'user', 'content': '工具原文：小明没有附加材料。'}]
+    following = attach_followup(followup_messages, entry.metadata())
+    assert following.origin == entry.origin
+    assert following.snapshot['messages'][-1]['content'] == '工具原文：小明没有附加材料。'
+    assert f'你是{ai_name}' in followup_messages[0]['content'] and user_name in followup_messages[0]['content']
+
+
+@pytest.mark.parametrize("names", [(USER_NAME, AI_NAME), ("青禾", "临川")])
+def test_together_core_prompts_and_evidence_use_runtime_names(names):
+    from app.together.prompts import system_prompt, turn_status, event_text
+    from app.together.evidence import render_source
+    from app.together.recent import render_recent
+    user_name, ai_name = names
+    identity = dict(user_name=user_name, ai_name=ai_name)
+    texts = [system_prompt(**identity, ai_persona="固定人设", user_persona="背景", working_model="认识"),
+             turn_status(**identity, now=100, started_at=0, trigger="刚刚开始", source="screen", capture_state="paused"),
+             event_text(**identity, active_seconds=120),
+             render_recent([{"status": "ended", "ended_at": 99, "active_seconds": 120, "note": "一起听了雨"}], now=100, **identity),
+             render_source({"session_id": "session", "turn_id": "turn", "payload": {"value": {"source": "具体依据"}},
+                "evidence": {"owner_messages": [{"content": "实际说的话", "created_at": 1}], "expression": "表达", "images": []}}, **identity)]
+    assert texts[0].startswith(f"你是{ai_name}。")
+    for text in texts:
+        assert user_name in text and ai_name in text
+        assert all(generic not in text for generic in ("用户", "AI", "对方", "TA"))
+    # Second-person instructions inherit Core's explicit identity; facts retain named subjects.
+    assert all("你" not in text for text in texts[1:])
+
+
+@pytest.mark.parametrize("names", [(USER_NAME, AI_NAME), ("青禾", "临川")])
+def test_scene_core_prompts_use_runtime_relationship_names(names):
+    from app.scenes.prompts import card_messages, turn_messages, note_messages, recent_messages
+    from app.scenes.recent import render_recent
+    from app.scenes.config import DEFAULT_DEVICES
+    from app.chat.turn_profiles import opportunity_turn_profile
+    from app.chat.prompt_builder import build_opportunity_ability_block
+    user_name, ai_name = names
+    identity = dict(user_name=user_name, ai_name=ai_name, ai_persona="固定人设内容", working_model="当前认识内容")
+    bound_devices = [{**device, "label": f"toy{i + 1}"} for i, device in enumerate(DEFAULT_DEVICES)]
+    messages = [
+        *card_messages(**identity, notes="", devices=DEFAULT_DEVICES, count=1),
+        *turn_messages(**identity, card="准备卡", devices=bound_devices, history=[], now=100,
+                       started_at=0, last_wake_at=50, arrangements="", trigger="按时回来"),
+        *turn_messages(**identity, card="准备卡", devices=bound_devices, history=[], now=100,
+                       started_at=0, last_wake_at=50, arrangements="已停止", trigger="收到新反馈",
+                       phase="aftercare", paused=True),
+        *note_messages(user_name=user_name, ai_name=ai_name, ai_persona="固定人设内容",
+                       card="准备卡", rating="up", reason="", notes=""),
+        *recent_messages(user_name=user_name, ai_name=ai_name, ai_persona="固定人设内容",
+                         evidence={"items": []}, started_at=0, ended_at=100, reason="owner_ended"),
+    ]
+    profile = opportunity_turn_profile(runtime_capabilities=set(), reflection_allowed=False,
+                                       kind="night", scene_card_allowed=True)
+    ability = build_opportunity_ability_block(profile=profile, user_name=user_name, ai_name=ai_name,
+                                              model_key="test", kind="night")
+    assert user_name in ability and ai_name in ability
+    body = "\n".join(message["content"] for message in messages)
+    assert user_name in body and ai_name in body
+    assert f"你是{ai_name}" in body
+    assert all(generic not in body for generic in ("用户", "AI", "对方", "TA"))
+    recent = render_recent([{"id": "s", "status": "ended", "started_at": 0, "ended_at": 99,
+        "expires_at": 10000, "reason": "owner_ended", "evidence": {}}],
+        user_name=user_name, ai_name=ai_name, now=100)
+    assert user_name in recent and ai_name in recent
+    assert all(generic not in recent for generic in ("用户", "AI", "对方", "TA"))
+
+
+@pytest.mark.parametrize('names', [(USER_NAME, AI_NAME), ('青禾', '临川')])
 def test_look_at_me_prompts_and_memory_use_runtime_names(names):
     from app.look_at_me import prompts
     from app.tools.prompt_renderers import render_registered_capabilities
@@ -109,7 +203,7 @@ def test_cross_day_background_resolves_both_names(names):
 def test_time_capability_and_status_names_are_resolved_at_runtime(monkeypatch, use_context_names, names):
     from app.chat import worldbook
     from app.self_wake.service import render_prompt_status
-    from app.tools.prompt_renderers import render_registered_capabilities
+    from app.tools.prompt_renderers import render_registered_capabilities, render_tool_usage_policy
 
     user_name, ai_name = names
     monkeypatch.setattr(worldbook, "load_worldbook_names", lambda: names)
@@ -128,14 +222,35 @@ def test_time_capability_and_status_names_are_resolved_at_runtime(monkeypatch, u
         ("opportunity", {"self_wake.schedule", "self_wake.cancel"}),
     ):
         entries.extend(render_registered_capabilities(surface, capabilities=capabilities, context=context))
-    entries.append(("status", render_prompt_status(context)))
+    policy = render_tool_usage_policy(user_name=user_name, ai_name=ai_name)
+    assert policy.startswith(f"【能力使用】你是{ai_name}。")
     for name, text in entries:
-        if name not in {"self_wake.cancel", "status"}:
+        if name != "self_wake.cancel":
             assert user_name in text
         if name != "schedule.alarm":
-            assert ai_name in text
-        for generic in ("用户", "AI", "对方", "TA", "你", "她"):
+            assert "你" in text
+        for generic in ("用户", "AI", "对方", "TA", "她"):
             assert generic not in text
+    # Status is a fact, not a direction: retain its original named subject.
+    status = render_prompt_status(context)
+    assert ai_name in status
+    assert all(generic not in status for generic in ("用户", "AI", "对方", "TA", "你", "她"))
+
+
+@pytest.mark.parametrize("names", [(USER_NAME, AI_NAME), ("星禾", "知遥")])
+@pytest.mark.parametrize("explicit", [True, False])
+def test_core_ability_block_binds_second_person_without_rewriting_supplied_facts(monkeypatch, names, explicit):
+    from app.chat import worldbook
+
+    user_name, ai_name = names
+    monkeypatch.setattr(worldbook, "load_worldbook_names", lambda: names)
+    schedule = f"{user_name}说：‘{ai_name}，你明天记得来。’"
+    block = build_abilities_block(user_name, schedule, **({"ai_name": ai_name} if explicit else {}))
+    assert block.startswith(f"【能力使用】你是{ai_name}。")
+    assert block.count(f"你是{ai_name}。") == 1
+    assert f"把{user_name}的未来事项记入日程，供你在后续对话中参考" in block
+    assert f"【当前日程列表】\n{schedule}" in block
+    assert all(generic not in block for generic in ("用户", "AI", "对方", "TA", "她"))
 
 
 def _assert_relationship_names(text: str) -> None:
@@ -147,14 +262,17 @@ def _assert_relationship_names(text: str) -> None:
 
 def test_image_review_prompt_and_tool_use_runtime_names():
     from app.image_memory.view import image_followup_prompt
-    from app.tools.prompt_renderers import _render_view_image
+    from app.tools.prompt_renderers import _render_view_image, render_tool_usage_policy
 
     prompt = image_followup_prompt({"source_time": 1, "source_message_id": "photo", "attachment_url": "/uploads/photo.png"}, user_name=USER_NAME, ai_name=AI_NAME)
     ability = _render_view_image("main_stable", {"image_memory_available": True, "user_name": USER_NAME, "ai_name": AI_NAME})
     for text in (prompt, ability):
         _assert_relationship_names(text)
-        assert AI_NAME in text
         assert "对方" not in text and "TA" not in text
+    assert AI_NAME in prompt
+    assert "你需要核对旧图细节时" in ability
+    policy = render_tool_usage_policy(user_name=USER_NAME, ai_name=AI_NAME)
+    assert (policy + "\n" + ability).startswith(f"【能力使用】你是{AI_NAME}。")
 
 
 def test_core_relationship_blocks_use_configured_names():

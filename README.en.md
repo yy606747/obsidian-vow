@@ -62,18 +62,11 @@ Not everything that matters in a long relationship should compete for the same r
 - **Three-day Timeline** keeps a bounded background for today, yesterday, and the day before. Something important from yesterday does not have to win a semantic Top-K search to return. The window uses three calendar days, not a strict rolling 72 hours.
 - **Relational Cards** explore the gap between semantic relevance and relationship relevance. When a partner says “I feel awful today,” the useful memory may not repeat those words; it may show how this person has responded in similar moments or how they hope to be understood. Cards currently depend on source-chunk ranking and become the preferred readout only after a matching chunk is found, so they are not yet an independent retrieval index.
 
-### Pending Recall: remembering one turn later
+### Optional queries within the same turn
 
-Synchronous agentic retrieval often needs two serial Core calls: one to decide what to search for, and another to answer with the result. That is too expensive for a system funded through a personal API account over the long term.
+Ordinary chat now lets the Core request a memory or web lookup when needed, then continue its reply with the actual result in the same turn. Each turn permits at most one foreground query and one Core continuation. A query failure also returns its outcome to the continuation; messages without a query intent keep the usual chat path.
 
-Pending Recall moves the search across turns:
-
-1. The Core leaves a private `RecallIntent` with an otherwise normal reply, without adding another Core call.
-2. Broad retrieval runs after the visible reply has been delivered.
-3. When the next message arrives, a cheaper model checks whether the old intent is still useful in the new context.
-4. Only selected readouts enter the next Core context.
-
-It trades same-turn completeness for one fewer expensive Core call and accepts that some memories arrive one turn late. If the conversation has moved on, the selector may choose nothing.
+The earlier Pending Recall path ran broad retrieval after delivery and selected useful readouts for the next turn. Ordinary chat no longer creates new asynchronous recalls, while historical ledgers remain available. The current path trades one optional continuation call for same-turn continuity without requiring retrieval for every message. See [`query_turn.py`](obsidian-chat/app/chat/query_turn.py).
 
 Key paths: [`memory_v2`](obsidian-chat/app/memory_v2/), [`memory_v3`](obsidian-chat/app/memory_v3/), [`working_model`](obsidian-chat/app/working_model/), [`vows`](obsidian-chat/app/vows/), and [`memory_context.py`](obsidian-chat/app/chat/memory_context.py).
 
@@ -133,7 +126,7 @@ Obsidian Vow disabled the camera-first path and moved toward weaker signals with
 - Android contributes motion, ambient light, power, connectivity, screen state, explicitly authorized health history, and content-free metadata from allow-listed social applications.
 - The Windows agent contributes active, idle, and locked state, recent input, and a privacy-filtered foreground application.
 - Location, geofence changes, schedules, and device sessions keep their source and freshness.
-- High-sensitivity capabilities such as phone or computer screen access require separate, one-shot authorization.
+- Computer screen access keeps its one-shot request path. Phone screen and camera access use explicitly authorized Together sessions and stop when the session ends.
 
 Context Delivery normalizes provenance, freshness, count limits, and missing state before passing evidence to chat, Opportunity, Self-Wake, or Sentinel. Sensors can only say what may be happening now; they cannot stand in for a person's internal state. The same current signal also means little without the relationship history that tells the companion how to respond.
 
@@ -151,7 +144,7 @@ The [sanitized production notes (Chinese)](docs/production-notes.md) record the 
 
 Some parts are still unfinished:
 
-- Pending Recall and Reflection are implemented and enabled, but the snapshot contains no production records for either.
+- The September snapshot contains no production records for Pending Recall or Reflection. Ordinary chat now uses same-turn queries and retains historical Pending Recall ledgers.
 - Relational Cards have been generated and used as readouts, while their actual effect has not been fully tested.
 - The harness remains a mixed transition rather than one uniform tool-calling path.
 - Ubiquitous computing has not found a signal combination that is both useful enough and restrained enough.
@@ -171,6 +164,12 @@ Obsidian Vow was forked from the AionsHome `1fdb8cd` baseline. It is not a from-
 | Cross-device | Android, push, background location, phone activity, and BLE integration | Windows agent, richer Android evidence, Health Connect, Context Delivery, desktop presence, and explicit screen requests |
 
 The upstream project provided a complete application seed. Obsidian Vow's work is concentrated in relationship state, initiative, execution boundaries, cross-device context, and migrating those mechanisms onto long-running production data.
+
+## Feature update — 2026-10-14
+
+This update adds Together sessions, scenes with device playback, and Heart Works with creation, archiving, and references in chat. Recent Together conversation returns to ordinary chat after the session ends, and memory or web lookups can now continue within the same turn.
+
+Chat and heart-note pages render LaTeX, with improvements to long-history scrolling, streaming, empty-response recovery, and provider connection reuse. Thinking controls follow each endpoint's protocol. Together and scenes start disabled; setup, supported devices, and upgrade steps are covered in the [feature update notes (Chinese)](docs/feature-update-2026-10-14.md).
 
 ## Chat update — 2026-09-13
 

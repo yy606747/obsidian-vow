@@ -155,3 +155,26 @@ def test_presence_schema_adds_form_to_old_database_idempotently(tmp_path):
             await db.rollback()
 
     asyncio.run(scenario())
+
+
+def test_night_branch_migration_preserves_existing_rounds_and_is_idempotent(tmp_path):
+    async def scenario():
+        async with aiosqlite.connect(tmp_path / "night-before-scenes.db") as db:
+            await db.execute("""CREATE TABLE presence_night_rounds (
+                night_key TEXT PRIMARY KEY, timezone TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
+                branch TEXT CHECK(branch IS NULL OR branch IN ('draw','sticker','reflect','none','invalid','provider_failed')),
+                started_at REAL NOT NULL, finished_at REAL, error TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL)""")
+            await db.execute("CREATE INDEX idx_presence_night_rounds_started ON presence_night_rounds(started_at DESC)")
+            old = ("2026-09-18", "UTC", "completed", "sticker", 1, 2, "", 2)
+            await db.execute("INSERT INTO presence_night_rounds VALUES(?,?,?,?,?,?,?,?)", old)
+            await init_presence_tables(db)
+            await init_presence_tables(db)
+            assert await (await db.execute("SELECT * FROM presence_night_rounds")).fetchone() == old
+            await db.execute("INSERT INTO presence_night_rounds VALUES(?,?,?,?,?,?,?,?)",
+                ("2026-09-19", "UTC", "completed", "scene_card", 3, 4, "", 4))
+            await db.commit()
+            assert (await (await db.execute("SELECT COUNT(*) FROM presence_night_rounds")).fetchone())[0] == 2
+            assert not await (await db.execute("SELECT name FROM sqlite_master WHERE name='presence_night_rounds_before_scenes'")).fetchone()
+
+    asyncio.run(scenario())

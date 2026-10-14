@@ -97,8 +97,6 @@ def _prepare_self_wake_provider_text(monkeypatch, case):
             model_key="test-model",
         )
 
-    async def no_mobile(**_kwargs):
-        return None
 
     async def no_capabilities(**_kwargs):
         return frozenset()
@@ -108,11 +106,6 @@ def _prepare_self_wake_provider_text(monkeypatch, case):
 
     monkeypatch.setattr(self_wake_trigger, "_load_target", load_target)
     monkeypatch.setattr(self_wake_trigger, "prepare_chat_history", history)
-    monkeypatch.setattr(
-        self_wake_trigger,
-        "_autonomous_mobile_screen_target",
-        no_mobile,
-    )
     monkeypatch.setattr(
         self_wake_trigger,
         "resolve_autonomous_capabilities",

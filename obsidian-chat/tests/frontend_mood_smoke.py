@@ -205,6 +205,10 @@ def main():
         assert_mood('offscreen', 'tender')
         checks.append('reduced_motion_and_offscreen_stop_animation_but_keep_color')
 
+        # Incoming replies now preserve history reading position. Return to the
+        # bottom before exercising the separate covered-page animation case.
+        page.evaluate('scrollBottom({force:true})')
+        page.wait_for_timeout(100)
         push('covered', '有点难过。')
         wait_pulse('covered')
         page.evaluate("document.getElementById('subPageOverlay').classList.add('show')")

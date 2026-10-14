@@ -6,6 +6,8 @@ MemoryService：记忆系统对外入口。
 
 from __future__ import annotations
 
+import asyncio
+
 from . import chunks, digest, diagnostics, embedding, hybrid_recall, prompt_block, recall, recall_config, repository
 from .v2_repository import MemoryRepository
 
@@ -125,7 +127,8 @@ class MemoryService:
 
     async def create_memory(self, content: str, memory_type: str = "event", **kwargs) -> dict:
         result = await repository.create_memory(content, memory_type, **kwargs)
-        hybrid_recall.invalidate_full_corpus_cache(notes=True)
+        if not result.get("deduplicated") or result.get("index_created"):
+            hybrid_recall.invalidate_full_corpus_cache(notes=True)
         return result
 
     async def prepare_ai_note_embedding(self, content: str) -> bytes | None:
@@ -387,6 +390,7 @@ class MemoryService:
         pending_items: list[dict] | None = None,
         visible_message_ids: list[str] | None = None,
         user_name: str | None = None,
+        pending_recall_task: asyncio.Task[dict] | None = None,
         **kwargs,
     ) -> dict:
         from app.memory_v3.config import load_memory_v3_config
@@ -422,7 +426,12 @@ class MemoryService:
             ai_note_lane_enabled=memory_v3["ai_note_lane_enabled"],
             ai_note_top_k=memory_v3["ai_note_top_k"],
             ai_note_max_items=memory_v3["ai_note_max_items"],
+            query_timeout_sec=embedding.load_embedding_config()["query_timeout_sec"],
         )
+        # The caller owns this task and starts it before ordinary recall, so
+        # neither retrieval branch waits for the other to begin.
+        if pending_recall_task is not None:
+            pending_items = (await pending_recall_task).get("items") or []
         plan = hybrid_recall.merge_pending_items(
             plan,
             pending_items,
@@ -430,6 +439,8 @@ class MemoryService:
         )
         from app.image_memory.repository import valid_items
         plan["selected"] = await valid_items(plan.get("selected") or [])
+        from app.heart_works.memory import valid_items as valid_heart_events
+        plan["selected"] = await valid_heart_events(plan["selected"])
         result["summary"] = diagnostics.summarize_recall_plan(plan)
         if runtime["include_trace"]:
             result["trace"] = plan.get("trace") or diagnostics.build_recall_trace(

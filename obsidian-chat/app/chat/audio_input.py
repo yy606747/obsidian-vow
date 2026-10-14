@@ -108,7 +108,11 @@ def normalize_chat_attachments(attachments: Iterable[Any] | None) -> list[Any]:
     """Keep ordinary image URLs distinct from structured voice and sticker messages."""
 
     normalized: list[Any] = []
+    from app.heart_works.chat_reference import is_reference, normalize_reference
     for item in attachments or []:
+        if is_reference(item):
+            normalized.append(normalize_reference(item))
+            continue
         if isinstance(item, str):
             value = item.strip()
             if not value:

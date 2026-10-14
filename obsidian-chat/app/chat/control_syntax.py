@@ -13,7 +13,7 @@ from dataclasses import dataclass
 VALUE_MARKERS = {
     name.upper(): name
     for name in (
-        "MOBILE_SCREEN_CHECK",
+        "MOBILE_SCREEN_CHECK",  # Retired; hide historical/model-emitted syntax only.
         "SCREEN_CHECK",
         "POI_SEARCH",
         "MUSIC",
@@ -35,6 +35,8 @@ VALUE_MARKERS = {
         "发图",
         "做表情",
         "陪我",
+        "回忆",
+        "联网",
     )
 }
 
@@ -116,7 +118,7 @@ def _simple_value_end(text: str, start: int) -> int | None:
 
 
 def _value_end(text: str, start: int, name: str) -> int | None:
-    return (_balanced_value_end(text, start) if name in {"VOW", "发图", "做表情", "陪我"}
+    return (_balanced_value_end(text, start) if name in {"VOW", "发图", "做表情", "陪我", "回忆", "联网"}
             else _simple_value_end(text, start))
 
 

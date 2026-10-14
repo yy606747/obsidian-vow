@@ -112,6 +112,12 @@ class StickerService:
         self._schedule_panel_summary(row)
         return attachment(row)
 
+    async def remove_from_panel(self, sticker_ids: list[str]) -> list[str]:
+        ids = list(dict.fromkeys(sticker_ids))
+        await self.repo.remove_for_user(ids)
+        # Idempotent: all requested IDs are now absent from the owner's collection.
+        return ids
+
     async def collect_from_message(self, message_id: str) -> dict:
         async with self.repo._db() as db:
             origin = await (await db.execute("""SELECT attachments FROM messages

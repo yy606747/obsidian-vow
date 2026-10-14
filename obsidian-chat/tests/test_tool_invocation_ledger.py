@@ -653,7 +653,6 @@ def test_opportunity_none_records_a_successful_zero_call_turn(monkeypatch):
         model_key="core",
         identity_snapshot={},
         reflection_context=None,
-        mobile_screen_target=None,
         advertised_tools=("heart.whisper",),
     )
 

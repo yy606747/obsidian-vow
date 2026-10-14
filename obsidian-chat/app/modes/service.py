@@ -19,7 +19,6 @@ BASE_TOOL_CAPABILITIES = (
     "location.poi_search",
     "activity.summary",
     "pc.screen_check",
-    "mobile.screen_check",
     "heart.whisper",
     "memory.remember",
     "self_wake.schedule",

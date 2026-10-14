@@ -5,12 +5,14 @@ import json
 import sqlite3
 from contextlib import asynccontextmanager
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 
 import aiosqlite
 import pytest
 
 import config
+import database
 from app.chat import chat_turn, side_effects, streaming
 from app.chat.models import MsgCreate
 from app.chat.postprocess import PostProcessor
@@ -27,19 +29,12 @@ async def _open_db(path):
 
 def _init_chat_db(tmp_path):
     db_path = str(tmp_path / "phase1.db")
-
-    async def _init():
-        async with _open_db(db_path) as db:
-            await db.execute(
-                "CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT, model TEXT, created_at REAL, updated_at REAL)"
-            )
-            await db.execute(
-                "CREATE TABLE messages (id TEXT PRIMARY KEY, conv_id TEXT, role TEXT, content TEXT, created_at REAL, attachments TEXT)"
-            )
-            await init_vow_tables(db)
-            await db.commit()
-
-    asyncio.run(_init())
+    previous_path = database.DB_PATH
+    try:
+        database.DB_PATH = Path(db_path)
+        asyncio.run(database.init_db())
+    finally:
+        database.DB_PATH = previous_path
     return db_path
 
 
@@ -212,7 +207,7 @@ def test_vow_rolls_back_when_message_insert_fails(tmp_path):
     async def flow():
         async with _open_db(db_path) as db:
             await db.execute(
-                "INSERT INTO messages VALUES ('msg_dup','conv1','assistant','旧消息',1.0,'[]')"
+                "INSERT INTO messages (id,conv_id,role,content,created_at,attachments) VALUES ('msg_dup','conv1','assistant','旧消息',1.0,'[]')"
             )
             await db.commit()
         async with _open_db(db_path) as db:
@@ -227,7 +222,7 @@ def test_vow_rolls_back_when_message_insert_fails(tmp_path):
                 assert vow is not None and err is None
                 # 消息落库失败（主键冲突）→ 整事务回滚，vow 不残留
                 await db.execute(
-                    "INSERT INTO messages VALUES ('msg_dup','conv1','assistant','新消息',2.0,'[]')"
+                    "INSERT INTO messages (id,conv_id,role,content,created_at,attachments) VALUES ('msg_dup','conv1','assistant','新消息',2.0,'[]')"
                 )
                 await db.commit()
             except Exception:

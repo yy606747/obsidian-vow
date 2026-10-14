@@ -1,4 +1,35 @@
-/* The original launcher: the same wallpaper, clock, icons and positions. */
+/* The launcher entries hang on the wall between the sill and skirting board.
+   home.js maps that part of the original wallpaper through its cover crop. */
+.phone-screen {
+  background-size: var(--home-background-size, cover);
+  background-position: center var(--home-background-y, 50%);
+}
+.app-grid {
+  position: absolute; flex: none;
+  left: 50%; transform: translateX(-50%);
+  top: var(--home-wall-top, 52%); height: var(--home-wall-height, 21%);
+  width: var(--home-wall-width, calc(100% - 32px));
+  grid-template-columns: repeat(var(--home-wall-columns, 4), minmax(0, 1fr));
+  grid-auto-rows: max-content; align-content: safe center;
+  gap: 12px; padding: 0; overflow-y: auto;
+}
+.app-grid .app-icon { position: relative; gap: 4px; padding-top: 7px; }
+.app-grid .app-icon::before {
+  content: ''; position: absolute; top: 1px; left: calc(50% - 1.5px);
+  width: 3px; height: 3px; border-radius: 50%; pointer-events: none;
+  background: #b8945c; box-shadow: inset 0 1px #f5d7a077, 0 1px 2px #20150cd9;
+}
+.app-grid .app-icon::after {
+  content: ''; position: absolute; top: 4px; left: calc(50% - .5px);
+  width: 1px; height: 4px; background: #9d7b4e; pointer-events: none;
+}
+.app-grid .app-icon .icon-img {
+  width: var(--home-wall-icon-size, 54px); height: var(--home-wall-icon-size, 54px);
+  flex-shrink: 0; border-radius: calc(var(--home-wall-icon-size, 54px) * .267);
+  box-shadow: 0 2px 2px #21140d99, 1px 5px 7px #21140d4d;
+}
+.app-grid .app-icon .icon-label { margin-top: 0; line-height: 13px; font-weight: 500; }
+.dock { margin-top: auto; }
 .phone-screen::before {
   content: ''; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(180deg, #17120d20, transparent 24%, transparent 61%, #17120d16);
@@ -36,12 +67,16 @@
 .home-arrival .dock .icon-img::after { animation: homeGoldPass 1.7s ease-in-out .15s; }
 .home-arrival .dock .app-icon:nth-child(2) .icon-img::after { animation-delay: .3s; }
 .home-arrival .dock .app-icon:nth-child(3) .icon-img::after { animation-delay: .45s; }
+.home-arrival .dock .app-icon:nth-child(4) .icon-img::after { animation-delay: .6s; }
 @keyframes homeGoldPass {
   0% { opacity: 0; transform: translateX(-80%); }
   22%, 60% { opacity: 1; }
   100% { opacity: 0; transform: translateX(80%); }
 }
 .home-paused *, .home-paused *::before, .home-paused *::after { animation-play-state: paused !important; }
+@media (max-width: 360px) {
+  .dock { gap: 12px; padding-inline: 16px; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

@@ -18,6 +18,7 @@ from app.chat.worldbook import resolve_worldbook_names
 from .embedding import get_document_embedding, pack_embedding
 from .shadow_write import shadow_legacy_memory
 from .v2_repository import MemoryRepository
+from . import ai_note_dedup
 
 
 MEMORY_LIST_DEFAULT_LIMIT = 100
@@ -29,7 +30,9 @@ async def list_memories() -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT id, content, type, created_at, source_conv, keywords, importance, source_start_ts, source_end_ts, unresolved "
-            "FROM memories ORDER BY created_at DESC"
+            "FROM memories WHERE NOT EXISTS (SELECT 1 FROM memory_items i "
+            "WHERE i.legacy_memory_id=memories.id AND i.status='archived') "
+            "ORDER BY created_at DESC"
         )
         rows = await cur.fetchall()
         cur = await db.execute(
@@ -106,6 +109,17 @@ async def create_memory(content: str, memory_type: str = "event", *,
                         importance: float = 0.5,
                         source_start_ts=None,
                         source_end_ts=None, idempotency_key: str | None = None) -> dict:
+    kwargs = dict(source_conv=source_conv, keywords=keywords, importance=importance,
+                  source_start_ts=source_start_ts, source_end_ts=source_end_ts,
+                  idempotency_key=idempotency_key)
+    if memory_type == "ai_note":
+        async with ai_note_dedup.write_lock():
+            return await _create_memory(content, memory_type, **kwargs)
+    return await _create_memory(content, memory_type, **kwargs)
+
+
+async def _create_memory(content: str, memory_type: str, *, source_conv, keywords,
+                         importance, source_start_ts, source_end_ts, idempotency_key) -> dict:
     import hashlib
     mem_id = ('mem_key_' + hashlib.sha256(idempotency_key.encode()).hexdigest()
               if idempotency_key else f"mem_{int(time.time()*1000)}")
@@ -118,7 +132,17 @@ async def create_memory(content: str, memory_type: str = "event", *,
     vec = await get_document_embedding(content)
     now = time.time()
     embedding_blob = pack_embedding(vec) if vec else None
+    duplicate = (
+        await ai_note_dedup.find_duplicate(content, embedding_blob, now, db_factory=get_db)
+        if memory_type == "ai_note" else None
+    )
     async with get_db() as db:
+        if memory_type == "ai_note":
+            await db.execute("BEGIN IMMEDIATE")
+            reused = await ai_note_dedup.reuse_in_tx(db, duplicate, seen_at=now)
+            if reused:
+                await db.commit()
+                return reused
         await db.execute(
             ("INSERT OR IGNORE" if idempotency_key else "INSERT") + " INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -456,6 +480,10 @@ def _memory_list_union_sql() -> str:
             NULL AS namespace,
             'memories' AS source_table
         FROM memories
+        WHERE NOT EXISTS (
+            SELECT 1 FROM memory_items i
+            WHERE i.legacy_memory_id=memories.id AND i.status='archived'
+        )
         UNION ALL
         SELECT
             id,

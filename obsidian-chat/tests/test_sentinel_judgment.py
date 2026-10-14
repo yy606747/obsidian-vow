@@ -76,6 +76,20 @@ def test_sentinel_judgment_prompt_uses_handoff_without_debug_trace():
     assert "都只是当时的念头" in prompt_text
 
 
+def test_sentinel_judgment_explains_contact_without_directing_core_reply():
+    messages = build_sentinel_judgment_messages(
+        _attention_handoff(), context={"user_name": "小栀", "ai_name": "阿澈"},
+    )
+    prompt = messages[0]["content"]
+
+    assert "core_reason 只说明为什么想联系小栀" in prompt
+    assert "可以是关心、想念或想接着聊" in prompt
+    assert "summary 保留最近聊天和近况，区分先前状态、当前观测和推测" in prompt
+    assert "不安排阿澈先说什么、追问什么或用什么口吻" in prompt
+    assert "tone_hint 仅留作内部日志备注，不传给阿澈指导回复" in prompt
+    assert "不确定就写 uncertainty；不能把弱证据说成确定事实" in prompt
+
+
 def test_sentinel_judgment_renders_projection_without_serializing_diagnostics():
     projection = {
         "schema_version": "context_delivery_projection.v2",

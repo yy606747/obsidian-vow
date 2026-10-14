@@ -11,6 +11,7 @@ import math
 import time
 from typing import Any
 import weakref
+import sys
 
 import aiosqlite
 import numpy as np
@@ -19,6 +20,7 @@ from database import get_db
 from app.memory_v3.card_versions import READABLE_RELATIONAL_CARD_PROMPT_VERSIONS
 
 from . import embedding
+from .compaction_config import load_config as load_compaction_config
 from .chunks import extract_keywords
 from .prompt_eligibility import prompt_eligible
 
@@ -83,6 +85,7 @@ class _FullCorpusCacheEntry:
     include_cards: bool
     ai_note_lane_enabled: bool
     built_at: float
+    residency: dict = field(default_factory=dict)
     dirty_chunk_conversations: set[str] = field(default_factory=set)
     chunks_dirty: bool = False
     notes_dirty: bool = False
@@ -92,6 +95,7 @@ class _FullCorpusCacheEntry:
 
 
 _full_corpus_cache: dict[tuple[bool, bool, str], _FullCorpusCacheEntry] = {}
+_full_corpus_revision = 0
 _full_corpus_cache_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
     weakref.WeakKeyDictionary()
 )
@@ -119,6 +123,8 @@ def invalidate_full_corpus_cache(
     A TTL remains as a fallback for writes that bypass MemoryService.
     """
 
+    global _full_corpus_revision
+    _full_corpus_revision += 1
     normalized_conv = str(chunk_conv_id or "").strip()
     for entry in _full_corpus_cache.values():
         changed = False
@@ -398,6 +404,8 @@ async def _fetch_chunks(limit: int | None, *, include_cards: bool = False) -> li
         rows = await cur.fetchall()
         from app.image_memory.repository import recall_rows as image_recall_rows
         image_rows = await image_recall_rows(db)
+        from app.heart_works.memory import recall_rows as heart_event_rows
+        image_rows += await heart_event_rows(db)
     result = [dict(row) for row in rows] + image_rows
     if limit is None:
         return _sort_rows_by_recency(result)
@@ -411,6 +419,9 @@ async def _fetch_notes(
     exclude_origin_types: set[str] | None = None,
 ) -> list[dict]:
     clauses = ["status='active'", "visibility='prompt'", "TRIM(content) != ''"]
+    # Disabling compaction restores the original corpus without adding its
+    # derived summaries a second time. Original rows were never overwritten.
+    clauses.append("origin_type!='compacted'")
     params: list = []
     if origin_type:
         clauses.append("origin_type=?")
@@ -475,6 +486,8 @@ async def _fetch_chunks_for_conversations(
         rows = await cur.fetchall()
         from app.image_memory.repository import recall_rows as image_recall_rows
         image_rows = await image_recall_rows(db, normalized)
+        from app.heart_works.memory import recall_rows as heart_event_rows
+        image_rows += await heart_event_rows(db, normalized)
     return _sort_rows_by_recency([dict(row) for row in rows] + image_rows)
 
 
@@ -671,6 +684,29 @@ async def _full_corpus_candidates(
     include_cards: bool,
     ai_note_lane_enabled: bool,
 ) -> _FullCorpusCacheEntry:
+    policy = load_compaction_config()
+    if policy["enabled"]:
+        from .resident_recall import build_entry
+        bounded_key = (bool(include_cards), bool(ai_note_lane_enabled),
+                       "resident:" + embedding.embedding_signature() + ":" +
+                       str(policy["recent_days"]) + ":" + str(policy["cache_mib"]))
+        async with _full_corpus_cache_lock():
+            entry = _full_corpus_cache.get(bounded_key)
+            if (entry is None or entry.chunks_dirty or entry.notes_dirty or
+                    entry.dirty_chunk_conversations or
+                    time.monotonic() - entry.built_at >= FULL_CORPUS_CACHE_TTL_SECONDS):
+                # One variant is resident at a time. Changing flags or embedding
+                # providers cannot multiply the memory budget.
+                clear_full_corpus_cache()
+                revision = _full_corpus_revision
+                entry = await build_entry(sys.modules[__name__], policy,
+                    include_cards=include_cards, ai_note_lane_enabled=ai_note_lane_enabled)
+                if revision != _full_corpus_revision:
+                    entry.chunks_dirty = entry.notes_dirty = True
+                _full_corpus_cache[bounded_key] = entry
+            return entry
+    if any(entry.residency for entry in _full_corpus_cache.values()):
+        clear_full_corpus_cache()
     key = (
         bool(include_cards),
         bool(ai_note_lane_enabled),
@@ -759,6 +795,8 @@ def _exclude_visible_sources(
 
 
 def _source_key(item: dict) -> str:
+    if item.get("work_id"):
+        return "heart_work:" + item["work_id"]
     if item.get("source_type") == "image":
         return "image:" + str(item.get("source_message_ids")) + ":" + str(item.get("attachment_url"))
     ids = item.get("source_message_ids") or []
@@ -893,6 +931,9 @@ def _score_chunk(
     if row.get("source_type") == "image":
         item.update(source_type="image", kind="image_observation", readout_type="image_observation",
                     attachment_url=row["attachment_url"])
+    if row.get("source_type") == "heart_work":
+        item.update(source_type="heart_work", kind="event", readout_type="event",
+                    work_id=row["work_id"], event_memory_id=row.get("event_memory_id"))
     if use_card:
         item["preview"] = card_content
         item["reason"] = "; ".join(
@@ -930,13 +971,15 @@ def _score_note(
         importance = 0.5
     score = semantic_positive * 0.74 + kw_score * 0.14 + recency * 0.04 + importance * 0.03 - penalty
     origin_type = str(row.get("origin_type") or "legacy")
+    work_id = _safe_json(row.get("metadata_json"), {}).get("work_id")
     is_ai_note = bool(as_ai_note)
     return {
         "id": row["id"],
         "candidate_id": row["id"],
         "legacy_memory_id": row.get("legacy_memory_id"),
-        "source_type": "ai_note" if is_ai_note else "note",
+        "source_type": "heart_work" if work_id else "ai_note" if is_ai_note else "note",
         "origin_type": origin_type,
+        "work_id": work_id,
         "lane": "ai_note" if is_ai_note else "ordinary",
         "content": row.get("content") or "",
         "kind": row.get("kind") or "episode",
@@ -975,12 +1018,14 @@ async def hybrid_recall(
     ai_note_lane_enabled: bool = False,
     ai_note_top_k: int = 3,
     ai_note_max_items: int = 2,
+    query_timeout_sec: float | None = None,
     **_ignored,
 ) -> dict:
     query_text = _one_line(query_text)
     terms = _terms(query_text, keywords)
     recall_work_started = time.perf_counter()
     embedding_elapsed = 0.0
+    embedding_status = "skipped"
     scan_limit = None if full_corpus else max(int(candidate_limit), 0)
     diagnostic_limit = 0 if scan_limit is None else scan_limit
     effective_card_mode = card_readout_mode if relational_cards_enabled else "current_raw"
@@ -988,7 +1033,8 @@ async def hybrid_recall(
     ai_note_lane_active = bool(
         ai_note_lane_enabled and ai_note_top_k > 0 and ai_note_max_items > 0
     )
-    if full_corpus:
+    resident_enabled = load_compaction_config()["enabled"]
+    if full_corpus or resident_enabled:
         cache_entry = await _full_corpus_candidates(
             include_cards=effective_card_mode == "card_preferred",
             # Keep AI notes out of ordinary recall whenever the lane is
@@ -1060,11 +1106,24 @@ async def hybrid_recall(
     recent_usage = await _recent_usage(ids)
 
     query_embedding = None
-    if query_text and (chunks or notes or ai_notes):
+    note_overflow = bool(cache_entry and cache_entry.residency.get("note_budget_excluded_rows"))
+    if query_text and (chunks or notes or ai_notes or note_overflow):
         embedding_started = time.perf_counter()
         try:
-            query_embedding = await embedding.get_embedding(query_text)
+            if query_timeout_sec is None:
+                query_embedding = await embedding.get_embedding(query_text)
+            else:
+                # One foreground budget includes rate-slot waits, retries and
+                # backoff. Background retrieval keeps the provider's policy.
+                query_embedding = await asyncio.wait_for(
+                    embedding.get_embedding(query_text), timeout=query_timeout_sec,
+                )
+            embedding_status = "ok" if query_embedding else "unavailable"
+        except asyncio.TimeoutError:
+            embedding_status = "timeout"
+            query_embedding = None
         except Exception:
+            embedding_status = "error"
             query_embedding = None
         finally:
             embedding_elapsed = time.perf_counter() - embedding_started
@@ -1101,6 +1160,15 @@ async def hybrid_recall(
         )
         for index, row in enumerate(ai_notes)
     ]
+    if note_overflow:
+        from .resident_recall import protected_note_recall
+        disk_notes, disk_ai_notes = await protected_note_recall(
+            sys.modules[__name__], query_embedding, terms,
+            ai_note_lane_enabled=bool(ai_note_lane_enabled),
+            top_k=max(int(note_top_k), int(ai_note_top_k), 12), visible_ids=visible_ids)
+        scored_notes = list({item["id"]: item for item in [*scored_notes, *disk_notes]}.values())
+        if ai_note_lane_active:
+            scored_ai_notes = list({item["id"]: item for item in [*scored_ai_notes, *disk_ai_notes]}.values())
     scored_chunks.sort(key=lambda item: item["score"], reverse=True)
     scored_notes.sort(key=lambda item: item["score"], reverse=True)
     scored_ai_notes.sort(key=lambda item: item["score"], reverse=True)
@@ -1193,10 +1261,11 @@ async def hybrid_recall(
         "ai_note_candidate_count": len(ai_notes),
         "ai_note_selected_count": len(ai_selected),
         "candidate_windows": candidate_windows,
-        "candidate_scope": "full_corpus" if full_corpus else "bounded_window",
+        "candidate_scope": "resident" if resident_enabled else "full_corpus" if full_corpus else "bounded_window",
         "candidate_cache": {
             "enabled": cache_entry is not None,
             "ttl_seconds": FULL_CORPUS_CACHE_TTL_SECONDS if cache_entry is not None else 0,
+            **(cache_entry.residency if cache_entry is not None else {}),
         },
         "visible_message_id_count": len(visible_ids),
         "visible_source_excluded": visible_source_excluded,
@@ -1204,6 +1273,8 @@ async def hybrid_recall(
         "recall_timing": {
             "non_embedding_ms": round(non_embedding_elapsed * 1000, 2),
             "query_embedding_ms": round(embedding_elapsed * 1000, 2),
+            "query_embedding_status": embedding_status,
+            "query_timeout_sec": query_timeout_sec,
             "slow_warning_emitted": slow_warning_emitted,
         },
         "semantic_query": bool(query_embedding),
@@ -1233,6 +1304,12 @@ async def wide_chunk_recall(
     normalized_query = _one_line(query_text)
     if not normalized_query or int(top_k) <= 0:
         return []
+    if load_compaction_config()["enabled"]:
+        from .resident_recall import wide_recall
+        return await wide_recall(sys.modules[__name__], normalized_query,
+            top_k=int(top_k), as_of_ts=float(as_of_ts),
+            exclude_message_id=exclude_message_id,
+            relational_cards_enabled=relational_cards_enabled)
     chunk_matrix = None
     if full_corpus_enabled:
         entry = await _full_corpus_candidates(
@@ -1302,6 +1379,7 @@ async def wide_chunk_recall(
                 "candidate_id": str(item["id"]),
                 "source_chunk_id": str(item["id"]),
                 "source_type": item.get("source_type", "chunk"),
+                "work_id": item.get("work_id"),
                 "attachment_url": item.get("attachment_url"),
                 "source_hash": str(row.get("source_hash") or ""),
                 "source_message_ids": list(item.get("source_message_ids") or []),
@@ -1309,7 +1387,7 @@ async def wide_chunk_recall(
                 "source_end_ts": item.get("source_end_ts"),
                 "raw_content": raw_content,
                 "readout_text": readout_text,
-                "readout_type": "image_observation" if item.get("source_type") == "image" else "relational_card" if card_content else "raw_excerpt",
+                "readout_type": "event" if item.get("source_type") == "heart_work" else "image_observation" if item.get("source_type") == "image" else "relational_card" if card_content else "raw_excerpt",
                 "card_id": row.get("card_id"),
                 "card_version": row.get("card_version"),
                 "score": item.get("score"),
@@ -1341,14 +1419,17 @@ def merge_pending_items(
         return plan
     result = dict(plan)
     ordinary = [item for item in (plan.get("selected") or []) if isinstance(item, dict)]
+    def merge_key(item):
+        return ("heart_work:" + str(item["work_id"]) if item.get("work_id")
+                else str(item.get("candidate_id") or item.get("id") or ""))
     ordinary_by_id = {
-        str(item.get("candidate_id") or item.get("id") or ""): item
+        merge_key(item): item
         for item in ordinary
     }
     merged_pending: list[dict] = []
     pending_ids: set[str] = set()
     for item in pending:
-        candidate_id = str(item.get("candidate_id") or item.get("id") or "")
+        candidate_id = merge_key(item)
         if not candidate_id or candidate_id in pending_ids:
             continue
         pending_ids.add(candidate_id)
@@ -1374,7 +1455,7 @@ def merge_pending_items(
     remaining = [
         item
         for item in ordinary
-        if str(item.get("candidate_id") or item.get("id") or "") not in pending_ids
+        if merge_key(item) not in pending_ids
     ]
     result["selected"] = [*merged_pending, *remaining][: max(int(top_k), 0)]
     result["pending_selected_count"] = len(merged_pending)

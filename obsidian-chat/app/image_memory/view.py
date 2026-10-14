@@ -89,7 +89,7 @@ async def followup(context: ToolContext, result: dict) -> dict:
     messages = build_worldbook_prefix(wb)
     if vow_block:
         messages += [{"role": "user", "content": vow_block}, {"role": "assistant", "content": "（嗯，这些一直都算数。）"}]
-    messages += await cross_day_prompt(context.conv_id, user_name=user_name, ai_name=ai_name, db_factory=get_db)
+    messages += await cross_day_prompt(context.conv_id, user_name=user_name, ai_name=ai_name, context_limit=6, current_message_count=len(rows), db_factory=get_db)
     messages += [{"role": row[0], "content": row[1]} for row in reversed(rows)]
     messages.append({"role": "user", "content": image_followup_prompt(result, user_name=user_name, ai_name=ai_name),
                      "attachments": [{"url": result["attachment_url"], "mime_type": result["mime_type"],

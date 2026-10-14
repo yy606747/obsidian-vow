@@ -61,7 +61,7 @@ def test_settings_migration_preserves_custom_relational_card_slot():
         "presence_image_slot_migration_v1": True,
         "user_models": {},
         "screen_capture_enabled": False,
-        "mobile_screen_capture_enabled": False,
+        "mobile_screen_capture_enabled": True,
         "smart_ring_touch_enabled": False,
         "smart_ring_name_prefix": "AIZO",
         "smart_ring_keep_connected": False,
@@ -73,11 +73,14 @@ def test_settings_migration_preserves_custom_relational_card_slot():
 
     changed = config._ensure_endpoints_and_slots(data)
 
-    assert changed is False
+    # Legacy settings lose the retired toggle and gain newer independent slots.
+    assert changed is True
+    assert "mobile_screen_capture_enabled" not in data
     assert data["slots"]["relational_card_generation"] == {
         "endpoint": "custom",
         "model": "custom-card-model",
     }
+    assert config._ensure_endpoints_and_slots(data) is False
 
 
 def test_call_flash_lite_uses_memory_digest_slot(monkeypatch):

@@ -1,5 +1,7 @@
 """The owner's sticker picker. Importing does not add to Core's collection."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
@@ -12,6 +14,10 @@ router = APIRouter()
 
 class StickerCollect(BaseModel):
     message_id: str = Field(min_length=1, max_length=200)
+
+
+class StickerRemove(BaseModel):
+    ids: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(min_length=1)
 
 
 @router.get('/api/stickers')
@@ -38,3 +44,8 @@ async def collect_sticker(body: StickerCollect):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {'sticker': item}
+
+
+@router.post('/api/stickers/remove')
+async def remove_stickers(body: StickerRemove):
+    return {'removed_ids': await sticker_service.remove_from_panel(body.ids)}

@@ -344,20 +344,6 @@ KNOWN_TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             feedback_timing="same_turn",
         ),
         ToolDefinition(
-            tool_name="mobile.screen_check",
-            description="Request a phone/tablet screenshot via the Android app (user-confirmed), routed to a target device, then produce a follow-up reply.",
-            side_effect_level=SideEffectLevel.EXTERNAL,
-            requires_confirmation=True,
-            legacy_markers=("[MOBILE_SCREEN_CHECK:target|reason]",),
-            prompt_orders=(
-                ("main_stable", 90),
-                ("opportunity", 20),
-                ("sentinel_v2", 40),
-                ("self_wake", 30),
-            ),
-            feedback_timing="same_turn",
-        ),
-        ToolDefinition(
             tool_name="heart.whisper",
             description="Store a heart whisper attachment for the current assistant message.",
             side_effect_level=SideEffectLevel.WRITE,

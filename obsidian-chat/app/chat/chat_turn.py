@@ -12,7 +12,6 @@ from app.modes import ChatMode, ModeSnapshot, mode_service
 from app.memory_v2.digest import HANDOFF_NOTE_TIMEOUT, write_handoff_note
 from app.memory_v3.config import load_memory_v3_config
 from app.memory_v3.pending_recall import pending_recall_service
-from app.memory_v3.recall_intent import recall_intent_ability_block
 from app.memory_v3.timeline import timeline_service
 from app.vows.service import vow_service
 from app.working_model.writer import build_writer_identity_snapshot
@@ -24,7 +23,7 @@ from app.presence.prompt_context import (
     presence_identity_head,
 )
 from app.web_search import web_search_service
-from app.web_search.intent import strip_web_search_intent_markers, web_search_ability_block
+from app.web_search.intent import strip_web_search_intent_markers
 from config import load_ai_behavior
 from app.turn_diagnostics import mark_phase, trace_prompt
 
@@ -41,6 +40,7 @@ from .prompt_builder import (
     split_ability_prompt,
 )
 from .worldbook import resolve_worldbook_names
+from .query_syntax import query_ability
 
 
 def _attach_prompt_debug_meta(history: list[dict], prompt_meta: dict) -> dict:
@@ -283,13 +283,11 @@ async def prepare_send_prompt(
         control_context=control_context,
         model_key=history_ctx.model_key,
     )
-    recall_ability = ""
-    if (
-        memory_v3_config["pending_recall_enabled"]
-        and not body.fast_mode
-        and not body.memory_eval_mode
-    ):
-        recall_ability = recall_intent_ability_block(user_name=user_name)
+    query_capabilities = {
+        'memory': bool(memory_v3_config['pending_recall_enabled'] and not body.fast_mode and not body.memory_eval_mode),
+        'web': bool(web_search_service.enabled() and not body.memory_eval_mode),
+    }
+    recall_ability = query_ability(user_name=user_name, ai_name=ai_name, **query_capabilities)
     stable_ability, runtime_ability = _ability_sections(
         ability_prompt,
         user_name=user_name,
@@ -332,7 +330,6 @@ async def prepare_send_prompt(
         )
         if web_search_meta.get("status") != "disabled":
             web_runtime_block = join_prompt_blocks(
-                web_search_ability_block(),
                 str(web_search_meta.get("block") or ""),
             )
             inject_offset = insert_prompt_ack(
@@ -403,6 +400,12 @@ async def prepare_send_prompt(
         history, conv_id=conv_id,
         turn_id=f"send:{current_user_message_id}", user_name=user_name, ai_name=ai_name,
     ) if current_user_message_id and not body.memory_eval_mode else {}
+    from app.together.recent import inject_recent
+    from app.scenes.recent import inject_recent as inject_scene_recent
+    if not body.memory_eval_mode:
+        await inject_recent(history, user_name=user_name, ai_name=ai_name)
+        await inject_scene_recent(history, user_name=user_name, ai_name=ai_name)
+
     sticker_feedback_meta = {}
     if current_user_message_id and not body.memory_eval_mode:
         try:
@@ -420,31 +423,11 @@ async def prepare_send_prompt(
     handoff_note = ""
     handoff_block = ""
     handoff_skip_reason: str | None = None
-    timeline_meta = {"status": "disabled", "block": "", "entries": []}
-    if (
-        memory_v3_config["timeline_enabled"]
-        and not body.fast_mode
-        and not body.memory_eval_mode
-    ):
-        try:
-            timeline_meta = await timeline_service.prompt_context(
-                visible_messages=[
-                    {"id": message_id}
-                    for message_id in getattr(
-                        history_ctx,
-                        "visible_message_ids",
-                        [
-                            str(message.get("id") or "")
-                            for message in history_ctx.actual_recent
-                            if str(message.get("id") or "")
-                        ],
-                    )
-                ],
-                config_snapshot=memory_v3_config,
-            )
-        except Exception:
-            # 时间线是柔性持有层，读取失败不得拖垮真实回复。
-            timeline_meta = {"status": "error", "block": "", "entries": []}
+    timeline_meta = await _timeline_for_history(
+        history_ctx, config=memory_v3_config,
+        fast_mode=body.fast_mode, evaluation=body.memory_eval_mode,
+    )
+    if memory_v3_config["timeline_enabled"] and not body.fast_mode and not body.memory_eval_mode:
         handoff_skip_reason = "timeline_enabled"
     elif memory_v3_config["timeline_enabled"]:
         handoff_skip_reason = "disabled"
@@ -501,6 +484,7 @@ async def prepare_send_prompt(
         ai_dom_mode=body.ai_dom_mode,
     )
     pending_recall = {"status": "skipped", "items": []}
+    pending_task = None
     mark_phase("retrieval")
     if (
         current_user_message_id
@@ -508,29 +492,41 @@ async def prepare_send_prompt(
         and not body.memory_eval_mode
         and memory_v3_config["pending_recall_enabled"]
     ):
-        pending_recall = await pending_recall_service.prepare_for_user(
-            conv_id=conv_id,
-            user_message_id=current_user_message_id,
-            current_user_message=body.content,
-            recent_messages=history_ctx.actual_recent,
-            config_snapshot=memory_v3_config,
+        pending_task = asyncio.create_task(
+            pending_recall_service.prepare_for_user(
+                conv_id=conv_id,
+                user_message_id=current_user_message_id,
+                current_user_message=body.content,
+                recent_messages=history_ctx.actual_recent,
+                config_snapshot=memory_v3_config,
+            ),
+            name=f"chat_pending_recall:{current_user_message_id}",
         )
-    inject_offset, prompt_meta = await inject_memory_prompt(
-        history,
-        conv_id=conv_id,
-        cap_idx=runtime_cap_idx,
-        inject_offset=inject_offset,
-        actual_recent=history_ctx.actual_recent,
-        fast_mode=body.fast_mode,
-        whisper_mode=memory_whisper_mode,
-        ai_dom_mode=memory_ai_dom_mode,
-        prompt_source="send",
-        user_name=user_name,
-        current_user_content=body.content,
-        pending_items=pending_recall.get("items") or [],
-        visible_message_ids=getattr(history_ctx, "visible_message_ids", []),
-        include_working_model=False,
-    )
+    try:
+        inject_offset, prompt_meta = await inject_memory_prompt(
+            history,
+            conv_id=conv_id,
+            cap_idx=runtime_cap_idx,
+            inject_offset=inject_offset,
+            actual_recent=history_ctx.actual_recent,
+            fast_mode=body.fast_mode,
+            whisper_mode=memory_whisper_mode,
+            ai_dom_mode=memory_ai_dom_mode,
+            prompt_source="send",
+            user_name=user_name,
+            current_user_content=body.content,
+            pending_items=[],
+            pending_recall_task=pending_task,
+            visible_message_ids=getattr(history_ctx, "visible_message_ids", []),
+            include_working_model=False,
+        )
+        if pending_task is not None:
+            pending_recall = await pending_task
+    finally:
+        if pending_task is not None:
+            if not pending_task.done():
+                pending_task.cancel()
+            await asyncio.gather(pending_task, return_exceptions=True)
     mark_phase("retrieval", finished=True)
     prompt_meta = _attach_mode_meta(
         prompt_meta,
@@ -560,6 +556,7 @@ async def prepare_send_prompt(
     prompt_meta["pending_recall"] = pending_recall
     prompt_meta["memory_v3_config_snapshot"] = memory_v3_config
     prompt_meta["web_search"] = web_search_meta
+    prompt_meta['query_capabilities'] = query_capabilities
     prompt_meta["presence_outcomes"] = presence_outcome_meta
     prompt_meta["sticker_feedback"] = sticker_feedback_meta
     prompt_meta["look_at_me"] = look_at_me_meta
@@ -570,6 +567,25 @@ async def prepare_send_prompt(
     prompt_meta["cache_layout"] = cache_layout
     prompt_meta = _attach_control_meta(prompt_meta, context=control_context)
     return history_ctx.model_key, history, _attach_prompt_debug_meta(history, prompt_meta)
+
+
+async def _timeline_for_history(history_ctx, *, config, fast_mode=False, evaluation=False):
+    if not config["timeline_enabled"] or fast_mode or evaluation:
+        status = "evaluation" if evaluation else "fast_mode" if fast_mode else "disabled"
+        return {"status": status, "block": "", "entries": []}
+    user_name, ai_name = resolve_worldbook_names(history_ctx.wb)
+    try:
+        return await timeline_service.prompt_context(
+            visible_messages=[{"id": mid} for mid in getattr(
+                history_ctx, "visible_message_ids",
+                [str(message.get("id") or "") for message in history_ctx.actual_recent
+                 if str(message.get("id") or "")],
+            )],
+            config_snapshot=config, user_name=user_name, ai_name=ai_name,
+        )
+    except Exception:
+        # Recent context must not prevent delivery of the real reply.
+        return {"status": "error", "block": "", "entries": []}
 
 
 @trace_prompt("regenerate")
@@ -605,6 +621,7 @@ async def prepare_regenerate_prompt(
         attachment_policy="last_user",
     )
     mark_phase("history", finished=True)
+    memory_v3_config = load_memory_v3_config()
     history = history_ctx.history
     user_name, ai_name = resolve_worldbook_names(history_ctx.wb)
     cap_idx = history_ctx.cap_idx
@@ -696,6 +713,9 @@ async def prepare_regenerate_prompt(
         ability_prompt,
         user_name=user_name,
         vow_ability=vow_ability,
+        extra_stable=query_ability(user_name=user_name, ai_name=ai_name,
+            memory=bool(memory_v3_config['pending_recall_enabled'] and not fast_mode),
+            web=web_search_service.enabled()),
     )
     inject_offset = insert_prompt_ack(
         history,
@@ -725,6 +745,14 @@ async def prepare_regenerate_prompt(
             content=runtime_ability,
             ack="（嗯，这一刻的实际情况我清楚。）",
         )
+    timeline_meta = await _timeline_for_history(
+        history_ctx, config=memory_v3_config, fast_mode=fast_mode,
+    )
+    if timeline_meta.get("block"):
+        inject_offset = insert_prompt_ack(
+            history, cap_idx=runtime_cap_idx, inject_offset=inject_offset,
+            content=timeline_meta["block"], ack="（嗯，这些是最近几天留下的背景。）",
+        )
     web_search_replay = (
         await web_search_service.replay_for_assistant(
             replaced_message_id,
@@ -746,6 +774,11 @@ async def prepare_regenerate_prompt(
         turn_id=f"regenerate:{getattr(history_ctx, 'latest_user_message_id', '')}",
         user_name=user_name, ai_name=ai_name, replay_from=replaced_message_id or '',
     )
+    from app.together.recent import inject_recent
+    await inject_recent(history, user_name=user_name, ai_name=ai_name)
+    from app.scenes.recent import inject_recent as inject_scene_recent
+    await inject_scene_recent(history, user_name=user_name, ai_name=ai_name)
+
     sticker_feedback_meta = {}
     try:
         if replaced_message_id:
@@ -798,6 +831,7 @@ async def prepare_regenerate_prompt(
     )
     prompt_meta = _attach_control_meta(prompt_meta, context=control_context)
     prompt_meta["prompt_source"] = "regenerate"
+    prompt_meta["timeline"] = timeline_meta
     prompt_meta["advertised_tools"] = list(
         getattr(ability_prompt, "advertised_tools", ())
     )
@@ -815,8 +849,12 @@ async def prepare_regenerate_prompt(
         history_ctx.wb,
         vow_block=vow_block,
     )
-    prompt_meta["memory_v3_config_snapshot"] = load_memory_v3_config()
+    prompt_meta["memory_v3_config_snapshot"] = memory_v3_config
     prompt_meta["web_search"] = web_search_replay
+    prompt_meta['query_capabilities'] = {
+        'memory': bool(memory_v3_config['pending_recall_enabled'] and not fast_mode),
+        'web': web_search_service.enabled(),
+    }
     cache_layout["runtime_message_count"] = max(0, inject_offset - runtime_start_offset)
     cache_layout["runtime_insert_index"] = runtime_cap_idx + runtime_start_offset
     prompt_meta["cache_layout"] = cache_layout

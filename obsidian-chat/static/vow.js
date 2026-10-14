@@ -57,7 +57,7 @@
   ];
   const secondary = [
     ['/schedule', 'calendar', '日程与提醒'], ['/memory#vows', 'bookmark', '共同誓约'],
-    ['/worldbook', 'memory', '世界书'], ['/chat?whisper=1', 'heart', '密语时刻'],
+    ['/worldbook', 'memory', '世界书'], ['/chat?whisper=1', 'heart', '密语'],
     ['/devices', 'devices', '设备'], ['/location', 'location', '定位地图'],
     ['/activity-logs', 'activity', '活动日志'], ['/monitor-logs', 'log', '监控日志'],
     ['/settings', 'settings', '设置'],

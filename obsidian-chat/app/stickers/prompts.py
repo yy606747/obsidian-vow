@@ -63,10 +63,11 @@ def feedback(rows: list[dict], *, user_name: str, ai_name: str) -> str:
     return '[表情执行结果]\n' + '\n'.join(lines) if lines else ''
 
 
-def supplement(*, user_name: str, ai_name: str, expression: str, reason: str) -> str:
+def supplement(*, user_name: str, ai_name: str, expression: str, reason: str, allow_work: bool = False) -> str:
     return (f'[表情发送结果]\n{ai_name}刚才的表达是{json.dumps(expression, ensure_ascii=False)}。'
             f'实际结果：{reason}。本次尚无文字或图片送达{user_name}。'
-            f'请{ai_name}用一句普通文字补上刚才想表达的意思，本次只写正文。')
+            + (f'请{ai_name}补上刚才想表达的意思。可以写一句普通文字，也可以使用本轮的心语创作出口。'
+               if allow_work else f'请{ai_name}用一句普通文字补上刚才想表达的意思，本次只写正文。'))
 
 
 def history_note(attachments: list, *, user_name: str, ai_name: str, role: str = 'assistant') -> str:

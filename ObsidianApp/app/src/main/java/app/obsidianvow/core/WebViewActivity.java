@@ -72,6 +72,7 @@ public class WebViewActivity extends AppCompatActivity {
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingPermRequest;
     private BleBridge bleBridge;
+    private SceneDeviceBridge sceneDeviceBridge;
     private AudioBridge audioBridge;
     private volatile boolean chatVisible = false;
     private boolean chatReady = false;
@@ -212,16 +213,22 @@ public class WebViewActivity extends AppCompatActivity {
         // 聊天页真正显示到某条消息后，按消息时间撤掉它及更早的通知。
         BrandCompatibility.addJavascriptInterface(webView, new NotificationReadBridge(webView), "ObsidianNotifications");
         BrandCompatibility.addJavascriptInterface(webView, new LookAtMeBridge(webView), "ObsidianLookAtMe");
+        webView.addJavascriptInterface(new TogetherBridge(webView), "ObsidianTogether");
 
         // 原生 BLE 桥接（绕过 WebView 不支持 Web Bluetooth API 的限制）
-        bleBridge = new BleBridge(webView, this);
+        sceneDeviceBridge = SceneDeviceBridge.obtain(this);
+        sceneDeviceBridge.attach(webView,targetUrl,authToken);
+        bleBridge = sceneDeviceBridge.ble();
         BrandCompatibility.addJavascriptInterface(webView, bleBridge, "ObsidianBle");
 
         // 失控系列 BLE 广播桥（手机当广播源，玩具扫描接收）
         BrandCompatibility.addJavascriptInterface(webView, new BleAdvBridge(webView, this), "ObsidianAdv");
 
         // Muse 潮汐 BLE 广播桥
-        BrandCompatibility.addJavascriptInterface(webView, new MuseBleBridge(webView, this), "ObsidianMuse");
+        MuseBleBridge museBridge = sceneDeviceBridge.muse();
+        BrandCompatibility.addJavascriptInterface(webView, museBridge, "ObsidianMuse");
+        sceneDeviceBridge.foreground(chatVisible);
+        webView.addJavascriptInterface(sceneDeviceBridge, "ObsidianSceneDevices");
 
         // 让 DomForegroundService 能回调 WebView JS
         DomForegroundService.setWebView(webView);
@@ -652,6 +659,7 @@ public class WebViewActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (sceneDeviceBridge != null) sceneDeviceBridge.foreground(true);
         chatVisible = true;
         LookAtMeController.activity = new java.lang.ref.WeakReference<>(this);
         maybeOpenCompanionshipInvitation();
@@ -805,7 +813,8 @@ public class WebViewActivity extends AppCompatActivity {
         DomForegroundService.setWebView(null);
         MuseForegroundService.setWebView(null);
         if (audioBridge != null) { audioBridge.stop(); audioBridge = null; }
-        if (bleBridge != null) { bleBridge.shutdown(); bleBridge = null; }
+        if (sceneDeviceBridge != null) { sceneDeviceBridge.detach(webView); sceneDeviceBridge = null; }
+        bleBridge = null; // The native scene service owns the live connection.
         if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
         if (pendingPermRequest != null) { pendingPermRequest.deny(); pendingPermRequest = null; }
         WebView previous = webView;
@@ -818,6 +827,7 @@ public class WebViewActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        if (sceneDeviceBridge != null) sceneDeviceBridge.foreground(false);
         chatVisible = false;
         setChatReady(false);
         cancelRendererProbe();
@@ -861,6 +871,31 @@ public class WebViewActivity extends AppCompatActivity {
         c.notificationOpened(id);
     }
 
+    private final class TogetherBridge {
+        private final WebView source;
+        TogetherBridge(WebView source){this.source=source;}
+        @JavascriptInterface public String state(){
+            TogetherStore store=new TogetherStore(WebViewActivity.this);
+            String ending=store.end().optString("session_id");
+            org.json.JSONObject state=store.state();
+            return TogetherApi.object("id",ending.isEmpty()?state.optString("id"):ending,"ending",!ending.isEmpty(),
+                "ai_name",state.optString("ai_name")).toString();
+        }
+        private boolean trusted(){
+            if(source!=webView||isFinishing())return false;
+            Uri actual=Uri.parse(source.getUrl()==null?"":source.getUrl()), expected=Uri.parse(targetUrl);
+            return java.util.Objects.equals(actual.getScheme(),expected.getScheme())&&java.util.Objects.equals(actual.getHost(),expected.getHost())&&actual.getPort()==expected.getPort();
+        }
+        @JavascriptInterface public void resume(){mainHandler.post(()->{if(trusted())TogetherUi.open(WebViewActivity.this);});}
+        @JavascriptInterface public void open(String conv,String model,int count){
+            mainHandler.post(()->{
+                if(!trusted())return;
+                startActivity(new Intent(WebViewActivity.this,TogetherActivity.class).putExtra("conv_id",conv)
+                    .putExtra("model_key",model).putExtra("history_count",Math.max(0,Math.min(100,count))));
+            });
+        }
+    }
+
     private final class LookAtMeBridge {
         private final WebView source;
         LookAtMeBridge(WebView source) { this.source = source; }
@@ -891,7 +926,7 @@ public class WebViewActivity extends AppCompatActivity {
 
     private void showLookAtMeSettings() {
         new AlertDialog.Builder(this, R.style.Theme_ObsidianVow_Dialog)
-            .setTitle("腻歪时间 · 手机设置")
+            .setTitle("邀约 · 手机设置")
             .setItems(new String[]{"悬浮窗", "使用情况访问", "通知与来电中断", "电池优化", "vivo 后台设置说明"}, (dialog, which) -> {
                 Intent intent;
                 switch (which) {

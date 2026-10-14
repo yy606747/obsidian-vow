@@ -38,7 +38,7 @@ async def inject_feedback(messages, *, conv_id, turn_id, user_name, ai_name):
 
 async def complete_delivery(postprocessed, *, execution, profile, context, history,
                             user_name, ai_name, core_call=None, stream_model=None,
-                            temperature=0.9, other_attachments=(), pending_followup=False):
+                            temperature=0.9, other_attachments=(), pending_followup=False, heart_entry=None):
     if not profile.allows_tool('sticker.send'):
         return StickerDelivery()
     from app.chat.postprocess import PostProcessor
@@ -58,7 +58,7 @@ async def complete_delivery(postprocessed, *, execution, profile, context, histo
         user_name=user_name, ai_name=ai_name, execution=execution,
         execute_actions=execute_postprocessed_actions, stream_model=stream_model,
         processor=PostProcessor(), other_attachments=other_attachments,
-        pending_followup=pending_followup)
+        pending_followup=pending_followup, private_outlet=heart_entry)
 
 
 async def finalize_in_tx(db, *, feedback, message_id, delivery):

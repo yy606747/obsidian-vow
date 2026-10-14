@@ -345,7 +345,7 @@ def test_core_wake_orchestrator_disabled_trace_has_no_side_effects_or_prompt_pay
     assert trace["model_key"] == "mock-model"
     assert trace["preflight"]["status"] == "ready"
     # The shared chat presentation pair exists even without a configured persona.
-    assert trace["core_request"]["persona_message_count"] == 2
+    assert trace["core_request"]["persona_message_count"] == 4  # persona and shared life
     assert trace["core_request"]["history_message_count"] == 2
     assert trace["core_request"]["prompt_char_count"] > 0
     assert trace["core_request"]["system_notice"].startswith("💭 Arden的哨兵唤醒了主脑")
@@ -603,7 +603,7 @@ def test_core_wake_orchestrator_injects_working_model_desire_and_timeline_only()
     assert trace["status"] == "core_succeeded"
     assert ports.stream_messages[:6] == [
         {"role": "user", "content": "[你对她的当前认识]\n她看重边界。"},
-        {"role": "assistant", "content": "（嗯，这是我此刻对她的认识。）"},
+        {"role": "assistant", "content": "（嗯，这份认识我记得。）"},
         {"role": "user", "content": "[你此刻想以怎样的姿态与她相处]\n主动而尊重。"},
         {"role": "assistant", "content": "（嗯，这是我此刻想带进这段关系里的姿态。）"},
         {"role": "user", "content": "[最近三天的事]\n· 今天 21:00 用户说忙完了。"},
@@ -1075,58 +1075,40 @@ def test_core_wake_orchestrator_full_execute_requests_screen_check_from_marker()
     assert ports.monitor_logs[0]["screen_check_reasons"] == ["确认她是不是还在写代码"]
 
 
-def test_core_wake_preflight_exposes_locked_mobile_screen_target_only_when_supplied():
-    without_target = build_core_wake_preflight(
+def test_core_wake_preflight_does_not_advertise_retired_mobile_screen():
+    preflight = build_core_wake_preflight(
         wake_package=_wake_package(),
         execution_context=_execution_context(),
     )
-    with_target = build_core_wake_preflight(
-        wake_package=_wake_package(),
-        execution_context=_execution_context(
-            autonomous_mobile_screen_target={
-                "device_id": "android_tab",
-                "device_name": "华为平板",
-                "device_type": "tablet",
-                "label": "华为平板",
-            },
-        ),
-    )
-
-    assert "MOBILE_SCREEN_CHECK" not in without_target["core_request"]["core_prompt"]
-    prompt = with_target["core_request"]["core_prompt"]
-    assert "[MOBILE_SCREEN_CHECK:android_tab|简短原因]" in prompt
-    assert "目标已经由系统锁定" in prompt
+    assert "MOBILE_SCREEN_CHECK" not in preflight["core_request"]["core_prompt"]
+    with pytest.raises(ValueError, match="autonomous_mobile_screen_target"):
+        build_core_wake_preflight(
+            wake_package=_wake_package(),
+            execution_context=_execution_context(
+                autonomous_mobile_screen_target={"device_id": "android_tab"},
+            ),
+        )
 
 
-def test_core_wake_orchestrator_full_execute_requests_mobile_screen_check_from_marker():
+def test_core_wake_orchestrator_hides_retired_mobile_marker_without_executing_it():
     ports = _FakeCoreWakePorts(core_response="我想确认一下。[MOBILE_SCREEN_CHECK:android_tab|确认她平板上在做什么]")
 
     trace = asyncio.run(run_core_wake_orchestrator_full_execute(
         wake_package=_wake_package(),
-        execution_context=_execution_context(
-            autonomous_mobile_screen_target={
-                "device_id": "android_tab",
-                "device_name": "华为平板",
-                "device_type": "tablet",
-                "label": "华为平板",
-            },
-        ),
+        execution_context=_execution_context(),
         ports=ports,
         allow_production_side_effects=True,
     ))
 
     assert trace["status"] == "core_succeeded"
-    assert trace["mobile_screen_checks"] == [{"target": "android_tab", "reason": "确认她平板上在做什么"}]
-    assert trace["mobile_screen_check_requests"][0]["status"] == "pending"
-    assert _step_status(trace, "request_mobile_screen_check") == "succeeded"
-    assert "mobile_screen.request" in trace["production_side_effects"]
-    assert ("request_mobile_screen_check", "conv_sentinel", "core_1", "mock-model", "android_tab", "确认她平板上在做什么", "core_1", "core_1") in ports.calls
+    assert ports.mobile_screen_requests == []
+    assert "mobile_screen.request" not in trace["production_side_effects"]
     assistant_insert = next(call for call in ports.calls if call[0] == "insert_assistant_message")
     assert assistant_insert[2] == "我想确认一下。"
-    assert ports.monitor_logs[0]["mobile_screen_checks"] == [{"target": "android_tab", "reason": "确认她平板上在做什么"}]
+    assert "mobile_screen_checks" not in ports.monitor_logs[0]
 
 
-def test_core_wake_orchestrator_executes_mobile_screen_even_when_marker_only():
+def test_core_wake_orchestrator_does_not_claim_success_for_retired_marker_only():
     ports = _FakeCoreWakePorts(core_response="[MOBILE_SCREEN_CHECK:android_tab|确认她平板上在做什么]")
 
     trace = asyncio.run(run_core_wake_orchestrator_full_execute(
@@ -1136,10 +1118,9 @@ def test_core_wake_orchestrator_executes_mobile_screen_even_when_marker_only():
         allow_production_side_effects=True,
     ))
 
-    assert trace["status"] == "core_succeeded"
-    assert trace["mobile_screen_check_requests"][0]["status"] == "pending"
-    assistant_insert = next(call for call in ports.calls if call[0] == "insert_assistant_message")
-    assert assistant_insert[2] == "我想确认一下你现在在做什么。"
+    assert trace["status"] == "core_empty"
+    assert ports.mobile_screen_requests == []
+    assert not any(call[0] == "insert_assistant_message" for call in ports.calls)
 
 
 def test_core_wake_orchestrator_full_execute_runs_ring_touch_marker():

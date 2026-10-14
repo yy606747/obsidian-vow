@@ -24,7 +24,6 @@ from app.chat.commands import (
     REMEMBER_CMD_PATTERN,
     VIEW_IMAGE_PATTERN,
     SCREEN_CHECK_PATTERN,
-    MOBILE_SCREEN_CHECK_PATTERN,
     TOY_CMD_PATTERN,
     STICKER_SAVE_PATTERN,
 )
@@ -46,7 +45,6 @@ ALL_COMMAND_GROUPS = frozenset({
     "cam",
     "activity",
     "screen",
-    "mobile_screen",
     "poi",
     "schedule",
     "heart",
@@ -72,7 +70,6 @@ TOOL_COMMAND_GROUPS = {
     "monitor.camera": "cam",
     "activity.summary": "activity",
     "pc.screen_check": "screen",
-    "mobile.screen_check": "mobile_screen",
     "location.poi_search": "poi",
     "schedule.alarm": "schedule",
     "schedule.reminder": "schedule",
@@ -103,9 +100,6 @@ STRUCTURED_ACTION_ALIASES = {
     "screen": "pc.screen_check",
     "screen_check": "pc.screen_check",
     "pc.screen_check": "pc.screen_check",
-    "mobile_screen": "mobile.screen_check",
-    "mobile_screen_check": "mobile.screen_check",
-    "mobile.screen_check": "mobile.screen_check",
     "poi": "location.poi_search",
     "location.poi_search": "location.poi_search",
     "alarm": "schedule.alarm",
@@ -288,16 +282,6 @@ def _structured_arguments(tool_name: str, action: Mapping[str, Any]) -> dict | N
             args["reason"] = _one_line(reason)
         if not args.get("reason"):
             return None
-    elif tool_name == "mobile.screen_check":
-        reason = args.get("reason") or action.get("reason")
-        if reason:
-            args["reason"] = _one_line(reason)
-        target = (args.get("target") or action.get("target")
-                  or action.get("device") or action.get("value"))
-        if target:
-            args["target"] = _one_line(target)
-        if not args.get("reason"):
-            return None
     elif tool_name == "desktop.presence.draw":
         return _presence_draw_arguments(
             args.get("form") or action.get("form"),
@@ -348,16 +332,6 @@ def _structured_arguments(tool_name: str, action: Mapping[str, Any]) -> dict | N
         args = {}
 
     return args
-
-
-def _mobile_screen_args(raw: str) -> dict:
-    """解析 [MOBILE_SCREEN_CHECK:目标|原因]；无 | 时整体视为原因，目标留空。"""
-    raw = str(raw or "")
-    if "|" in raw:
-        target, reason = raw.split("|", 1)
-    else:
-        target, reason = "", raw
-    return {"target": _one_line(target), "reason": _one_line(reason)}
 
 
 def _self_wake_args(raw: str) -> dict | None:
@@ -556,15 +530,6 @@ def parse_tool_intents(
             command_group="screen",
             legacy_marker="SCREEN_CHECK",
             argument_builder=lambda match: {"reason": _one_line(match.group(1))},
-        ))
-    if "mobile_screen" in enabled:
-        parsed.extend(_regex_commands(
-            raw_text,
-            pattern=MOBILE_SCREEN_CHECK_PATTERN,
-            tool_name="mobile.screen_check",
-            command_group="mobile_screen",
-            legacy_marker="MOBILE_SCREEN_CHECK",
-            argument_builder=lambda match: _mobile_screen_args(match.group(1)),
         ))
     if "poi" in enabled:
         parsed.extend(_regex_commands(

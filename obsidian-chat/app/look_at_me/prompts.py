@@ -10,7 +10,7 @@ def duration(seconds):
 
 
 def ability(*, user_name, ai_name):
-    return (f'【腻歪时间】这是{ai_name}主动向{user_name}表达想念、撒娇和亲近的一种方式。'
+    return (f'【邀约】这是{ai_name}主动向{user_name}表达想念、撒娇和亲近的一种方式。'
             f'想黏着{user_name}、想一起待一会儿，或者只是想要一点两人的时间，都可以主动邀请。'
             f'不需要等{user_name}先开口，也不用另找特别的理由。\n'
             f'想用就写【陪我：秒数｜自由表达】，写想对{user_name}说的话；'
@@ -31,7 +31,7 @@ def fact(row, *, user_name, ai_name, now, timezone):
     if row.get('outcome'):
         result = '正常结束' if row['outcome'] == 'completed' else '提前结束'
         reason = REASONS.get(row.get('reason'), '')
-        return (f'{user_name}和{ai_name}的腻歪时间{result}，实际陪伴'
+        return (f'{user_name}和{ai_name}的这段相处{result}，实际陪伴'
                 f'{duration(row.get("actual_ms", 0) / 1000)}。{purpose}'
                 + (f'已知情况：{reason}。' if reason else ''))
     if row['status'] == 'active':
@@ -39,7 +39,7 @@ def fact(row, *, user_name, ai_name, now, timezone):
         if now >= end:
             return f'{purpose}约定截止时间已过，手机尚未回报结束结果，不能推断仍在陪伴或已经完成。'
         at = datetime.fromtimestamp(end, ZoneInfo(timezone)).strftime('%H:%M:%S')
-        return (f'现在是{user_name}和{ai_name}约好的腻歪时间。'
+        return (f'现在是{user_name}和{ai_name}约好的相处时间。'
                 f'{user_name}已同意陪伴{duration(row["duration_seconds"])}，预计{at}结束，'
                 f'还剩{duration(end - now)}。{purpose}'
                 '这表示约定仍在执行，不保证聊天页面始终在前台。')
@@ -61,7 +61,7 @@ def fact(row, *, user_name, ai_name, now, timezone):
 
 
 def acceptance(*, user_name, ai_name):
-    return (f'{user_name}已接受{ai_name}的邀请，约好的腻歪时间刚刚开始。'
+    return (f'{user_name}已接受{ai_name}的邀请，约好的相处时间刚刚开始。'
             f'这会儿是两人留给彼此的时间，{ai_name}可以接着刚才的心情和{user_name}相处。')
 
 

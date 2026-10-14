@@ -90,6 +90,90 @@ def test_adding_same_image_merges_membership_without_gifting_owner_imports_to_co
     asyncio.run(run())
 
 
+@pytest.mark.parametrize('restore', ['collect', 'import'])
+def test_bulk_removal_preserves_core_history_and_files_and_can_be_restored(env, monkeypatch, restore):
+    app = FastAPI()
+    app.include_router(sticker_routes.router)
+    monkeypatch.setattr(sticker_routes, 'sticker_service', env.service)
+    monkeypatch.setattr('app.stickers.service.configured', lambda _slot: False)
+
+    async def run():
+        raw = picture_bytes(animated=True)
+        shared = await env.service.store_bytes(raw, source_message_id='received', user_saved=True)
+        shared = await env.service.summarize(shared)
+        owner_only = await env.service.add_to_panel(picture_bytes())
+        shared_item = (await env.service.resolve_outgoing([{'type': 'sticker', 'id': shared['id']}]))[0]
+        history = json.dumps([shared_item])
+        async with env.db() as db:
+            await db.execute('INSERT INTO messages VALUES (?,?,?)', ('received', 'assistant', history))
+            await db.commit()
+        before_files = {p.name: p.read_bytes() for p in env.uploads.iterdir()}
+        ids = [shared['id'], owner_only['id'], shared['id'], 'missing']
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            for _ in range(2):  # Retrying a lost response must be harmless.
+                response = await client.post('/api/stickers/remove', json={'ids': ids})
+                assert response.status_code == 200
+                assert response.json() == {'removed_ids': [shared['id'], owner_only['id'], 'missing']}
+                assert (await client.get('/api/stickers')).json() == {'stickers': []}
+            for sid in ids[:2]:
+                with pytest.raises(InvalidStickerAttachment, match='先收藏'):
+                    await env.service.resolve_outgoing([{'type': 'sticker', 'id': sid}])
+            assert [r['id'] for r in await env.repo.library()] == [shared['id']]
+            assert (await env.repo.get(owner_only['id']))['ai_saved'] == 0
+            async with env.db() as db:
+                assert (await (await db.execute('SELECT attachments FROM messages WHERE id=?', ('received',))).fetchone())[0] == history
+                await init_tables(db)
+                await db.commit()
+            assert await env.repo.panel_library() == []  # Restart recovery cannot resurrect a removed collection.
+            assert {p.name: p.read_bytes() for p in env.uploads.iterdir()} == before_files
+            if restore == 'collect':
+                restored = await client.post('/api/stickers/collect', json={'message_id': 'received'})
+            else:
+                restored = await client.post('/api/stickers', files={'file': ('again.gif', raw, 'image/gif')})
+            assert restored.status_code == 200 and restored.json()['sticker'] == shared_item
+            assert (await client.get('/api/stickers')).json()['stickers'] == [shared_item]
+            assert await env.service.resolve_outgoing([{'type': 'sticker', 'id': shared['id']}]) == [shared_item]
+        assert len(env.calls) == 1  # Removing and restoring require no new summary/model calls.
+    asyncio.run(run())
+
+
+def test_failed_bulk_removal_rolls_back_every_membership(env, monkeypatch):
+    app = FastAPI()
+    app.include_router(sticker_routes.router)
+    monkeypatch.setattr(sticker_routes, 'sticker_service', env.service)
+    monkeypatch.setattr('app.stickers.service.configured', lambda _slot: False)
+
+    async def run():
+        items = [await env.service.add_to_panel(picture_bytes()),
+                 await env.service.add_to_panel(picture_bytes(animated=True))]
+        async with env.db() as db:
+            await db.execute("""CREATE TRIGGER reject_remove BEFORE UPDATE OF user_saved ON stickers
+                WHEN OLD.mime_type='image/gif' AND NEW.user_saved=0
+                BEGIN SELECT RAISE(ABORT,'test_write_failure'); END""")
+            await db.commit()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url='http://test') as client:
+            result = await client.post('/api/stickers/remove', json={'ids': [item['id'] for item in items]})
+            assert result.status_code == 500
+            assert {item['id'] for item in (await client.get('/api/stickers')).json()['stickers']} == {item['id'] for item in items}
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('ids', [[], [''], [None], 'all'])
+def test_removal_requires_explicit_valid_ids(monkeypatch, ids):
+    app = FastAPI()
+    app.include_router(sticker_routes.router)
+
+    async def forbidden(_ids):
+        raise AssertionError('invalid selection must not reach collection writes')
+
+    monkeypatch.setattr(sticker_routes.sticker_service, 'remove_from_panel', forbidden)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            assert (await client.post('/api/stickers/remove', json={'ids': ids})).status_code == 422
+    asyncio.run(run())
+
+
 def test_collection_migration_uses_origin_and_owner_sends_only_once(tmp_path):
     async def run():
         async with aiosqlite.connect(tmp_path / 'legacy.db') as db:

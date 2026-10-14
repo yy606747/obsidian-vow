@@ -204,20 +204,28 @@ function toggleDebugDetail(msgId) {
 let sysLogHasUnreadError = false;  // 是否有未读的错误日志
 
 function addSystemLog(d) {
-  // 按 msg_id 去重，避免 SSE + WebSocket 双通道导致重复
-  if (d.msg_id && systemLogs.some(log => log.msg_id === d.msg_id)) return;
-  const now = new Date();
-  const ts = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0') + ':' + String(now.getSeconds()).padStart(2,'0');
-  systemLogs.unshift({ ...d, _ts: ts, _id: 'slog_' + Date.now() + '_' + Math.random().toString(36).slice(2,6) });
-  // 如果是错误日志，闪烁系统日志按钮
-  if (d.has_error) {
-    sysLogHasUnreadError = true;
-    const btn = $("sysLogBtn");
-    if (btn && !btn.classList.contains('syslog-btn-flash')) {
-      btn.classList.add('syslog-btn-flash');
+  // A tab opened before this release can load this lazy module with the old facade.
+  if (window.storeSystemLog) {
+    if (!window.storeSystemLog(d)) return;
+  } else {
+    if (d.msg_id && systemLogs.some(log => log.msg_id === d.msg_id)) return;
+    systemLogs.unshift({ ...d, _ts: new Date().toLocaleTimeString(),
+      _id: 'slog_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6) });
+    let size = systemLogs.reduce((total, log) => {
+      log._size ||= JSON.stringify(log).length;
+      return total + log._size;
+    }, 0);
+    while (systemLogs.length > 1 && (systemLogs.length > 100 || size > 2_000_000)) {
+      const removed = systemLogs.pop();
+      size -= removed._size;
+      if (removed.msg_id) delete msgDebugData[removed.msg_id];
+    }
+    if (d.has_error) {
+      sysLogHasUnreadError = true;
+      $("sysLogBtn")?.classList.add('syslog-btn-flash');
     }
   }
-  renderSystemLogList();
+  if ($("sysLogModal")?.classList.contains('show')) renderSystemLogList();
 }
 
 // 添加前端网络错误到系统日志
@@ -376,35 +384,37 @@ function _buildProviderDetailHtml(u) {
   return `<h4>🧪 模型调用诊断</h4>${rows}`;
 }
 
-function renderSystemLogList() {
-  const el = $("sysLogList");
-  const countEl = $("sysLogCount");
-  if (!el) return;
-  if (countEl) countEl.textContent = `共 ${systemLogs.length} 条（刷新后清空）`;
-  if (systemLogs.length === 0) {
-    el.innerHTML = '<div class="syslog-empty">暂无日志</div>';
-    return;
-  }
-  el.innerHTML = systemLogs.map(d => {
-    const u = d.usage;
-    const tokenText = _buildTokenHtml(u);
-    const isError = d.has_error;
-    const memCount = d.recalled_memories ? d.recalled_memories.length : 0;
-    const memText = memCount > 0 ? `🧠 召回 ${memCount} 条记忆` : '🧠 无相关记忆';
-    const memCls = memCount > 0 ? 'syslog-mem' : 'syslog-mem none';
-    const v2Mini = _buildV2MemoryMiniHtml(d.memory_v2_recall);
-    const modeMini = _buildModeMiniHtml(d);
-    const detailId = 'sd_' + d._id;
+function timelineStatus(meta) {
+  const labels = {injected:'已注入', disabled:'未启用', fast_mode:'快速模式跳过',
+    evaluation:'评估模式跳过', missing:'尚未生成', stale:'已过期，等待更新',
+    source_changed:'来源已变更，等待更新', error:'读取失败',
+    all_visible_out_of_window_or_budget_dropped:'已生成，本轮去重或预算跳过'};
+  return labels[meta?.status] || meta?.status || '未记录';
+}
+
+function renderTimelineDetail(meta) {
+  if (!meta) return '<h4>最近三天的时间线</h4><div class="debug-empty">本轮未记录时间线状态</div>';
+  const coverage = meta.source_coverage || {};
+  const days = Object.entries(coverage).map(([day, value]) =>
+    `${day}：选取 ${value.selected} / ${value.available} 条来源`).join('；');
+  return `<h4>最近三天的时间线 · ${escHtml(timelineStatus(meta))}</h4>
+    <div class="debug-empty">版本 ${escHtml(meta.timeline_version ?? '-')} · 本轮 ${meta.entries?.length || 0} 条${days ? ' · ' + escHtml(days) : ''}</div>
+    ${meta.block ? `<pre class="debug-v2-json">${escHtml(meta.block)}</pre>` : ''}`;
+}
+
+function buildSystemLogDetail(d) {
+  const u = d.usage;
     // 详情内容
     let detailHtml = '';
     // 错误信息
-    if (isError && d.error_text) {
+    if (d.has_error && d.error_text) {
       detailHtml += `<div class="debug-error-text">⚠️ ${escHtml(d.error_text)}</div>`;
     }
     // Token 详情（服务器原始数据）
     detailHtml += _buildTokenDetailHtml(u);
     detailHtml += _buildProviderDetailHtml(u);
     detailHtml += _buildModeDetailHtml(d);
+    detailHtml += renderTimelineDetail(d.timeline);
     // 即时哨兵结果
     if (d.is_search_needed !== undefined) {
       const searchTag = d.is_search_needed ? '<span class="debug-search-needed">✅ 需要搜索</span>' : '<span class="debug-search-skip">⏭️ 无需搜索</span>';
@@ -440,51 +450,78 @@ function renderSystemLogList() {
       }).join('');
       detailHtml += `<h4>📝 完整 Prompt (${d.prompt_count || d.prompt_messages.length} 条)</h4><div class="debug-prompt-list">${pmItems}</div>`;
     }
-    const hasDetail = detailHtml.length > 0;
-    const errorTag = isError ? '<span class="syslog-error-tag">❌ 错误</span>' : '';
-    const entryCls = isError ? 'syslog-entry error-entry' : 'syslog-entry';
-    const providerMini = _buildProviderMiniHtml(u);
-    return `<div class="${entryCls}">
-      <span class="syslog-time">${d._ts}</span>
-      ${errorTag}
-      <span class="syslog-model">📦 ${escHtml(d.model || '?')}</span>
-      ${providerMini}
-      ${modeMini}
-      <span class="syslog-tokens">${tokenText}</span>
-      <span class="${memCls}">${memText}</span>
-      ${v2Mini}
-      ${hasDetail ? `<button class="syslog-detail-toggle" data-syslog-detail="${detailId}">详情 ▾</button>` : ''}
-      ${hasDetail ? `<div class="syslog-detail" id="${detailId}">${detailHtml}</div>` : ''}
-    </div>`;
-  }).join('');
+
+  return detailHtml;
+}
+
+function buildSystemLogEntry(d) {
+  const memCount = d.recalled_memories?.length || 0;
+  const detailId = 'sd_' + d._id;
+  return `<div class="syslog-entry${d.has_error ? ' error-entry' : ''}" data-log-id="${escHtml(d._id)}">
+    <span class="syslog-time">${escHtml(d._ts)}</span>
+    ${d.has_error ? '<span class="syslog-error-tag">❌ 错误</span>' : ''}
+    <span class="syslog-model">📦 ${escHtml(d.model || '?')}</span>
+    ${_buildProviderMiniHtml(d.usage)}${_buildModeMiniHtml(d)}
+    <span class="syslog-tokens">${_buildTokenHtml(d.usage)}</span>
+    <span class="syslog-mem${memCount ? '' : ' none'}">🧠 ${memCount ? '召回 ' + memCount + ' 条记忆' : '无相关记忆'}</span>
+    ${_buildV2MemoryMiniHtml(d.memory_v2_recall)}
+    <span class="syslog-mem">时间线：${escHtml(timelineStatus(d.timeline))}</span>
+    <button class="syslog-detail-toggle" data-syslog-detail="${escHtml(detailId)}">详情 ▾</button>
+    <div class="syslog-detail" id="${escHtml(detailId)}"></div>
+  </div>`;
+}
+
+function renderSystemLogList() {
+  const el = $("sysLogList");
+  if (!el) return;
+  const countEl = $("sysLogCount");
+  if (countEl) countEl.textContent = `最近 ${systemLogs.length} 条（最多 100 条，刷新后清空）`;
+  if (!$("sysLogModal")?.classList.contains('show')) return;
+  if (!systemLogs.length) { el.innerHTML = '<div class="syslog-empty">暂无日志</div>'; return; }
+  el.querySelector('.syslog-empty')?.remove();
+  const existing = new Map([...el.children].map(node => [node.dataset.logId, node]));
+  let cursor = el.firstElementChild;
+  for (const log of systemLogs) {
+    let node = existing.get(log._id);
+    if (!node) {
+      const template = document.createElement('template');
+      template.innerHTML = buildSystemLogEntry(log);
+      node = template.content.firstElementChild;
+    }
+    if (node !== cursor) el.insertBefore(node, cursor);
+    cursor = node.nextElementSibling;
+    existing.delete(log._id);
+  }
+  for (const node of existing.values()) node.remove();
 }
 
 function toggleSysLogDetail(id) {
   const el = document.getElementById(id);
-  if (!el) return;
-  el.classList.toggle('show');
+  const log = systemLogs.find(item => 'sd_' + item._id === id);
+  if (!el || !log) return;
+  const open = !el.classList.contains('show');
+  el.innerHTML = open ? buildSystemLogDetail(log) : '';
+  el.classList.toggle('show', open);
   const btn = el.previousElementSibling;
-  if (btn && btn.classList.contains('syslog-detail-toggle')) {
-    btn.textContent = el.classList.contains('show') ? '收起 ▴' : '详情 ▾';
-  }
+  if (btn) btn.textContent = open ? '收起 ▴' : '详情 ▾';
 }
 
 function openSystemLog() {
-  // 清除红色闪烁
   sysLogHasUnreadError = false;
-  const btn = $("sysLogBtn");
-  if (btn) btn.classList.remove('syslog-btn-flash');
+  $("sysLogBtn")?.classList.remove('syslog-btn-flash');
+  $("sysLogModal").classList.add('show');
   renderSystemLogList();
-  $("sysLogModal").classList.add("show");
 }
 function closeSystemLog() {
-  $("sysLogModal").classList.remove("show");
+  $("sysLogModal").classList.remove('show');
+  $("sysLogList")?.replaceChildren();
 }
 function clearSystemLog() {
   systemLogs = [];
+  msgDebugData = {};
   sysLogHasUnreadError = false;
-  const btn = $("sysLogBtn");
-  if (btn) btn.classList.remove('syslog-btn-flash');
+  $("sysLogBtn")?.classList.remove('syslog-btn-flash');
+  $("sysLogList")?.replaceChildren();
   renderSystemLogList();
 }
 

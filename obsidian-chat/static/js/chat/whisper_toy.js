@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════
-// ── 密语时刻：BLE 玩具控制 ──
+// ── 密语：BLE 玩具控制 ──
 // ══════════════════════════════════════════════════
 let whisperMode = false;
 let toyActivePreset = -1;
@@ -63,7 +63,7 @@ function toyExecCmd(cmd) {
   if (aiDomMode) {
     return aiDomSceneDispatch(cmd);
   }
-  // 密语时刻老模式：旧 [TOY:1..9 | STOP]
+  // 密语老模式：旧 [TOY:1..9 | STOP]
   const up = cmd.toUpperCase();
   if (up === 'STOP' || cmd === '0') return toyStopAll();
   const n = parseInt(cmd);
@@ -148,7 +148,7 @@ function whisperBuildControlSnapshot() {
 }
 
 function openWhisper() {
-  if (typeof aiDomGuard === 'function' && aiDomGuard('打开密语时刻')) return;
+  if (typeof aiDomGuard === 'function' && aiDomGuard('打开密语')) return;
   closeSidebar();
   toyLoadPresets();
   toyRenderGrid();
@@ -453,7 +453,7 @@ function whisperRestoreControlRuntimeSession() {
 
 whisperRestoreControlRuntimeSession();
 
-// URL 参数检查：从主页点击密语时刻跳转
+// URL 参数检查：从主页点击密语跳转
 (function checkWhisperParam() {
   const params = new URLSearchParams(location.search);
   if (params.get('whisper') === '1') {

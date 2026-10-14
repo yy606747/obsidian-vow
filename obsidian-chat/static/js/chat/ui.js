@@ -32,6 +32,7 @@ function showAudioInputUnavailable() {
 }
 
 function serializeChatAttachment(item) {
+  if (item?.type === 'heart_work') return {type: 'heart_work', id: String(item.id || ''), name: String(item.name || '')};
   if (item?.type === 'document') return { type: 'document', id: String(item.id || ''),
     name: item.name, url: item.url, mime_type: item.mime_type, size: item.size,
     char_count: item.char_count, page_count: item.page_count, warnings: item.warnings || [] };
@@ -178,7 +179,9 @@ function renderAttachments(atts) {
   let voiceHtml = '';
   const aiName = worldBook.ai_name || 'AI';
   atts.forEach(item => {
-    if (item?.type === 'document') {
+    if (item?.type === 'heart_work') {
+      capsuleHtml += window.ChatHeartWorks?.card(item) || '';
+    } else if (item?.type === 'document') {
       capsuleHtml += window.ChatDocuments?.card(item) || '';
     } else if (typeof item === 'object' && item.type === 'music') {
       capsuleHtml += `<div class="music-capsule" data-music-action="open" data-song-id="${escHtml(item.id)}">🎵 ${escHtml(aiName)}给你点播歌曲《${escHtml(item.name)}》</div>`;
@@ -247,6 +250,7 @@ function renderPreview() {
   if (!pendingAttachments.length && !progress) { area.className = 'preview-area'; area.innerHTML = ''; return; }
   area.className = 'preview-area has-files';
   area.innerHTML = pendingAttachments.map((a, i) => {
+    if (a?.type === 'heart_work') return `<div class="preview-item heart-work-preview">${window.ChatHeartWorks?.card(a) || ''}<button class="preview-remove" data-preview-remove="${i}" aria-label="移除心语引用">✕</button></div>`;
     if (a?.type === 'document') return `<div class="preview-item document-preview">${ChatDocuments.card(a)}<button class="preview-remove" data-preview-remove="${i}" aria-label="移除文件">✕</button></div>`;
     if (typeof isVoiceAttachment === 'function' && isVoiceAttachment(a)) {
       return `<div class="preview-item voice-preview">${renderVoicePreview(a)}<button class="preview-remove" data-preview-remove="${i}">✕</button></div>`;
@@ -314,7 +318,7 @@ function openTideControl() {
   if (!tideFacadeLoadPromise) {
     tideFacadeLoadPromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "/static/js/chat/tide_facade.js?v=20260905-brand";
+      script.src = "/static/js/chat/tide_facade.js?v=20260920-companion-names";
       script.async = true;
       script.onload = resolve;
       script.onerror = () => reject(new Error("Failed to load tide facade"));
@@ -328,7 +332,7 @@ function openTideControl() {
     })
     .catch(err => {
       console.error("[Tide] open failed:", err);
-      showToast?.("潮汐控制加载失败", 2400);
+      showToast?.("潮汐加载失败", 2400);
     });
 }
 

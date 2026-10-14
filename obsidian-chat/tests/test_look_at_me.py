@@ -159,7 +159,7 @@ def test_active_fact_does_not_spend_the_finished_feedback_budget(tmp_path):
     async def case(f):
         r=await f.create();t=f.now
         r=await f.send(r,f.event(r,1,'offered',t+1),f.event(r,2,'accepted',t+2),f.event(r,3,'started',t+3,request_id=r['id'],conv_id='today'))
-        meta=await f.claim('during');assert '约好的腻歪时间' in meta['block']
+        meta=await f.claim('during');assert '约好的相处时间' in meta['block']
         await f.repo.settle(meta,message_id='during',success=True)
         await f.send(r,f.event(r,4,'finished',t+23,outcome='completed',actual_ms=20000))
         for i in range(3):

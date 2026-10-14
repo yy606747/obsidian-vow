@@ -22,16 +22,21 @@ import android.webkit.WebView;
 import org.json.JSONObject;
 
 import java.util.UUID;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import java.lang.ref.WeakReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 
 /**
  * 原生 BLE 桥接 — 绕过 WebView 不支持 Web Bluetooth API 的限制
  *
- * 支持多设备：连接前调用 configure(json) 传入设备描述符（namePrefix/服务 UUID/
+ * 每个实例持有一条连接；连接前调用 configure(json) 传入设备描述符（namePrefix/服务 UUID/
  * 写特征/通知特征/封包方式/写类型）。默认配置兼容 SOSEXY（原行为）。
  *
  * 前端：
@@ -55,15 +60,20 @@ public class BleBridge {
     private static final String DEFAULT_FRAMING = "chunked";    // chunked | raw
     private static final String DEFAULT_WRITE_TYPE = "default"; // default | no_response
 
-    private final WebView webView;
+    private volatile WeakReference<WebView> webView;
     private final Context context;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService writeExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicLong writeEpoch = new AtomicLong();
+    private volatile boolean closing = false;
+    // Accessed only on writeExecutor, updated after actual writes, never on enqueue.
+    private final Map<String,Integer> sceneApplied = new LinkedHashMap<>();
+    private String sceneToken = "";
 
     private BluetoothAdapter adapter;
     private BluetoothLeScanner scanner;
-    private BluetoothGatt gatt;
-    private BluetoothGattCharacteristic writeChar;
+    private volatile BluetoothGatt gatt;
+    private volatile BluetoothGattCharacteristic writeChar;
     private volatile boolean connected = false;
     private volatile boolean connecting = false;
     private volatile boolean scanning = false;
@@ -79,11 +89,14 @@ public class BleBridge {
     private volatile String writeType = DEFAULT_WRITE_TYPE;
 
     public BleBridge(WebView webView, Context context) {
-        this.webView = webView;
-        this.context = context;
+        this.webView = new WeakReference<>(webView);
+        this.context = context.getApplicationContext();
         BluetoothManager bm = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         if (bm != null) adapter = bm.getAdapter();
     }
+
+    void attach(WebView view) { webView = new WeakReference<>(view); }
+    void detach(WebView view) { if(webView.get()==view) webView.clear(); }
 
     // ── JS 接口 ──
 
@@ -93,6 +106,7 @@ public class BleBridge {
      */
     @JavascriptInterface
     public void configure(String json) {
+        if (SceneDeviceBridge.active()) return;
         try {
             JSONObject j = new JSONObject(json == null ? "{}" : json);
             if (j.has("namePrefix"))  namePrefix  = j.optString("namePrefix", namePrefix);
@@ -109,11 +123,12 @@ public class BleBridge {
 
     @JavascriptInterface
     public void connect() {
+        if (connected) { callJs("toyNativeBle.onConnected()"); return; }
         if (adapter == null || !adapter.isEnabled()) {
             callJs("toyNativeBle.onError('蓝牙未开启')");
             return;
         }
-        if (connected || connecting || scanning) return;
+        if (connecting || scanning) return;
 
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
@@ -143,10 +158,12 @@ public class BleBridge {
 
     @JavascriptInterface
     public void disconnect() {
+        if (SceneDeviceBridge.active()) return;
         disconnectInternal(true);
     }
 
     private void disconnectInternal(boolean notify) {
+        writeEpoch.incrementAndGet(); // Old queued writes must not target a later connection.
         stopScan();
         connecting = false;
         boolean wasConnected = connected;
@@ -168,6 +185,21 @@ public class BleBridge {
         return connected;
     }
 
+    boolean isSosexyConnected() {
+        return connected && DEFAULT_SERVICE.equalsIgnoreCase(serviceUuid.toString())
+                && DEFAULT_WRITE.equalsIgnoreCase(writeUuid.toString()) && "chunked".equals(framing);
+    }
+
+    boolean isSceneConnected(String driver) {
+        if(driver.equals("sosexy_ble")) return isSosexyConnected();
+        return driver.equals("cx492b_ble") && connected
+                && serviceUuid.toString().equalsIgnoreCase("0000ffe0-0000-1000-8000-00805f9b34fb")
+                && writeUuid.toString().equalsIgnoreCase("0000ffe1-0000-1000-8000-00805f9b34fb")
+                && "raw".equals(framing) && "no_response".equals(writeType);
+    }
+
+    private String sceneDriver() { return "raw".equals(framing) ? "cx492b_ble" : "sosexy_ble"; }
+
     /**
      * 发送控制指令（hex 字符串）。
      * framing="chunked"：沿用 SOSEXY 的 "00 前缀 + 18 字节分包 + [rnd,idx] 包头"
@@ -175,24 +207,95 @@ public class BleBridge {
      */
     @JavascriptInterface
     public void sendData(final String hexCmd) {
-        if (!connected || writeChar == null || writeExecutor.isShutdown()) return;
+        if (closing || SceneDeviceBridge.active() || !connected || writeChar == null || writeExecutor.isShutdown()) return;
+        final long epoch = writeEpoch.get();
         try {
             writeExecutor.execute(() -> {
-                if (!connected || writeChar == null) return;
+                if (!connected || writeChar == null || epoch != writeEpoch.get() || SceneDeviceBridge.active()) return;
                 if (!isValidHex(hexCmd)) {
                     callJs("toyNativeBle.onError('BLE指令格式错误')");
                     return;
                 }
-                if ("raw".equalsIgnoreCase(framing)) sendRaw(hexCmd);
-                else sendChunked(hexCmd);
+                if ("raw".equalsIgnoreCase(framing)) sendRaw(hexCmd, () -> epoch == writeEpoch.get() && !SceneDeviceBridge.active());
+                else sendChunked(hexCmd, () -> epoch == writeEpoch.get() && !SceneDeviceBridge.active());
             });
         } catch (RejectedExecutionException ignored) {}
     }
 
+    void sendScene(String driver, String token, Map<String,Integer> values, BooleanSupplier valid) {
+        if (closing || !isSceneConnected(driver)) return;
+        final long epoch = writeEpoch.incrementAndGet();
+        try {
+            writeExecutor.execute(() -> {
+                BooleanSupplier guard = () -> epoch == writeEpoch.get() && isSceneConnected(driver) && valid.getAsBoolean();
+                if (!guard.getAsBoolean()) return;
+                if (!sceneToken.equals(token)) { sceneApplied.clear(); sceneToken=token; }
+                for (SceneChannelDelta.Command command : driver.equals("cx492b_ble")
+                        ? SceneChannelDelta.cx492b(sceneApplied,values) : SceneChannelDelta.sosexy(sceneApplied,values)) {
+                    if (!guard.getAsBoolean()) return;
+                    // An interrupted write has an unknown effect. Reconcile only
+                    // those fields next time; don't reset unrelated motors.
+                    for (String key : command.values.keySet()) sceneApplied.remove(key);
+                    if (!(driver.equals("cx492b_ble") ? sendRaw(command.hex,guard) : sendChunked(command.hex,guard))) {
+                        if (guard.getAsBoolean()) SceneDeviceBridge.gattLost(driver);
+                        return;
+                    }
+                    if (!guard.getAsBoolean()) return;
+                    sceneApplied.putAll(command.values);
+                    // Match the existing Whisper preset's inter-command gap.
+                    try { Thread.sleep(80); }
+                    catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+                }
+            });
+        } catch (RejectedExecutionException ignored) {}
+    }
+
+    void stopScene() {
+        writeEpoch.incrementAndGet(); // Invalidate old work before queueing the stop.
+        CountDownLatch latch = writeLatch;
+        if (latch != null) latch.countDown();
+        try {
+            writeExecutor.execute(() -> {
+                sceneApplied.clear(); sceneToken="";
+                String driver=sceneDriver();
+                for (int attempt = 0; attempt < 3 && isSceneConnected(driver); attempt++) {
+                    if(driver.equals("cx492b_ble")) {
+                        // Attempt both stops even if the first write fails.
+                        boolean vibration=sendRaw("55030000000000",()->connected);
+                        boolean suction=sendRaw("55090000000000",()->connected);
+                        if(vibration && suction) return;
+                    } else if (sendChunked("03000111000003110000071100", () -> connected)) return;
+                    try { Thread.sleep(100); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+                }
+            });
+        } catch (RejectedExecutionException ignored) {}
+    }
+
+    void disconnectAfterWrites() {
+        try { writeExecutor.execute(() -> disconnectInternal(true)); }
+        catch (RejectedExecutionException ignored) { disconnectInternal(true); }
+    }
+
+    void connectSceneProfile(String profile) {
+        // Legacy Dom may have left this shared GATT pointed at CX492B. Drain
+        // its stop writes before changing UUIDs and beginning SOSEXY discovery.
+        try { writeExecutor.execute(() -> {
+            if(closing || SceneDeviceBridge.active()) return;
+            disconnectInternal(true);
+            configure(profile);
+            connect();
+        }); } catch(RejectedExecutionException ignored) {}
+    }
+
     public void shutdown() {
+        closing = true;
+        writeEpoch.incrementAndGet();
         mainHandler.removeCallbacksAndMessages(null);
-        disconnectInternal(false);
-        writeExecutor.shutdownNow();
+        // A scene stop was queued by WebViewActivity before this call. Let it
+        // reach GATT before releasing the connection; don't discard that stop.
+        try { writeExecutor.execute(() -> disconnectInternal(false)); }
+        catch (RejectedExecutionException ignored) { disconnectInternal(false); }
+        writeExecutor.shutdown();
     }
 
     // ── BLE 扫描 ──
@@ -250,6 +353,7 @@ public class BleBridge {
     private final BluetoothGattCallback gattCb = new BluetoothGattCallback() {
         @Override
         public void onConnectionStateChange(BluetoothGatt g, int status, int newState) {
+            if(g!=gatt) return;
             if (newState == BluetoothGatt.STATE_CONNECTED) {
                 connecting = true;
                 try { g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH); } catch (Exception ignored) {}
@@ -264,6 +368,7 @@ public class BleBridge {
                 boolean shouldNotify = connected || connecting;
                 connecting = false;
                 connected = false;
+                SceneDeviceBridge.gattLost(sceneDriver());
                 writeChar = null;
                 if (shouldNotify) callJs("toyNativeBle.onDisconnected()");
                 try { g.close(); } catch (Exception ignored) {}
@@ -273,6 +378,7 @@ public class BleBridge {
 
         @Override
         public void onServicesDiscovered(BluetoothGatt g, int status) {
+            if(g!=gatt) return;
             connecting = false;
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 callJs("toyNativeBle.onError('服务发现失败')");
@@ -321,6 +427,7 @@ public class BleBridge {
 
         @Override
         public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int status) {
+            if(g!=gatt) return;
             lastWriteStatus = status;
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.w(TAG, "write failed status=" + status);
@@ -334,8 +441,8 @@ public class BleBridge {
 
     /** 分包写入（SOSEXY：前缀 00、18 字节一包、每包带 [rnd, idx] 包头） */
     @SuppressWarnings("deprecation")
-    private void sendChunked(String hexCmd) {
-        if (gatt == null || writeChar == null) return;
+    private boolean sendChunked(String hexCmd, BooleanSupplier valid) {
+        if (gatt == null || writeChar == null || !valid.getAsBoolean()) return false;
         try {
             byte[] data = hexToBytes("00" + hexCmd);
             int chunkSize = 18;
@@ -350,39 +457,52 @@ public class BleBridge {
                 pkt[1] = (byte) (i + 1);
                 System.arraycopy(data, start, pkt, 2, end - start);
 
-                if (!writeChunk(pkt)) {
+                if (!writeChunk(pkt, valid)) {
                     Log.w(TAG, "writeChunk timeout at chunk " + i);
-                    return;
+                    return false;
                 }
             }
             if (data.length > 0 && data.length % chunkSize == 0) {
-                writeChunk(new byte[]{(byte) rnd, (byte) (numChunks + 1)});
+                return writeChunk(new byte[]{(byte) rnd, (byte) (numChunks + 1)}, valid);
             }
+            return true;
         } catch (Exception e) {
             Log.e(TAG, "sendData(chunked) error", e);
+            return false;
         }
     }
 
     /** 整条直写（CX492B：7 字节定长帧，直接写） */
     @SuppressWarnings("deprecation")
     private void sendRaw(String hexCmd) {
-        if (gatt == null || writeChar == null) return;
+        sendRaw(hexCmd, () -> true);
+    }
+
+    private boolean sendRaw(String hexCmd, BooleanSupplier valid) {
+        if (gatt == null || writeChar == null || !valid.getAsBoolean()) return false;
         try {
             byte[] data = hexToBytes(hexCmd);
-            writeChunk(data);
+            return writeChunk(data,valid);
         } catch (Exception e) {
             Log.e(TAG, "sendData(raw) error", e);
+            return false;
         }
     }
 
     @SuppressWarnings("deprecation")
     private boolean writeChunk(byte[] value) throws InterruptedException {
-        if (gatt == null || writeChar == null || !connected) return false;
+        return writeChunk(value, () -> true);
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean writeChunk(byte[] value, BooleanSupplier valid) throws InterruptedException {
+        if (gatt == null || writeChar == null || !connected || !valid.getAsBoolean()) return false;
         CountDownLatch latch = new CountDownLatch(1);
         writeLatch = latch;
         lastWriteStatus = BluetoothGatt.GATT_SUCCESS;
         int type = writeChar.getWriteType();
         writeChar.setValue(value);
+        if (!valid.getAsBoolean()) { writeLatch = null; return false; }
         boolean accepted = gatt.writeCharacteristic(writeChar);
         if (!accepted) {
             writeLatch = null;
@@ -419,8 +539,10 @@ public class BleBridge {
     }
 
     private void callJs(String js) {
-        mainHandler.post(() -> webView.evaluateJavascript(
-                "typeof toyNativeBle!=='undefined'&&" + js, null));
+        mainHandler.post(() -> {
+            WebView view=webView.get();
+            if(view!=null) view.evaluateJavascript("typeof toyNativeBle!=='undefined'&&" + js, null);
+        });
     }
 
     private String escapeJs(String s) {

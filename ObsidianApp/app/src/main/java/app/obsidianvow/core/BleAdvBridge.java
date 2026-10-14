@@ -44,6 +44,7 @@ public class BleAdvBridge {
 
     @JavascriptInterface
     public void configure(String json) {
+        if (SceneDeviceBridge.active()) return;
         try {
             JSONObject j = new JSONObject(json == null ? "{}" : json);
             if (j.has("device")) device = j.getString("device");
@@ -55,6 +56,7 @@ public class BleAdvBridge {
 
     @JavascriptInterface
     public void play(String json) {
+        if (SceneDeviceBridge.active()) return;
         if (!supported) {
             callJs("toyNativeBle.onError('设备不支持BLE广播')");
             return;
@@ -77,6 +79,8 @@ public class BleAdvBridge {
 
     @JavascriptInterface
     public void emergencyStop() {
+        SceneDeviceBridge bridge=SceneDeviceBridge.obtain(context);
+        bridge.panic();
         requestStop(DomForegroundService.ACTION_EMERGENCY_STOP, false);
     }
 
@@ -91,6 +95,7 @@ public class BleAdvBridge {
     }
 
     private void requestStop(String action, boolean triggerPanicJs) {
+        if (SceneDeviceBridge.active()) return; // A late legacy-mode cleanup cannot stop a scene.
         try {
             Intent intent = new Intent(context, DomForegroundService.class);
             intent.setAction(action);

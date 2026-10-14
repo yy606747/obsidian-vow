@@ -157,9 +157,13 @@ def _patch_initiative_io(monkeypatch, *, control_context=None):
 
 def test_dom_initiative_reuses_postprocessor_without_changing_sse_shape(monkeypatch):
     executed, broadcasts, remember_calls, toy_sys_calls = _patch_initiative_io(monkeypatch)
+    async def recent_scene(**names):
+        return f"【近期亲密经历】{names['ai_name']}与{names['user_name']}刚结束的小剧场。"
+    monkeypatch.setattr("app.scenes.recent.load_recent", recent_scene)
 
     async def fake_stream_ai(_history, model_key, usage_meta, temperature):
         assert model_key == "mock-model"
+        assert "【近期亲密经历】" in str(_history)
         usage_meta["provider"] = "mock"
         yield "出手 [TOY:1] [REMEMBER:喜欢突袭] <meta>hide</meta>"
 

@@ -137,6 +137,8 @@ def test_startup_failure_cleans_already_registered_resources(monkeypatch):
 
     monkeypatch.setattr(main, "TEST_MODE", False)
     monkeypatch.setattr(main, "init_db", noop)
+    from app.scenes.session import get_scene_service
+    monkeypatch.setattr(get_scene_service(), "recover", noop)
     monkeypatch.setattr("app.daily_chat.service.daily_chat.ensure_current", noop)
     monkeypatch.setattr(sprite_library, "ensure_seed_sprites", noop)
     monkeypatch.setattr(sprite_library, "reconcile_seed_lifecycle", noop)
@@ -144,7 +146,6 @@ def test_startup_failure_cleans_already_registered_resources(monkeypatch):
     monkeypatch.setattr(main, "reconcile_daily_signals", lambda: None)
     monkeypatch.setattr(main, "run_startup_cleanup", lambda: None)
     monkeypatch.setattr("app.pc_screen.service.cleanup_expired_files", lambda: None)
-    monkeypatch.setattr("app.mobile_screen.mobile_screen_service.cleanup_expired_files", lambda: None)
     monkeypatch.setattr(main.sentinel_runtime, "set_event_loop", lambda _loop: None)
     monkeypatch.setattr(main.sentinel_runtime, "start_monitoring", fail_start)
     monkeypatch.setattr(main.sentinel_runtime, "stop_monitoring", lambda: calls.append("stop"))

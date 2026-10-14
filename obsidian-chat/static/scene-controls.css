@@ -1,0 +1,27 @@
+/* Shared scene controls occupy layout space, never the message composer. */
+.scene-control-slot { flex: 0 0 auto; min-width: 0; }
+.scene-global-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px 16px;
+  padding: 8px 22px; border-bottom: 1px solid #94734b59;
+  background: #241d17; color: #eadccc; font-size: 12px; line-height: 1.5;
+}
+#sceneGlobalBar[hidden] { display: none !important; }
+#sceneGlobalStatus { min-width: 0; }
+.scene-global-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.scene-global-bar button {
+  min-height: 44px; padding: 8px 12px; border: 1px solid #94734b70; border-radius: 9px;
+  background: #382b20; color: inherit; font: inherit; white-space: nowrap; cursor: pointer;
+}
+.scene-global-bar button:disabled { opacity: .45; cursor: not-allowed; }
+.scene-global-bar button:focus-visible { outline: 2px solid #d5ae72; outline-offset: 2px; }
+#sceneGlobalOpen { background: transparent; border-color: transparent; color: #d5ae72; }
+#sceneGlobalEnd { border-color: #9b615175; background: #39201b; color: #ecb1a0; }
+#subPageFrame { min-height: 0; }
+@media (max-width: 740px) {
+  .scene-global-bar { padding: 6px 12px; gap: 6px; }
+  .scene-global-bar button { padding: 8px 10px; }
+}
+@media (max-width: 370px) {
+  .scene-global-bar { flex-wrap: wrap; }
+  .scene-global-actions { margin-left: auto; }
+}

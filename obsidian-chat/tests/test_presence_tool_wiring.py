@@ -24,7 +24,7 @@ def test_opportunity_runtime_gate_requires_renderer_agent_and_synced_sprite(monk
     monkeypatch.setattr(renderer_module, "presence_renderer_configured", lambda: True)
     capabilities = asyncio.run(
         opportunity._runtime_capabilities(
-            model_key="no-vision-model", mobile_screen_target=None
+            model_key="no-vision-model"
         )
     )
     assert "desktop.presence.draw" in capabilities
@@ -33,7 +33,7 @@ def test_opportunity_runtime_gate_requires_renderer_agent_and_synced_sprite(monk
     monkeypatch.setattr(renderer_module, "presence_renderer_configured", lambda: False)
     gated = asyncio.run(
         opportunity._runtime_capabilities(
-            model_key="no-vision-model", mobile_screen_target=None
+            model_key="no-vision-model"
         )
     )
     assert "desktop.presence.show" not in gated
@@ -150,7 +150,7 @@ def test_summon_ability_block_never_demonstrates_visible_body():
     assert example_lines
     for line in example_lines:
         assert line.startswith("- [PRESENCE_SHOW:"), line
-    assert "让Alaric默认从小羊屏幕右侧出现" in block
+    assert "默认从小羊屏幕右侧出现" in block
     assert "避免挡住正中的工作区" in block
     assert "这条回复的文字已经够了" not in block
 

@@ -59,31 +59,36 @@ def test_driver_marks_device_offline_when_stale():
     assert device["metadata"]["age_sec"] == 121.0
 
 
-def test_screen_agent_online_is_separate_from_ordinary_online():
+def test_old_capture_reports_do_not_advertise_retired_feature_or_break_heartbeat():
     now = [1000.0]
     driver = AndroidMobileDeviceDriver(now=lambda: now[0])
     service = DeviceService(drivers=[driver], event_sink=_noop_sink)
 
     asyncio.run(service.report_state(
         "android_tablet1", status="online", name="华为平板",
-        metadata={"platform": "android", "device_type": "tablet"},
+        capabilities=["activity.report", "screen.capture"],
+        metadata={"platform": "android", "device_type": "tablet",
+                  "screen_poll_at": 1000.0, "screen_agent_online": True,
+                  "foreground_app": "阅读器"},
     ))
 
-    # Ordinary online, but screen poll never happened → screen agent offline.
     device = asyncio.run(service.get_device("android_tablet1"))["device"]
     assert device["status"] == "online"
-    assert device["metadata"]["screen_agent_online"] is False
-    assert driver.screen_agent_online("android_tablet1") is False
+    assert device["capabilities"] == ["activity.report"]
+    assert "screen_agent_online" not in device["metadata"]
+    assert "screen_poll_at" not in device["metadata"]
+    assert device["metadata"]["foreground_app"] == "阅读器"
+    assert asyncio.run(service.execute_command("android_tablet1", "ping"))["message"] == "pong"
 
-    # After a screen poll, screen agent reads online.
-    assert driver.mark_screen_poll("android_tablet1") is True
-    assert driver.screen_agent_online("android_tablet1") is True
+    # An ordinary report preserves remaining capabilities and extends liveness.
+    now[0] += 110.0
+    asyncio.run(service.report_state("android_tablet1", status="online"))
+    now[0] += 110.0
     device = asyncio.run(service.get_device("android_tablet1"))["device"]
-    assert device["metadata"]["screen_agent_online"] is True
-
-    # Screen poll ages out independently of the 120s ordinary-online window.
-    now[0] = 1000.0 + 91.0
-    assert driver.screen_agent_online("android_tablet1") is False
+    assert device["status"] == "online"
+    assert device["capabilities"] == ["activity.report"]
+    now[0] += 11.0
+    assert asyncio.run(service.get_device("android_tablet1"))["device"]["status"] == "offline"
 
 
 def test_driver_only_owns_android_prefixed_ids():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from app.memory_v2 import memory_service
 from app.working_model import service as working_model_service
 from app.working_model.runtime import working_model_v2_injection_enabled
@@ -142,6 +143,7 @@ async def inject_memory_prompt(
     pending_items: list[dict] | None = None,
     visible_message_ids: list[str] | None = None,
     include_working_model: bool = True,
+    pending_recall_task: asyncio.Task[dict] | None = None,
 ) -> tuple[int, dict]:
     recall_keywords_str = ""
     recalled: list[dict] = []
@@ -201,6 +203,8 @@ async def inject_memory_prompt(
         # observably identical instead of merely producing the same prompt.
         if pending_items:
             plan_kwargs["pending_items"] = pending_items
+        if pending_recall_task is not None:
+            plan_kwargs["pending_recall_task"] = pending_recall_task
         if visible_message_ids is not None:
             plan_kwargs["visible_message_ids"] = visible_message_ids
         memory_v2_recall_debug = await _plan_v2_recall_debug(

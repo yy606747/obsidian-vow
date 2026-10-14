@@ -99,7 +99,8 @@ def main():
                 elif name == '/api/tts/voices': data = dict(voices=[])
                 elif name == '/api/heart-whispers':
                     history_requests.append(route.request.url)
-                    data = dict(items=list(reversed(whispers)), total=len(whispers), page=1, page_size=100)
+                    records = [] if parse_qs(parsed.query).get('kind') == ['work'] else list(reversed(whispers))
+                    data = dict(items=records, total=len(records), page=1, page_size=100)
                 elif name == '/api/schedule/missed-recent': data = dict(count=0, items=[])
                 elif name.endswith('/stream-status'): data = dict(streaming=False)
                 route.fulfill(json=data)
@@ -292,6 +293,7 @@ def main():
         page.locator('#m_live .heart-whisper-hint').click()
         page.evaluate("openSubPage('/heart-whispers')")
         frame = page.frame_locator('#subPageFrame')
+        frame.get_by_role('tab', name='短心语').click()
         frame.locator("button[onclick=\"deleteWhisper('hw_live')\"]").click()
         page.wait_for_function("!document.querySelector('#m_live .heart-whisper-hint')")
         assert page.locator('#m_live .heart-whisper-hint').count() == 0

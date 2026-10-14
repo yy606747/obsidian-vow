@@ -62,18 +62,11 @@ flowchart LR
 - **三日 Timeline** 把今天、昨天和前天整理成一段有界背景。昨天刚发生的事情不必依赖 Top-K 碰运气才能回来。这里按三个自然日计算，不是严格滚动的 72 小时。
 - **Relational Cards** 尝试处理“语义相关不等于关系相关”。伴侣说“我今天很难受”时，更有用的往事可能没有复用这些词，而是记录了这个人在类似状态下怎样反应、希望怎样被理解。当前卡片仍依附来源 chunk 排名，命中后才优先展示，因此它是关系视角的 readout，还不是独立检索器。
 
-### Pending Recall：允许晚一轮想起
+### 按需在同一轮查询
 
-同步 agentic retrieval 通常需要两次串行 Core 调用：先让模型决定搜什么，再把结果交回模型作答。对一个长期由个人 API 付费的系统，这个代价太高。
+普通聊天现在允许 Core 在需要时查询旧事或联网。一次查询完成后，结果交回 Core，在同一轮接着回复；没有查询意图时，仍走原有聊天路径。每轮最多执行一次前台查询和一次 Core 后续回复，查询失败也会带着实际结果继续。
 
-Pending Recall 把这次检索拆到两轮之间：
-
-1. Core 在正常回答里留下私有 `RecallIntent`，不增加本轮调用；
-2. 回答送达后，后台完成宽召回；
-3. 下一条消息到来时，便宜模型结合新上下文判断旧意图是否还有用；
-4. 只有被选中的 readout 才进入下一轮 Core 上下文。
-
-它用同轮完整性换掉一次昂贵的 Core 调用，也接受“这件事晚了一轮才想起来”。如果话题已经变化，selector 可以什么都不选。
+此前的 Pending Recall 把宽召回安排在回复送达之后，再由下一轮选择有用的 readout。当前普通聊天不再创建新的异步召回，历史账本仍保留。这个调整用一次按需的后续调用换取同轮连贯性，不要求每条消息都检索。实现见 [`query_turn.py`](obsidian-chat/app/chat/query_turn.py)。
 
 代码入口：[`memory_v2`](obsidian-chat/app/memory_v2/)、[`memory_v3`](obsidian-chat/app/memory_v3/)、[`working_model`](obsidian-chat/app/working_model/)、[`vows`](obsidian-chat/app/vows/) 和 [`memory_context.py`](obsidian-chat/app/chat/memory_context.py)。
 
@@ -133,7 +126,7 @@ Obsidian Vow 关闭了 camera-first 路径，改用一组带来源和时间的�
 - Android 提供运动、环境光、电量、连接、屏幕状态、明确授权的健康历史，以及白名单社交应用中不含正文的元数据；
 - Windows agent 提供活跃、空闲和锁定状态、近期输入，以及经过隐私过滤的前台应用；
 - 位置、地理围栏、日程和设备会话保留来源与新鲜度；
-- 手机或电脑屏幕等高敏感能力只能通过单独授权的一次性入口获取。
+- 电脑屏幕保留单次请求入口；手机屏幕与摄像头由“相伴”会话显式授权，结束后停止采集。
 
 Context Delivery 先统一来源、新鲜度、数量上限和缺失状态，再把证据交给聊天、Opportunity、Self-Wake 或 Sentinel。传感器只能说明“现在可能发生了什么”，不能直接冒充一个人的内心状态；同样的当前信号，也要放回长期关系记忆里才知道该怎样回应。
 
@@ -151,7 +144,7 @@ Context Delivery 先统一来源、新鲜度、数量上限和缺失状态，再
 
 还有一些没有收尾的地方：
 
-- Pending Recall 和 Reflection 已经实现并启用，但快照中还没有真实记录；
+- 9 月快照尚无 Pending Recall 和 Reflection 的真实记录；当前普通聊天已改用同轮查询，历史 Pending Recall 账本保留；
 - Relational Cards 已经生成并进入 readout，实际效果还没有跑完测试；
 - Harness 仍是混合过渡态，没有统一成一种工具调用形态；
 - 普适计算还没有找出足够好、又足够克制的信号组合。
@@ -171,6 +164,12 @@ Obsidian Vow 从 AionsHome 的 `1fdb8cd` 基线 fork 而来，并非从零实现
 | 跨设备 | Android、push、后台位置、手机活动和 BLE 集成 | Windows agent、更丰富的 Android 证据、Health Connect、Context Delivery、桌面 presence 和显式屏幕请求 |
 
 上游提供了完整的应用种子。Obsidian Vow 的工作主要发生在关系状态、主动性、执行边界、跨设备上下文，以及这些机制向长期生产数据的迁移上。
+
+## 2026-10-14 功能更新
+
+新增“一起待会儿”相伴会话、小剧场与设备联动，以及心作的创作、归档和聊天引用。相伴结束后的近期对话会接回聊天，查询旧事和联网结果也能在同一轮继续回复。
+
+聊天与心语页面支持 LaTeX 公式，并改进长对话滚动、流式显示、空回复恢复和模型连接复用。模型与槽位的思考选项按端点协议配置。相伴和小剧场默认关闭，启用方法、设备范围与升级说明见[本次功能更新](docs/feature-update-2026-10-14.md)。
 
 ## 2026-09-13 聊天更新
 

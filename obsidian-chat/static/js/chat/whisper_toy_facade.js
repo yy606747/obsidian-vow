@@ -1,6 +1,6 @@
 // ── Whisper Toy 懒加载门面 ──
 (function (global) {
-  const WHISPER_TOY_SCRIPT = "/static/js/chat/whisper_toy.js?v=20260913-markdown";
+  const WHISPER_TOY_SCRIPT = "/static/js/chat/whisper_toy.js?v=20260920-companion-names";
   let whisperToyLoadPromise = null;
 
   function getWhisperToyModule() {
@@ -14,7 +14,7 @@
     modal.id = "whisperModal";
     modal.innerHTML = `
       <div class="modal whisper-modal">
-        <h3>💗 密语时刻</h3>
+        <h3>💗 密语</h3>
         <div class="whisper-conn-bar">
           <div class="whisper-conn-left">
             <div class="whisper-dot off" id="toyDot"></div>
@@ -116,7 +116,7 @@
       if (api && typeof api[method] === "function") return api[method](...(args || []));
     } catch (err) {
       console.error("[WhisperToy] lazy load failed:", err);
-      showToast?.("密语时刻加载失败", 2400);
+      showToast?.("密语加载失败", 2400);
     }
     return undefined;
   }

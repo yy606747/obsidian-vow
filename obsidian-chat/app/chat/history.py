@@ -18,6 +18,7 @@ from .audio_input import audio_transcript_context
 from .image_history import restore_recent_images
 from .worldbook import build_worldbook_prefix, resolve_worldbook_names
 from app.documents.service import is_document
+from app.heart_works.chat_reference import is_reference
 
 
 AttachmentPolicy = Literal["last_message", "last_user"]
@@ -101,13 +102,15 @@ def _normalize_history_row(row) -> dict | None:
     if msg.get("created_at"):
         dt = datetime.fromtimestamp(msg["created_at"])
         msg["content"] = f"{msg['content']}\n<meta>发送时间：{dt.month}月{dt.day}日 {dt.strftime('%H:%M')}</meta>"
+    from app.together.shared_history import ended_context_note
+    msg['content'] += ended_context_note(msg)
     return msg
 
 
 def _strip_history_attachments(history: list[dict], policy: AttachmentPolicy) -> None:
     if policy == "last_message":
         for msg in history[:-1]:
-            msg["attachments"] = [item for item in msg.get('attachments', []) if is_document(item)]
+            msg["attachments"] = [item for item in msg.get('attachments', []) if is_document(item) or is_reference(item)]
         return
 
     last_user_idx = -1
@@ -117,7 +120,7 @@ def _strip_history_attachments(history: list[dict], policy: AttachmentPolicy) ->
             break
     for i, msg in enumerate(history):
         if i != last_user_idx:
-            msg["attachments"] = [item for item in msg.get('attachments', []) if is_document(item)]
+            msg["attachments"] = [item for item in msg.get('attachments', []) if is_document(item) or is_reference(item)]
 
 
 async def prepare_chat_history(
@@ -138,11 +141,16 @@ async def prepare_chat_history(
         model_key = conv["model"] if conv else DEFAULT_MODEL
 
         cur = await db.execute(
-            "SELECT id, role, content, attachments, created_at FROM messages WHERE conv_id=? AND role IN ('user','assistant','system','trigger') ORDER BY created_at DESC LIMIT ?",
-            (conv_id, context_limit),
+            "SELECT * FROM (SELECT id, role, content, attachments, created_at FROM messages "
+            "WHERE conv_id=? AND role IN ('user','assistant') ORDER BY created_at DESC,rowid DESC LIMIT ?) "
+            "UNION ALL SELECT * FROM (SELECT id, role, content, attachments, created_at FROM messages "
+            "WHERE conv_id=? AND role IN ('system','trigger') ORDER BY created_at DESC,rowid DESC LIMIT ?)",
+            (conv_id, context_limit, conv_id, context_limit),
         )
         rows = await cur.fetchall()
         cross_day_messages = await inherited_messages_in_tx(db, conv_id)
+        from app.together.shared_history import context_rows_in_tx, select_shared_window
+        together_rows = await context_rows_in_tx(db, conv_id, limit=context_limit)
 
         cur = await db.execute(
             "SELECT COUNT(*) AS count FROM messages WHERE conv_id=? AND role IN ('user','assistant')",
@@ -172,7 +180,9 @@ async def prepare_chat_history(
                         "last_user_at": last_user_at,
                     }
 
-    ordered_rows = list(reversed(rows))
+    ordered_rows, cross_day_messages = select_shared_window(
+        rows, cross_day_messages, together_rows, conv_id=conv_id, limit=context_limit,
+    )
     real_user_indexes = [
         index for index, row in enumerate(ordered_rows) if row["role"] == "user"
     ]
@@ -198,6 +208,10 @@ async def prepare_chat_history(
                 msg["content"] = "\n".join((msg["content"], note))
             history.append(msg)
 
+    # Inherited raw messages share the same window as this conversation.
+    # Select before synthetic prompt events; only retained IDs participate in
+    # timeline/recall deduplication and historical attachment loading below.
+
     original_attachments = {
         str(message.get("id") or ""): list(message.get("attachments") or [])
         for message in history
@@ -219,7 +233,8 @@ async def prepare_chat_history(
         })
 
     # Trigger/system rows become protocol users above, but cannot be a save target.
-    latest_user_row = ordered_rows[real_user_indexes[-1]] if real_user_indexes else None
+    latest_user_row = next((row for row in reversed(ordered_rows)
+                            if row['role'] == 'user' and not row.get('together_session_id')), None)
     latest_user_message_id = str(latest_user_row["id"]) if latest_user_row else ""
     latest_user_content = str(latest_user_row["content"] or "") if latest_user_row else ""
     recent_with_ids = [m for m in history if m["role"] in ("user", "assistant")][-8:]
@@ -255,6 +270,10 @@ async def prepare_chat_history(
             if latest_user_row:
                 latest_user_message_id = latest_user_row['id']
                 latest_user_content = str(latest_user_row['content'] or '')
+    from app.heart_works.chat_reference import materialize_references
+    from app.heart_works.repository import Repository
+    history = await materialize_references(history, user_name=user_name, ai_name=ai_name,
+                                           repository=Repository(get_db))
     if prefix:
         history = prefix + history
 

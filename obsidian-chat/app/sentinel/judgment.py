@@ -18,7 +18,7 @@ from .handoff import (
 
 
 SENTINEL_JUDGMENT_SCHEMA_VERSION = "sentinel_judgment.v1"
-SENTINEL_JUDGMENT_PROMPT_VERSION = "sentinel_judgment_prompt.v1"
+SENTINEL_JUDGMENT_PROMPT_VERSION = "sentinel_judgment_prompt.v2"
 REQUIRED_SENTINEL_JUDGMENT_FIELDS = frozenset({
     "call_core",
     "confidence",
@@ -82,7 +82,8 @@ def build_sentinel_judgment_messages(
 - wake_intent 表示你是否想去找她；call_core 是兼容旧日志的同义字段，必须和 wake_intent 一致，但它不是已经执行的事实。
 - 字段必须互斥：wake_intent=true 时 core_reason 必填且 restraint_reason 必须是空字符串；wake_intent=false 时 restraint_reason 必填且 core_reason 必须是空字符串。
 - 不确定就写 uncertainty；不能把弱证据说成确定事实。
-- tone_hint 用自然语言写你打算用什么姿态出现，最多 {tone_hint_max_chars} 字；不要输出 action 枚举。
+- core_reason 只说明为什么想联系{user_name}，可以是关心、想念或想接着聊；summary 保留最近聊天和近况，区分先前状态、当前观测和推测。两者都不安排{ai_name}先说什么、追问什么或用什么口吻。
+- tone_hint 仅留作内部日志备注，不传给{ai_name}指导回复；没有备注时留空，最多 {tone_hint_max_chars} 字，不要输出 action 枚举。
 - 明确的设备地理围栏边界变化是第一版强关注信号，通常可作为交给 Core 再看一眼的轻唤醒理由；它只证明设备越过了配置边界，不证明她本人离家、回家、到达某个建筑或正在做什么。她的具体位置、设备是否和她在一起等未知项必须写进 uncertainty；除非最近聊天明确要求别打扰、硬睡眠/安静时段或其他硬边界冲突，否则未知项本身不必抹掉“设备边界发生变化”这一事实。
 - PC active 只是她可能在电脑前的弱线索，可以提高好奇心；但不能单独推出 wake_intent。只有和长沉默、作息/计划节点、任务上下文或前台明显变化等信号组合时，才适合作为轻唤醒理由交给主脑判断。
 

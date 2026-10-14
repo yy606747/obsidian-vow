@@ -20,7 +20,7 @@ from .provenance import source_hash_for_messages
 from .repository import InjectionEventRepository, TimelineRepository
 
 
-PROMPT_VERSION = "recent-timeline-v4"
+PROMPT_VERSION = "recent-timeline-v5"
 GENERATOR_SCOPE = "memory:recent_timeline"
 MAX_SOURCE_MESSAGES = 240
 MAX_SOURCE_PROMPT_CHARS = 32_000
@@ -294,35 +294,64 @@ def build_generation_prompt(
     )
 
 
+def _sample_day_sources(rows: list[dict], *, max_messages: int, max_chars: int) -> list[dict]:
+    """Spread adjacent message pairs across the whole day, within a fixed budget."""
+    groups = [rows[index:index + 2] for index in range(0, len(rows), 2)]
+    count = min(len(groups), max_messages // 2)
+    while count > 0:
+        indices = ([len(groups) - 1] if count == 1 else
+                   [round(index * (len(groups) - 1) / (count - 1)) for index in range(count)])
+        selected = [row for index in indices for row in groups[index]]
+        if sum(_source_cost(row) for row in selected) <= max_chars:
+            return selected
+        count -= 1
+    return []
+
+
+def _source_cost(row: dict) -> int:
+    return min(len(str(row.get("content") or "")), MAX_SOURCE_MESSAGE_CHARS) + 96
+
+
 async def _recent_source_messages(*, now: float, hours: int) -> tuple[list[dict], dict]:
     window_start = _natural_window_start(now)
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, conv_id, role, content, created_at FROM ("
             "SELECT id, conv_id, role, content, created_at FROM messages "
             "WHERE role IN ('user','assistant') AND created_at>=? AND created_at<=? "
-            "ORDER BY created_at DESC, id DESC LIMIT ?"
-            ") ORDER BY created_at ASC, id ASC",
-            (window_start, now, MAX_SOURCE_MESSAGES),
+            "ORDER BY created_at ASC, id ASC",
+            (window_start, now),
         )
         rows = [dict(row) for row in await cur.fetchall()]
-
-    selected_reversed: list[dict] = []
-    used_chars = 0
-    for row in reversed(rows):
-        cost = min(len(str(row.get("content") or "")), MAX_SOURCE_MESSAGE_CHARS) + 96
-        if selected_reversed and used_chars + cost > MAX_SOURCE_PROMPT_CHARS:
-            break
-        selected_reversed.append(row)
-        used_chars += cost
-    selected = list(reversed(selected_reversed))
+    days: dict[str, list[dict]] = {}
+    for row in rows:
+        day = _timeline_datetime(row["created_at"]).date().isoformat()
+        days.setdefault(day, []).append(row)
+    selected: list[dict] = []
+    coverage: dict[str, dict] = {}
+    remaining_chars = MAX_SOURCE_PROMPT_CHARS
+    remaining_messages = MAX_SOURCE_MESSAGES
+    # Small days first: return unused quota to the remaining days.
+    ordered = sorted(days.items(), key=lambda item: sum(_source_cost(row) for row in item[1]))
+    for index, (day, day_rows) in enumerate(ordered):
+        remaining_days = len(ordered) - index
+        selected_day = _sample_day_sources(
+            day_rows, max_messages=remaining_messages // remaining_days,
+            max_chars=remaining_chars // remaining_days,
+        )
+        selected.extend(selected_day)
+        remaining_chars -= sum(_source_cost(row) for row in selected_day)
+        remaining_messages -= len(selected_day)
+        coverage[day] = {"available": len(day_rows), "selected": len(selected_day)}
+    selected.sort(key=lambda row: (row["created_at"], row["id"]))
     return selected, {
         "requested_window_start_ts": window_start,
         "source_truncated": len(selected) < len(rows),
         "source_rows_before_char_budget": len(rows),
         "source_rows_used": len(selected),
-        "source_prompt_chars_estimate": used_chars,
+        "source_prompt_chars_estimate": MAX_SOURCE_PROMPT_CHARS - remaining_chars,
+        "source_coverage": dict(sorted(coverage.items())),
+        "source_selection": "day_balanced_pairs",
         "configured_hours_ignored_for_window": int(hours),
     }
 
@@ -661,6 +690,11 @@ class TimelineService:
                 "timeline_id": invalid["id"],
             }
 
+        cited_ids = {mid for entry in entries for mid in entry["source_message_ids"]}
+        metadata["entry_source_hashes"] = {
+            row["id"]: source_hash_for_messages([row])
+            for row in source_messages if row["id"] in cited_ids
+        }
         created = await self.repository.append_active(
             window_start_ts=window_start,
             window_end_ts=now,
@@ -685,6 +719,7 @@ class TimelineService:
         config_snapshot: dict | None = None,
         now: float | None = None,
         user_name: str | None = None,
+        ai_name: str | None = None,
     ) -> dict:
         config = normalize_memory_v3_config(
             config_snapshot if config_snapshot is not None else load_memory_v3_config()
@@ -704,18 +739,20 @@ class TimelineService:
                 "entries": [],
             }
 
+        metadata = json.loads(active.get("metadata_json") or "{}")
         source_ids = _json_list(active.get("source_message_ids_json"))
         source_rows = await _messages_by_ids(source_ids)
-        if (
-            len(source_rows) != len(set(str(value) for value in source_ids))
-            or source_hash_for_messages(source_rows) != str(active.get("source_hash") or "")
-        ):
-            return {
-                "status": "source_changed",
-                "timeline_id": active["id"],
-                "block": "",
-                "entries": [],
-            }
+        entry_hashes = metadata.get("entry_source_hashes")
+        changed_ids: set[str] = set()
+        if isinstance(entry_hashes, dict):
+            current_hashes = {row["id"]: source_hash_for_messages([row]) for row in source_rows}
+            changed_ids = {mid for mid, digest in entry_hashes.items() if current_hashes.get(mid) != digest}
+        elif (len(source_rows) != len(set(str(value) for value in source_ids))
+              or source_hash_for_messages(source_rows) != str(active.get("source_hash") or "")):
+            self.start_background_refresh(config)
+            return {"status": "source_changed", "timeline_id": active["id"], "block": "", "entries": []}
+        if changed_ids:
+            self.start_background_refresh(config)
 
         source_created_at = {
             str(row.get("id") or ""): float(row.get("created_at") or 0)
@@ -724,6 +761,7 @@ class TimelineService:
         entry_cutoff = natural_window_start
         current_entries: list[dict] = []
         stale_entry_indices: list[int] = []
+        changed_entry_indices: list[int] = []
         for index, entry in enumerate(_json_list(active.get("entries_json"))):
             if not isinstance(entry, dict):
                 continue
@@ -732,6 +770,10 @@ class TimelineService:
                 for value in (entry.get("source_message_ids") or [])
                 if str(value or "")
             ]
+            if any(mid in changed_ids or (isinstance(entry_hashes, dict) and mid not in entry_hashes)
+                   for mid in entry_source_ids):
+                changed_entry_indices.append(index)
+                continue
             entry_anchor_ts = _entry_anchor_ts(entry_source_ids, source_created_at)
             if entry_source_ids and (
                 entry_anchor_ts is None or entry_anchor_ts < entry_cutoff
@@ -751,9 +793,10 @@ class TimelineService:
             reference_ts=current,
             max_chars=config["timeline_max_chars"],
             user_name=user_name,
+            ai_name=ai_name,
         )
         return {
-            "status": "injected" if rendered["enabled"] else rendered["reason"],
+            "status": "injected" if rendered["enabled"] else ("source_changed" if changed_entry_indices and not current_entries else rendered["reason"]),
             "timeline_id": active["id"],
             "timeline_version": active.get("version"),
             "prompt_version": active.get("prompt_version"),
@@ -768,6 +811,8 @@ class TimelineService:
                 "generic_relationship_label_indices"
             ],
             "stale_entry_indices": stale_entry_indices,
+            "changed_entry_indices": changed_entry_indices,
+            "source_coverage": metadata.get("source_coverage", {}),
         }
 
     async def record_injection_usage(

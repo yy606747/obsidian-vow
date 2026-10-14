@@ -88,14 +88,17 @@ def _normalize_control_resource_id(kind: str, device_id: str | None, control_res
 
 @router.post("/api/control/sessions/start")
 async def start_control_session(body: ControlSessionStartBody):
-    session = await control_session_service.start(
-        conv_id=body.conv_id,
-        kind=body.kind,
-        owner_client_id=body.owner_client_id,
-        device_id=_normalize_control_device_id(body.kind, body.device_id),
-        control_resource_id=_normalize_control_resource_id(body.kind, body.device_id, body.control_resource_id),
-        safeword_set=body.safeword_set,
-    )
+    try:
+        session = await control_session_service.start(
+            conv_id=body.conv_id,
+            kind=body.kind,
+            owner_client_id=body.owner_client_id,
+            device_id=_normalize_control_device_id(body.kind, body.device_id),
+            control_resource_id=_normalize_control_resource_id(body.kind, body.device_id, body.control_resource_id),
+            safeword_set=body.safeword_set,
+        )
+    except Exception as exc:
+        _raise_session_error(exc)
     return _payload(session)
 
 

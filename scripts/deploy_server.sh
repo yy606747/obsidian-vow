@@ -10,6 +10,8 @@ SERVER_PATH="${SERVER_PATH:-/opt/obsidian-vow}"
 CONTAINER_NAME="${CONTAINER_NAME:-obsidian-vow}"
 IMAGE_NAME="${IMAGE_NAME:-obsidian-vow:prod}"
 PREVIOUS_IMAGE_NAME="${PREVIOUS_IMAGE_NAME:-obsidian-vow:previous}"
+DEPLOY_KEEP_BACKUPS="${DEPLOY_KEEP_BACKUPS:-4}"
+DEPLOY_MIN_FREE_GB="${DEPLOY_MIN_FREE_GB:-10}"
 SSH_CONTROL_PATH="${SSH_CONTROL_PATH:-/tmp/obsidianvow-ssh}"
 GRADLE_USER_HOME="${GRADLE_USER_HOME:-/tmp/gradle-home}"
 BACKEND_PYTHON="${BACKEND_PYTHON:-${ROOT_DIR}/.venv/bin/python}"
@@ -51,6 +53,8 @@ Environment overrides:
   IMAGE_NAME         Docker image tag to commit. Default: obsidian-vow:prod
   PREVIOUS_IMAGE_NAME
                      Docker image tag retained for one-step rollback. Default: obsidian-vow:previous
+  DEPLOY_KEEP_BACKUPS Retained deployment backups, minimum 4. Default: 4
+  DEPLOY_MIN_FREE_GB  Minimum free space before deployment, in GiB. Default: 10
   SSH_CONTROL_PATH   Optional existing SSH ControlMaster socket.
   GRADLE_USER_HOME   Gradle cache dir for --build-apk. Default: /tmp/gradle-home
 
@@ -241,6 +245,21 @@ docker tag "$RECOVERY_IMAGE_NAME" "$PREVIOUS_IMAGE_NAME"
 REMOTE_SCRIPT
 }
 
+maintain_server_images() {
+  local phase="$1"
+  local space_option=""
+  if [[ "$phase" == "before" ]]; then
+    space_option="--require-space"
+  elif [[ "$RUNTIME_SYNC" -ne 1 || "$COMMIT_IMAGE" -ne 1 || "$RESTART" -ne 1 || "$SMOKE" -ne 1 ]]; then
+    return
+  fi
+  # Use this release's frozen helper even before the server source is synced.
+  # Only project deployment tags are eligible; prod, previous and containers
+  # stay protected independently of the four retained backups.
+  remote_ssh "python3 - --apply --image-name '$IMAGE_NAME' --previous-image-name '$PREVIOUS_IMAGE_NAME' --keep '$DEPLOY_KEEP_BACKUPS' --min-free-gb '$DEPLOY_MIN_FREE_GB' --data-path '$SERVER_PATH/obsidian-chat/data' $space_option" \
+    < "${LOCAL_RELEASE_DIR}/source/scripts/manage_deploy_images.py"
+}
+
 runtime_sync() {
   if [[ "$RUNTIME_SYNC" -ne 1 ]]; then
     echo "Skipping runtime container sync."
@@ -421,11 +440,15 @@ if [[ "$APPLY" -ne 1 ]]; then
 fi
 
 prepare_source_snapshot
+maintain_server_images before
 prepare_recovery_image
 rsync_apply
 runtime_sync
 restart_container
 smoke_checks
 commit_container
+if ! maintain_server_images after; then
+  echo "部署已成功，但旧镜像清理未完成；请查看上方原因。" >&2
+fi
 
 echo "Deploy finished."

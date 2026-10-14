@@ -8,6 +8,8 @@
 
     <!-- 麦克风权限（语音唤醒/通话用） -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- WebRTC 需要修改音频设置 -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
@@ -21,6 +23,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- 闹钟、监控与哨兵提醒的锁屏全屏提示 -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
@@ -131,6 +136,9 @@
             android:foregroundServiceType="connectedDevice" />
 
         <!-- Muse 潮汐前台服务（BLE 广播 + TTL 自动停止） -->
+        <service android:name=".SceneForegroundService" android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
         <service
             android:name=".MuseForegroundService"
             android:exported="false"
@@ -146,19 +154,16 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
-        <!-- 移动端一次性截图前台服务（MediaProjection） -->
-        <service
-            android:name=".MobileScreenCaptureService"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
-
-        <!-- 截图确认页（轻量，半透明对话框） -->
-        <activity
-            android:name=".ScreenCaptureRequestActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:launchMode="singleTop"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- 相伴：会话期间按需采集屏幕或后摄单帧 -->
+        <service android:name=".TogetherMediaService" android:exported="false"
+            android:foregroundServiceType="specialUse|dataSync|mediaProjection|camera|microphone">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Owner-initiated ongoing companion chat with a visible overlay and an explicit end action" />
+        </service>
+        <activity android:name=".TogetherActivity" android:exported="false"
+            android:excludeFromRecents="true" android:screenOrientation="portrait" />
+        <activity android:name=".TogetherRoomActivity" android:exported="false"
+            android:launchMode="singleTop" android:screenOrientation="portrait" />
 
         <!-- 闹钟、监控与哨兵提醒：仅系统事件使用，普通 AI 消息不会主动亮屏。 -->
         <activity

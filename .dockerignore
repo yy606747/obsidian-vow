@@ -14,7 +14,8 @@
 **/*.pyc
 **/.pytest_cache
 obsidian-chat/data
-obsidian-chat/tests
+obsidian-chat/tests/
+obsidian-chat/devtools/
 ObsidianApp
 pc_agent
 *.apk

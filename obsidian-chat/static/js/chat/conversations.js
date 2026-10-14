@@ -40,12 +40,13 @@ async function selectConv(id, { syncManaged = false } = {}) {
   hasMoreMessages = messages.filter(message => !message.inherited).length >= MSG_PAGE_SIZE;
   window.ChatPerf?.markOnce("first_message_batch_loaded", { count: currentMessages.length });
   renderConvList();
-  renderMessages();
+  renderMessages({ scroll: 'bottom' });
   window.ChatPerf?.markOnce("first_messages_rendered", { count: currentMessages.length });
   $("sendBtn").disabled = sending;
   if (window.ControlRuntime) ControlRuntime.recover(id).catch(e => console.warn("[ControlRuntime] recover failed", e));
   closeSidebar();
   if (!syncManaged) completeChatSync(generation);
+  window.ChatHeartWorks?.consumePending();
   return true;
 }
 
@@ -122,19 +123,16 @@ async function loadOlderMessages() {
   const oldest = currentMessages.find(message => !message.inherited);
   if (!oldest) { loadingMore = false; return; }
   const el = $("messages");
-  const prevHeight = el.scrollHeight;
   const convId = currentConvId;
   try {
     const page = await api("GET", `/api/conversations/${convId}/messages?limit=${MSG_PAGE_SIZE}&before=${oldest.created_at}`);
     const older = page.filter(message => !message.inherited && message.conv_id === convId);
     if (convId !== currentConvId) return;
-    if (older.length === 0) { hasMoreMessages = false; return; }
+    if (older.length === 0) { hasMoreMessages = false; renderMessages({ scroll: 'preserve' }); return; }
     hasMoreMessages = older.length >= MSG_PAGE_SIZE;
     currentMessages = [...new Map([...older, ...currentMessages].map(message => [message.id, message])).values()]
       .sort((a, b) => a.created_at - b.created_at);
-    renderMessages();
-    // 保持滚动位置
-    requestAnimationFrame(() => el.scrollTop = el.scrollHeight - prevHeight);
+    renderMessages({ scroll: 'preserve' });
   } finally {
     loadingMore = false;
   }

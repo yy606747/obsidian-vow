@@ -42,6 +42,7 @@ class ScreenCheckRequest:
     created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
     image_path: str | None = None
+    heart_work_origin: dict | None = field(default=None, repr=False)
     _done_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False, compare=False)
 
     def to_public(self) -> dict:

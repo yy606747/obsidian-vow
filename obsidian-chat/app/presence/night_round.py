@@ -21,7 +21,7 @@ from app.self_wake.time_policy import owner_timezone_name
 
 DEFAULT_NIGHT_ROUND_TIMEZONE = "America/Los_Angeles"
 NIGHT_BRANCHES = frozenset(
-    {"draw", "sticker", "reflect", "none", "invalid", "provider_failed"}
+    {"draw", "sticker", "reflect", "scene_card", "none", "invalid", "provider_failed"}
 )
 NIGHT_STATUSES = frozenset({"running", "completed", "failed"})
 _HHMM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")

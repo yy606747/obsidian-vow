@@ -44,6 +44,9 @@ async def init_db():
             await db.execute("ALTER TABLE messages ADD COLUMN attachments TEXT DEFAULT ''")
         except:
             pass
+        columns = {row[1] for row in await (await db.execute("PRAGMA table_info(messages)")).fetchall()}
+        if "response_status" not in columns:
+            await db.execute("ALTER TABLE messages ADD COLUMN response_status TEXT NOT NULL DEFAULT ''")
         # 昨日续点缓存：纸条文本 + 窗口内容签名（内容不变就不重算）
         for _col in ("handoff_note TEXT", "handoff_note_sig TEXT"):
             try:
@@ -171,6 +174,8 @@ async def init_db():
         from app.tools.ledger_schema import init_tool_invocation_ledger_tables
         from app.presence.db import init_presence_tables
         from app.self_wake.schema import init_self_wake_tables
+        from app.scenes.schema import init_scene_tables
+        from app.together.schema import init_together_tables
         from app.web_search.schema import init_web_search_tables
         from app.web_push.schema import init_web_push_tables
         from app.working_model.schema import init_working_model_tables
@@ -191,6 +196,8 @@ async def init_db():
         await init_tool_invocation_ledger_tables(db)
         await init_presence_tables(db)
         await init_self_wake_tables(db)
+        await init_scene_tables(db)
+        await init_together_tables(db)
         await init_web_search_tables(db)
         await init_web_push_tables(db)
         working_model_migration_report = await migrate_legacy_roots_in_tx(
@@ -236,6 +243,8 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_heart_whispers_created ON heart_whispers(created_at DESC)")
+        from app.heart_works.repository import init_tables as init_heart_work_tables
+        await init_heart_work_tables(db)
         from app.daily_chat.schema import init_daily_chat_tables
 
         await init_daily_chat_tables(db)

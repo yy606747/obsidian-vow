@@ -11,11 +11,14 @@ android {
         applicationId "app.obsidianvow.core"
         minSdk 26       // Health Connect 需要 API 26+
         targetSdk 34
-        versionCode 6
-        versionName "1.0.5"
+        versionCode 11
+        versionName "1.0.10"
     }
 
     buildTypes {
+        debug {
+            if (project.hasProperty('sceneDevicePilot')) versionNameSuffix '-scene-pilot'
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -30,7 +33,20 @@ android {
     kotlinOptions {
         jvmTarget = '1.8'
     }
+
+    sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/togetherAssets')
 }
+
+// Bundle the exact renderer used by daily chat. The floating transcript is offline;
+// no CDN, duplicate parser implementation, or server page is involved.
+def togetherMarkdownAssets = tasks.register('togetherMarkdownAssets', Sync) {
+    into layout.buildDirectory.dir('generated/togetherAssets/together/shared')
+    from('../../obsidian-chat/static/js/chat') { include 'markdown.js' }
+    from('../../obsidian-chat/static/vendor') {
+        include 'markdown-it.min.js', 'dompurify.min.js', '*.LICENSE', 'markdown-vendor.json'
+    }
+}
+tasks.named('preBuild').configure { dependsOn togetherMarkdownAssets }
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'

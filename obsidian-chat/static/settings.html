@@ -37,7 +37,7 @@
   select.form-input { appearance:auto; }
 </style>
 <link rel="stylesheet" href="/static/vow.css?v=20260913-enamel">
-<script src="/static/vow.js?v=20260913-gold-dust"></script>
+<script src="/static/vow.js?v=20260920-companion-names"></script>
 <link rel="stylesheet" href="/static/gold-dust.css?v=20260913-gold-dust">
 <script src="/static/gold-dust.js?v=20260913-gold-dust" defer></script>
 </head>
@@ -86,27 +86,24 @@
           </label>
         </div>
       </div>
-      <div class="card" style="margin-top:14px">
-        <div class="card-head">
-          <div>
-            <div class="card-title">主脑查看手机/平板屏幕</div>
-            <div class="card-sub" id="mobileScreenCaptureStatus">默认关闭。开启后仍需要手机/平板上弹窗明确同意，且每次截图都要系统录屏授权。</div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="mobileScreenCaptureToggle" onchange="saveMobileScreenCaptureConfig()">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
       <div class="card">
         <div class="card-head">
-          <div><div class="card-title">腻歪时间 · Look at me</div>
+          <div><div class="card-title">邀约</div>
             <div class="card-sub">邀请接受后留在当天聊天，可以随时立即结束。</div></div>
           <label class="toggle-switch"><input type="checkbox" id="lookAtMeToggle" onchange="saveLookAtMe()"><span class="toggle-slider"></span></label>
         </div>
         <select id="lookAtMeDevice" aria-label="接收邀请的手机" onchange="saveLookAtMe()"></select>
         <button class="btn" onclick="openLookAtMePermissions()">手机执行设置</button>
         <div class="card-sub" id="lookAtMeStatus">读取中</div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div><div class="card-title">相伴</div>
+            <div class="card-sub">从手机聊天页主动开启。文字陪伴、可编辑语音转写和按需单张图片。</div></div>
+          <label class="toggle-switch"><input type="checkbox" id="togetherToggle" onchange="saveTogether()"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="card-sub" id="togetherStatus">读取中</div>
+        <div id="togetherWritebacks"></div>
       </div>
       <div class="card">
         <div class="card-head">
@@ -233,11 +230,31 @@
 
       <div class="card">
         <div class="card-title">记忆 digest（memory_digest）</div>
-        <div class="card-sub">即时检索路由、聊天状态提取、手动总结新记忆。</div>
+        <div class="card-sub">即时检索路由、聊天状态提取、记忆总结与最近 72 小时时间线。</div>
         <label class="form-label">端点</label>
         <select class="form-input" id="memoryDigestEp"></select>
         <label class="form-label">模型</label>
         <input class="form-input" id="memoryDigestModel" placeholder="如 Qwen/Qwen2.5-7B-Instruct" style="font-family:monospace">
+        <label class="form-label">时间线生成超时（秒）</label>
+        <input class="form-input" id="timelineTimeout" type="number" min="1" max="60" step="1" value="60">
+        <div class="card-sub">建议 60 秒，包含重试；后台生成，不阻塞聊天回复。</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">关系卡（relational_card_generation）</div>
+        <div class="card-sub">提取和更新关系记忆。</div>
+        <label class="form-label">端点</label>
+        <select class="form-input" id="relationalCardEp"></select>
+        <label class="form-label">模型</label>
+        <input class="form-input" id="relationalCardModel" style="font-family:monospace">
+      </div>
+
+      <div class="card">
+        <div class="card-title">工作记忆判断（working_model_gate）</div>
+        <label class="form-label">端点</label>
+        <select class="form-input" id="workingModelGateEp"></select>
+        <label class="form-label">模型</label>
+        <input class="form-input" id="workingModelGateModel" style="font-family:monospace">
       </div>
 
       <div class="card">
@@ -249,6 +266,15 @@
         <input class="form-input" id="asrModel" placeholder="如 FunAudioLLM/SenseVoiceSmall" style="font-family:monospace">
         <label class="form-label">接口路径 <span style="color:var(--text3)">(默认 /audio/transcriptions)</span></label>
         <input class="form-input" id="asrPath" placeholder="/audio/transcriptions" style="font-family:monospace">
+      </div>
+
+      <div class="card">
+        <div class="card-title">场景设备编译（scene_compiler）</div>
+        <div class="card-sub">把每台设备的自然语言意图翻译成循环序列。留空时不能编译，不自动改用主模型。</div>
+        <label class="form-label">端点</label>
+        <select class="form-input" id="sceneCompilerEp"></select>
+        <label class="form-label">模型</label>
+        <input class="form-input" id="sceneCompilerModel" style="font-family:monospace">
       </div>
 
       <div class="card">
@@ -320,7 +346,7 @@
       </div>
 
       <div class="btn-row" style="margin-bottom:20px">
-        <button class="btn-save" onclick="saveSlots()">保存槽位</button>
+        <button class="btn-save" id="saveSlotsButton" onclick="saveSlots()" disabled>保存槽位</button>
       </div>
 
       <div class="card">
@@ -331,20 +357,16 @@
           <input class="form-input" id="umKey" placeholder="显示名，如 deepseek-chat" style="flex:1">
           <select class="form-input" id="umEp" style="flex:1"></select>
           <input class="form-input" id="umModel" placeholder="模型名" style="flex:1; font-family:monospace">
-          <select class="form-input" id="umThinkingLevel" aria-label="思考强度" style="flex:1">
-            <option value="">思考：模型默认</option>
-            <option value="LOW">思考：低</option>
-            <option value="MEDIUM">思考：中</option>
-            <option value="HIGH">思考：高</option>
-          </select>
           <label style="display:flex; align-items:center; gap:5px; white-space:nowrap; font-size:12px; color:var(--text2);">
             <input type="checkbox" id="umAudioInput"> 原生音频输入
           </label>
-          <button class="mini-btn primary" onclick="addUserModel()">+</button>
+          <button class="mini-btn primary" id="umSave" onclick="addUserModel()">保存模型</button>
+          <button class="mini-btn" onclick="resetUserModelForm()">清空</button>
           <label style="display:flex; align-items:center; gap:5px; white-space:nowrap; font-size:12px; color:var(--text2);">
             <input type="checkbox" id="umImageInput"> 已确认支持图片输入（用于重看原图）
           </label>
         </div>
+        <div id="umThinking"></div>
       </div>
     </div>
 
@@ -414,16 +436,6 @@ document.querySelectorAll('.tab').forEach(t => {
     renderScreenCaptureStatus(cfg);
   } catch(e) {
     $("screenCaptureStatus").textContent = "读取失败";
-  }
-})();
-
-(async function initMobileScreenCaptureConfig() {
-  try {
-    const cfg = await api("GET", "/api/mobile-screen/config");
-    $("mobileScreenCaptureToggle").checked = !!cfg.mobile_screen_capture_enabled;
-    renderMobileScreenCaptureStatus(cfg);
-  } catch(e) {
-    $("mobileScreenCaptureStatus").textContent = "读取失败";
   }
 })();
 
@@ -503,20 +515,6 @@ function renderScreenCaptureStatus(cfg) {
     text += " · Core prompt 不会注入 SCREEN_CHECK 能力";
   }
   $("screenCaptureStatus").textContent = text;
-}
-
-async function saveMobileScreenCaptureConfig() {
-  const enabled = $("mobileScreenCaptureToggle").checked;
-  await api("PUT", "/api/mobile-screen/config", { mobile_screen_capture_enabled: enabled });
-  renderMobileScreenCaptureStatus({ mobile_screen_capture_enabled: enabled });
-  showToast(enabled ? "✅ 已开启手机/平板屏幕查看" : "已关闭手机/平板屏幕查看");
-}
-
-function renderMobileScreenCaptureStatus(cfg) {
-  const enabled = !!cfg.mobile_screen_capture_enabled;
-  let text = enabled ? "已开启" : "已关闭";
-  text += enabled ? " · 由 AI 按设备发起，手机端授权后截图" : " · Core prompt 不会注入 MOBILE_SCREEN_CHECK 能力";
-  $("mobileScreenCaptureStatus").textContent = text;
 }
 
 (async function initOpportunityConfig() {
@@ -808,94 +806,156 @@ async function testCurrentEndpoint() {
 }
 
 /* ── 槽位 + 用户模型 ── */
+const slotFields = [
+  ['sceneCompiler', 'scene_compiler', true],
+  ['sentinel', 'sentinel', true], ['memoryDigest', 'memory_digest', true],
+  ['relationalCard', 'relational_card_generation', true], ['workingModelGate', 'working_model_gate', true],
+  ['asr', 'asr', false], ['presenceRenderer', 'presence_renderer', true],
+  ['presenceImage', 'presence_image', false], ['presenceSummary', 'presence_summary', true],
+  ['stickerSummary', 'sticker_summary', true], ['stickerMatcher', 'sticker_matcher', true],
+  ['stickerImage', 'sticker_image', false], ['visionSummary', 'vision_summary', true],
+];
+const thinkingLabels = {MINIMAL:'极低', LOW:'低', MEDIUM:'中', HIGH:'高', MAX:'最高'};
+const thinkingControls = new Map();
+let _userModels = {};
+
+async function settingsApi(method, url, body) {
+  const response = await fetch(url, {method, headers:{'Content-Type':'application/json'},
+    ...(body === undefined ? {} : {body:JSON.stringify(body)})});
+  const data = await response.json();
+  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `保存失败（${response.status}）`);
+  return data;
+}
+
+function installThinkingControl(prefix) {
+  let box = $(prefix + 'Thinking');
+  if (!box) {
+    box = document.createElement('div'); box.id = prefix + 'Thinking';
+    $(prefix + 'Model').after(box);
+  }
+  box.innerHTML = `
+    <label class="form-label" for="${prefix}ThinkingMode">思考</label>
+    <select class="form-input" id="${prefix}ThinkingMode"><option value="default">跟随模型默认</option></select>
+    <div id="${prefix}ThinkingLevelRow" hidden>
+      <label class="form-label" for="${prefix}ThinkingLevel">思考强度</label>
+      <select class="form-input" id="${prefix}ThinkingLevel"></select>
+    </div>
+    <div id="${prefix}ThinkingBudgetRow" hidden>
+      <label class="form-label" for="${prefix}ThinkingBudget">思考 token 上限（可选）</label>
+      <input class="form-input" id="${prefix}ThinkingBudget" type="number" step="1" placeholder="留空使用模型默认">
+    </div>
+    <div class="card-sub" id="${prefix}ThinkingHint">选择端点和模型后显示可用设置。</div>`;
+  const state = {identity:null, sequence:0, pending:null, error:null};
+  thinkingControls.set(prefix, state);
+  $(prefix + 'ThinkingMode').addEventListener('change', () => {
+    const off = $(prefix + 'ThinkingMode').value === 'off';
+    $(prefix + 'ThinkingLevel').disabled = off;
+    $(prefix + 'ThinkingBudget').disabled = off;
+  });
+  for (const suffix of ['Ep', 'Model']) $(prefix + suffix).addEventListener('change', () => {
+    refreshThinkingControl(prefix).catch(e => showToast(e.message));
+  });
+}
+
+function readThinkingControl(prefix) {
+  const mode = $(prefix + 'ThinkingMode').value;
+  const thinkingLevel = mode === 'off' ? null : $(prefix + 'ThinkingLevel').value || null;
+  const rawBudget = mode === 'off' ? '' : $(prefix + 'ThinkingBudget').value;
+  const budget = $(prefix + 'ThinkingBudget');
+  if (rawBudget && !budget.checkValidity()) throw new Error(`思考 token 上限需在 ${budget.min} 至 ${budget.max} 之间`);
+  return {enable_thinking: mode === 'default' ? null : mode === 'on',
+    thinking_level: thinkingLevel, thinking_budget: rawBudget ? Number(rawBudget) : null};
+}
+
+async function refreshThinkingControl(prefix, values = null) {
+  const state = thinkingControls.get(prefix);
+  const endpoint = $(prefix + 'Ep').value, model = $(prefix + 'Model').value.trim();
+  const identity = JSON.stringify([endpoint, model]);
+  if (identity === state.identity && values === null && !state.error) return state.pending;
+  state.identity = identity; state.error = null;
+  const sequence = ++state.sequence;
+  // A new endpoint/model starts at its own defaults, never with the previous model's parameters.
+  const selected = values || {};
+  $(prefix + 'ThinkingMode').disabled = true;
+  state.pending = (async () => {
+    try {
+      const caps = endpoint && model ? await settingsApi('GET', '/api/model-thinking?' + new URLSearchParams({endpoint, model}))
+        : {modes:['default'], levels:[], budget:null, hint:'选择端点和模型后显示可用设置。'};
+      if (sequence !== state.sequence) return;
+      const mode = $(prefix + 'ThinkingMode');
+      mode.replaceChildren(...caps.modes.map(value => new Option(({default:'跟随模型默认',on:'开启思考',off:'关闭思考'})[value], value)));
+      const chosen = selected.enable_thinking === false ? 'off' : selected.enable_thinking === true ? 'on' : 'default';
+      mode.value = caps.modes.includes(chosen) ? chosen : 'default';
+      mode.disabled = caps.modes.length === 1;
+      const level = $(prefix + 'ThinkingLevel');
+      level.replaceChildren(new Option('模型默认', ''), ...caps.levels.map(value => new Option(thinkingLabels[value] || value, value)));
+      level.value = caps.levels.includes(selected.thinking_level) ? selected.thinking_level : '';
+      $(prefix + 'ThinkingLevelRow').hidden = !caps.levels.length;
+      const budget = $(prefix + 'ThinkingBudget');
+      budget.value = caps.budget && selected.thinking_budget != null ? selected.thinking_budget : '';
+      budget.min = caps.budget?.min || ''; budget.max = caps.budget?.max || '';
+      $(prefix + 'ThinkingBudgetRow').hidden = !caps.budget;
+      level.disabled = budget.disabled = mode.value === 'off';
+      $(prefix + 'ThinkingHint').textContent = caps.hint;
+    } catch (error) {
+      if (sequence === state.sequence) {
+        state.error = error;
+        $(prefix + 'ThinkingHint').textContent = '思考选项读取失败，请重试。';
+      }
+      throw error;
+    }
+  })();
+  return state.pending;
+}
+
+slotFields.filter(([, , thinking]) => thinking).forEach(([prefix]) => installThinkingControl(prefix));
+installThinkingControl('um');
+
 function refreshEpSelects() {
   const opts = _endpoints.map(e =>
     `<option value="${escAttr(e.id)}">${escHtml(e.name || e.id)} (${escHtml(e.type || 'openai')})</option>`
   ).join('');
-  ["sentinelEp", "memoryDigestEp", "asrEp", "presenceRendererEp", "presenceImageEp", "presenceSummaryEp", "visionSummaryEp", "stickerSummaryEp", "stickerMatcherEp", "stickerImageEp", "umEp"].forEach(id => {
-    const el = $(id);
-    if (!el) return;
-    const prev = el.value;
+  [...slotFields.map(([prefix]) => prefix + 'Ep'), 'umEp'].forEach(id => {
+    const el = $(id), prev = el.value;
     el.innerHTML = '<option value="">(未选择)</option>' + opts;
     if (prev) el.value = prev;
   });
 }
 
 async function loadSlots() {
-  const slots = await api("GET", "/api/slots");
-  $("presenceSummaryEp").value = slots.presence_summary?.endpoint || "";
-  $("presenceSummaryModel").value = slots.presence_summary?.model || "";
-  $("stickerSummaryEp").value = slots.sticker_summary?.endpoint || "";
-  $("stickerSummaryModel").value = slots.sticker_summary?.model || "";
-  $("stickerMatcherEp").value = slots.sticker_matcher?.endpoint || "";
-  $("stickerMatcherModel").value = slots.sticker_matcher?.model || "";
-  $("stickerImageEp").value = slots.sticker_image?.endpoint || "";
-  $("stickerImageModel").value = slots.sticker_image?.model || "";
-  const sentinel = slots.sentinel || {};
-  const memoryDigest = slots.memory_digest || {};
-  const asr = slots.asr || {};
-  const presenceRenderer = slots.presence_renderer || {};
-  const presenceImage = slots.presence_image || {};
-  const visionSummary = slots.vision_summary || {};
-  $("visionSummaryEp").value = visionSummary.endpoint || "";
-  $("visionSummaryModel").value = visionSummary.model || "glm-4.6v-flash";
-  $("visionSummaryEnabled").checked = visionSummary.enabled === true;
-  const imageSettings = await api("GET", "/api/settings");
-  $("imageMemoryEnabled").checked = imageSettings.image_memory_enabled === true;
-  $("sentinelEp").value = sentinel.endpoint || "";
-  $("sentinelModel").value = sentinel.model || "";
-  $("memoryDigestEp").value = memoryDigest.endpoint || "";
-  $("memoryDigestModel").value = memoryDigest.model || "";
-  $("asrEp").value = asr.endpoint || "";
-  $("asrModel").value = asr.model || "";
-  $("asrPath").value = asr.path || "/audio/transcriptions";
-  $("presenceRendererEp").value = presenceRenderer.endpoint || "";
-  $("presenceRendererModel").value = presenceRenderer.model || "";
-  $("presenceImageEp").value = presenceImage.endpoint || "";
-  $("presenceImageModel").value = presenceImage.model || "";
+  const [slots, imageSettings, memoryConfig] = await Promise.all([
+    settingsApi('GET', '/api/slots'), settingsApi('GET', '/api/settings'), settingsApi('GET', '/api/memories/v3/config'),
+  ]);
+  for (const [prefix, name] of slotFields) {
+    $(prefix + 'Ep').value = slots[name]?.endpoint || '';
+    $(prefix + 'Model').value = slots[name]?.model || '';
+  }
+  $('asrPath').value = slots.asr?.path || '/audio/transcriptions';
+  $('visionSummaryEnabled').checked = slots.vision_summary?.enabled === true;
+  $('imageMemoryEnabled').checked = imageSettings.image_memory_enabled === true;
+  $('timelineTimeout').value = memoryConfig.timeline_generation_timeout_sec;
+  await Promise.all(slotFields.filter(([, , thinking]) => thinking).map(([prefix, name]) => refreshThinkingControl(prefix, slots[name] || {})));
+  $('saveSlotsButton').disabled = false;
 }
 
 async function saveSlots() {
-  await api("PUT", "/api/slots", { name: "sticker_summary", endpoint: $("stickerSummaryEp").value, model: $("stickerSummaryModel").value.trim() });
-  await api("PUT", "/api/slots", { name: "sticker_matcher", endpoint: $("stickerMatcherEp").value, model: $("stickerMatcherModel").value.trim(), extras: { enable_thinking: false } });
-  await api("PUT", "/api/slots", { name: "sticker_image", endpoint: $("stickerImageEp").value, model: $("stickerImageModel").value.trim() });
-  await api("PUT", "/api/slots", {
-    name: "sentinel",
-    endpoint: $("sentinelEp").value,
-    model: $("sentinelModel").value.trim(),
-  });
-  await api("PUT", "/api/slots", {
-    name: "memory_digest",
-    endpoint: $("memoryDigestEp").value,
-    model: $("memoryDigestModel").value.trim(),
-  });
-  await api("PUT", "/api/slots", {
-    name: "asr",
-    endpoint: $("asrEp").value,
-    model: $("asrModel").value.trim(),
-    extras: { path: $("asrPath").value.trim() || "/audio/transcriptions" },
-  });
-  await api("PUT", "/api/slots", {
-    name: "presence_renderer",
-    endpoint: $("presenceRendererEp").value,
-    model: $("presenceRendererModel").value.trim(),
-  });
-  await api("PUT", "/api/slots", {
-    name: "presence_image",
-    endpoint: $("presenceImageEp").value,
-    model: $("presenceImageModel").value.trim(),
-  });
-  await api("PUT", "/api/slots", {
-    name: "presence_summary", endpoint: $("presenceSummaryEp").value,
-    model: $("presenceSummaryModel").value.trim(),
-  });
-  await api("PUT", "/api/slots", {
-    name: "vision_summary", endpoint: $("visionSummaryEp").value,
-    model: $("visionSummaryModel").value.trim(),
-    extras: { enabled: $("visionSummaryEnabled").checked },
-  });
-  await api("PUT", "/api/settings", { image_memory_enabled: $("imageMemoryEnabled").checked });
-  showToast("✅ 槽位已保存");
+  const button = $('saveSlotsButton'); button.disabled = true;
+  try {
+    if (!$('timelineTimeout').value || !$('timelineTimeout').reportValidity()) throw new Error('时间线超时请填写 1 至 60 秒');
+    await Promise.all(slotFields.filter(([, , thinking]) => thinking).map(([prefix]) => refreshThinkingControl(prefix)));
+    // Validate the whole form before starting writes.
+    const updates = slotFields.map(([prefix, name, thinking]) => ({name,
+      endpoint:$(prefix + 'Ep').value, model:$(prefix + 'Model').value.trim(),
+      extras:{...(thinking ? readThinkingControl(prefix) : {}),
+        ...(name === 'asr' ? {path:$('asrPath').value.trim() || '/audio/transcriptions'} : {}),
+        ...(name === 'vision_summary' ? {enabled:$('visionSummaryEnabled').checked} : {})},
+    }));
+    for (const update of updates) await settingsApi('PUT', '/api/slots', update);
+    await settingsApi('PUT', '/api/memories/v3/config', {timeline_generation_timeout_sec:Number($('timelineTimeout').value)});
+    await settingsApi('PUT', '/api/settings', {image_memory_enabled:$('imageMemoryEnabled').checked});
+    showToast('✅ 槽位与时间线超时已保存');
+  } catch (error) { showToast('❌ ' + error.message); }
+  finally { button.disabled = false; }
 }
 
 async function backfillImages() {
@@ -914,36 +974,69 @@ async function loadImageMemoryStatus() {
   ).join("\n") || "暂无图片描述记录";
 }
 
-async function loadUserModels() {
-  const ums = await api("GET", "/api/user_models");
-  const box = $("userModelList");
-  const keys = Object.keys(ums);
-  if (!keys.length) { box.innerHTML = '<div class="hint" style="margin:0">暂无</div>'; return; }
-  box.innerHTML = keys.map(k => {
-    const m = ums[k] || {};
-    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px dashed var(--border);">
-      <div>
-        <div style="font-weight:600">${escHtml(k)}</div>
-        <div class="card-sub">${escHtml(m.endpoint || '')} · ${escHtml(m.model || '')} · ${m.audio_input === true ? '可直接听音频' : '不接收音频'} · 思考：${({LOW:'低',MEDIUM:'中',HIGH:'高'})[m.thinking_level] || '模型默认'}</div>
-      </div>
-      <button class="mini-btn danger" onclick="deleteUserModel('${escAttr(k)}')">删除</button>
-    </div>`;
-  }).join('');
+function thinkingSummary(model) {
+  if (model.enable_thinking === false) return '关闭';
+  if (model.thinking_level) return thinkingLabels[model.thinking_level] || model.thinking_level;
+  if (model.thinking_budget != null) return `预算 ${model.thinking_budget} token`;
+  return model.enable_thinking === true ? '开启' : '模型默认';
 }
 
+async function loadUserModels() {
+  _userModels = await settingsApi('GET', '/api/user_models');
+  const box = $('userModelList'), keys = Object.keys(_userModels);
+  if (!keys.length) { box.innerHTML = '<div class="hint" style="margin:0">暂无</div>'; return; }
+  box.innerHTML = keys.map((key, index) => {
+    const m = _userModels[key] || {};
+    return `<div style="display:flex; justify-content:space-between; gap:8px; align-items:center; padding:6px 0; border-bottom:1px dashed var(--border);">
+      <div style="min-width:0;overflow-wrap:anywhere">
+        <div style="font-weight:600">${escHtml(key)}</div>
+        <div class="card-sub">${escHtml(m.endpoint || '')} · ${escHtml(m.model || '')} · ${m.audio_input === true ? '可直接听音频' : '不接收音频'} · 思考：${escHtml(thinkingSummary(m))}</div>
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0">
+        <button class="mini-btn" data-edit-model="${index}">编辑</button>
+        <button class="mini-btn danger" data-delete-model="${index}">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('[data-edit-model]').forEach(button => button.onclick = () => editUserModel(keys[Number(button.dataset.editModel)]));
+  box.querySelectorAll('[data-delete-model]').forEach(button => button.onclick = () => deleteUserModel(keys[Number(button.dataset.deleteModel)]));
+}
+
+async function editUserModel(key) {
+  const model = _userModels[key];
+  $('umKey').value = key; $('umKey').readOnly = true;
+  $('umEp').value = model.endpoint || ''; $('umModel').value = model.model || '';
+  $('umAudioInput').checked = model.audio_input === true;
+  $('umImageInput').checked = model.image_input === true;
+  $('umImageInput').dataset.original = model.image_input == null ? 'default' : String(model.image_input);
+  $('umSave').textContent = '保存修改';
+  try { await refreshThinkingControl('um', model); } catch (e) { showToast(e.message); }
+  $('umKey').scrollIntoView({block:'center', behavior:'smooth'});
+}
+
+function resetUserModelForm() {
+  $('umKey').value = ''; $('umKey').readOnly = false; $('umModel').value = '';
+  $('umAudioInput').checked = false; $('umImageInput').checked = false;
+  $('umImageInput').dataset.original = 'false';
+  $('umSave').textContent = '保存模型';
+  refreshThinkingControl('um', {}).catch(e => showToast(e.message));
+}
+$('umImageInput').addEventListener('change', () => { $('umImageInput').dataset.original = String($('umImageInput').checked); });
+
 async function addUserModel() {
-  const key = $("umKey").value.trim();
-  const endpoint = $("umEp").value;
-  const model = $("umModel").value.trim();
-  const audioInput = $("umAudioInput").checked;
-  const imageInput = $("umImageInput").checked;
-  const thinkingLevel = $("umThinkingLevel").value || null;
-  if (!key || !endpoint || !model) { showToast("❌ 填完三项"); return; }
-  await api("PUT", "/api/user_models", { key, endpoint, model, audio_input: audioInput, image_input: imageInput, thinking_level: thinkingLevel });
-  $("umKey").value = ""; $("umModel").value = ""; $("umAudioInput").checked = false; $("umImageInput").checked = false;
-  $("umThinkingLevel").value = "";
-  showToast("✅ 已添加");
-  await loadUserModels();
+  const button = $('umSave'); button.disabled = true;
+  try {
+    const key = $('umKey').value.trim(), endpoint = $('umEp').value, model = $('umModel').value.trim();
+    if (!key || !endpoint || !model) throw new Error('请填写显示名、端点和模型名');
+    await refreshThinkingControl('um');
+    await settingsApi('PUT', '/api/user_models', {key, endpoint, model,
+      audio_input:$('umAudioInput').checked,
+      image_input:$('umImageInput').dataset.original === 'default' ? null : $('umImageInput').checked,
+      ...readThinkingControl('um')});
+    resetUserModelForm(); await loadUserModels();
+    showToast('✅ 模型已保存');
+  } catch (error) { showToast('❌ ' + error.message); }
+  finally { button.disabled = false; }
 }
 
 async function deleteUserModel(key) {
@@ -959,7 +1052,7 @@ async function deleteUserModel(key) {
   await loadSlots();
   await loadUserModels();
   await loadDiagnostics();
-})();
+})().catch(error => showToast('设置读取失败：' + error.message));
 
 async function loadLookAtMe() {
   try {
@@ -996,6 +1089,36 @@ function openLookAtMePermissions() {
   else showToast('请在新 APK 中打开此页，设置悬浮窗、使用情况、通知、来电中断及厂商后台权限',6000);
 }
 loadLookAtMe();
+async function loadTogether() {
+  try {
+    const cfg = await api('GET','/api/together/config');
+    $('togetherToggle').checked = cfg.enabled;
+    $('togetherStatus').textContent = (cfg.enabled ? '已开启' : '已关闭') + ' · ' +
+      (cfg.asr_ready ? '语音转写已配置' : '语音转写尚未配置，可先打字');
+    const jobs = await api('GET','/api/together/writebacks');
+    const root = $('togetherWritebacks'); root.replaceChildren();
+    for (const job of jobs) {
+      const row = document.createElement('div'); row.className = 'card-sub';
+      const labels = {event:'陪伴事件', note:'主动笔记', understanding:'认识变化'};
+      row.textContent = `${labels[job.kind] || job.kind}：${job.status === 'failed' ? '等待重试' : '写入中'}`;
+      if (job.status === 'failed') {
+        const retry = document.createElement('button'); retry.className = 'btn'; retry.textContent = '重试写入';
+        retry.addEventListener('click', async () => {
+          retry.disabled = true;
+          try { await api('POST',`/api/together/writebacks/${encodeURIComponent(job.id)}/retry`,{}); await loadTogether(); }
+          catch (_) { showToast('没有完成重试，请稍后再试'); retry.disabled = false; }
+        }); row.appendChild(retry);
+      }
+      root.appendChild(row);
+    }
+  } catch (_) { $('togetherStatus').textContent = '读取失败，请刷新重试'; }
+}
+async function saveTogether() {
+  try { await api('PUT','/api/together/config',{enabled:$('togetherToggle').checked}); }
+  catch (_) { showToast('未能保存，请重试'); }
+  await loadTogether();
+}
+loadTogether();
 </script>
 </body>
 </html>

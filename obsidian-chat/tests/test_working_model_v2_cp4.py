@@ -50,6 +50,8 @@ def _run(awaitable):
 
 
 def _sha256(path: Path) -> str:
+    if path == OFFLINE_INPUTS and not path.exists():
+        pytest.skip("原始研究输入不随公开仓库发布；完整私有版本保留此研究契约检查")
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 

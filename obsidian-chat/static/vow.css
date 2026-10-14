@@ -534,3 +534,10 @@ body[data-vow-page="heart-whispers"] .page-content { max-width: 1120px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* During companionship, ordinary history stays readable and its draft stays intact. */
+.together-chat-notice { display: flex; align-items: center; gap: 12px; color: var(--text2); font-size: 13px; }
+.together-chat-notice[hidden] { display: none; }
+.together-chat-notice span { flex: 1; }
+.together-chat-notice button { border: 1px solid #d3b58270; border-radius: 12px; background: #263744; color: #eed2a0; padding: 10px 15px; cursor: pointer; }
+body.together-active .input-area > :not(.together-chat-notice) { display: none !important; }

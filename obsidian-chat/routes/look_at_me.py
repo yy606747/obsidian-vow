@@ -90,4 +90,6 @@ async def status(device_id: str = ''):
         r = await (await db.execute('SELECT * FROM look_at_me_requests WHERE device_id=? ORDER BY created_at DESC LIMIT 1', (device_id or cfg['device_id'],))).fetchone()
     from app.daily_chat.service import daily_chat
     state = await daily_chat.ensure_current()
-    return {**cfg,'conv_id':state.get('active_conv_id'),'server_now':time.time(),'request':public_request(dict(r)) if r else None}
+    from app.together.coexist import is_active
+    return {**cfg,'conv_id':state.get('active_conv_id'),'server_now':time.time(),'deferred':await is_active(),
+            'request':public_request(dict(r)) if r else None}

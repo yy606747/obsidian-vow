@@ -93,7 +93,13 @@ async function ensureEventStreamResponse(res, actionLabel) {
 
 function resetStreamingAssistantMessage(msgId) {
   const mi = currentMessages.findIndex(m => m.id === msgId);
-  if (mi >= 0) currentMessages[mi].content = "...";
+  if (mi >= 0) {
+    currentMessages[mi].content = "...";
+    delete currentMessages[mi].transient_error;
+    delete currentMessages[mi].error_text;
+    delete currentMessages[mi].persisted;
+    delete currentMessages[mi].response_status;
+  }
   if (window.ChatMarkdown) { ChatMarkdown.reset(msgId); return; }
   const container = document.getElementById(`m_${msgId}`);
   if (!container) return;
@@ -149,12 +155,21 @@ async function handleSendStreamEvent(data, streamState) {
     currentMessages.push({ id: data.id, conv_id: currentConvId, role: "assistant", content: "...", created_at: Date.now()/1000 });
     renderMessages();
     _startTypingAnim(data.id);
+  } else if (data.type === "retry") {
+    streamState.aiContent = "";
+    streamState.hasError = false;
+    resetStreamingAssistantMessage(streamState.aiMsgId);
+    _startTypingAnim(streamState.aiMsgId, data.reason === "timeout" ? "连接有点慢，正在重试…" : "");
+  } else if (data.type === "query") {
+    showQueryProgress(streamState.aiMsgId, data, streamState.aiContent);
   } else if (data.type === "chunk") {
     if (!streamState.aiMsgId) return;
+    clearQueryProgress(streamState.aiMsgId);
     await _awaitTypingFloor();
     _stopTypingAnim();
     if (data.content.includes("\x00RETRY\x00")) {
       streamState.aiContent = "";
+      streamState.hasError = false;
       resetStreamingAssistantMessage(streamState.aiMsgId);
       _startTypingAnim(streamState.aiMsgId);
       return;
@@ -176,6 +191,7 @@ async function handleSendStreamEvent(data, streamState) {
     streamState.aiContent = String(data.message.content || "");
     upsertSystemMessage(data.message);
   } else if (data.type === "debug" && streamState.aiMsgId) {
+    clearQueryProgress(streamState.aiMsgId);
     msgDebugData[streamState.aiMsgId] = data;
     if (data.has_error) {
       streamState.hasError = true;
@@ -245,6 +261,7 @@ function finalizeSendStream(streamState) {
 }
 
 async function send() {
+  if (await window.ChatTogether?.guard?.()) return;
   if (window.ChatDocuments?.busy()) { showToast('文件还在读取，稍等一下。'); return; }
   if (typeof resolveDailyConversation === 'function' && resolveDailyConversation(currentConvId) !== currentConvId) {
     beginChatSync();
@@ -293,7 +310,7 @@ async function send() {
   // 立即显示用户消息（乐观更新）
   const tempUserMsg = { id: "temp_user", conv_id: currentConvId, role: "user", content: text, created_at: Date.now()/1000, attachments };
   currentMessages.push(tempUserMsg);
-  renderMessages();
+  renderMessages({ scroll: 'bottom' });
 
   try {
     _lastUserMood = _detectUserMood(text);

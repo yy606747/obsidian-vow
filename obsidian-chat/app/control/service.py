@@ -62,6 +62,18 @@ class ControlSessionService:
         self._outcomes = outcome_service
 
     async def start(
+        self, *, conv_id: str, kind: ControlKind, owner_client_id: str,
+        device_id: str | None = None, control_resource_id: str | None = None,
+        safeword_set: bool = False,
+    ) -> ControlSession:
+        from .ownership import legacy_control_mode
+        async with legacy_control_mode():
+            return await self._start_control(
+                conv_id=conv_id, kind=kind, owner_client_id=owner_client_id,
+                device_id=device_id, control_resource_id=control_resource_id, safeword_set=safeword_set,
+            )
+
+    async def _start_control(
         self,
         *,
         conv_id: str,
@@ -185,6 +197,11 @@ class ControlSessionService:
             return session
 
     async def heartbeat(self, *, session_id: str, owner_client_id: str) -> ControlSession:
+        from .ownership import legacy_control_mode
+        async with legacy_control_mode():
+            return await self._heartbeat_control(session_id=session_id, owner_client_id=owner_client_id)
+
+    async def _heartbeat_control(self, *, session_id: str, owner_client_id: str) -> ControlSession:
         session = await self._require_owner(session_id, owner_client_id)
         if session.status == "ended": return session
         now = self._now()
@@ -204,6 +221,12 @@ class ControlSessionService:
         return await self._require_session(session_id)
 
     async def snapshot(self, *, session_id: str, owner_client_id: str, frontend_snapshot_json: Any) -> ControlSession:
+        from .ownership import legacy_control_mode
+        async with legacy_control_mode():
+            return await self._snapshot_control(session_id=session_id, owner_client_id=owner_client_id,
+                                                frontend_snapshot_json=frontend_snapshot_json)
+
+    async def _snapshot_control(self, *, session_id: str, owner_client_id: str, frontend_snapshot_json: Any) -> ControlSession:
         session = await self._require_owner(session_id, owner_client_id)
         if session.status == "ended": return session
         snapshot = self._snapshot_text(frontend_snapshot_json)
@@ -271,6 +294,11 @@ class ControlSessionService:
             return current
 
     async def claim_tide_session(self, *, session_id: str, owner_client_id: str) -> ControlSession:
+        from .ownership import legacy_control_mode
+        async with legacy_control_mode():
+            return await self._claim_tide_session(session_id=session_id, owner_client_id=owner_client_id)
+
+    async def _claim_tide_session(self, *, session_id: str, owner_client_id: str) -> ControlSession:
         async with _tide_switch_lock:
             now = self._now()
             async with self._get_db() as db:

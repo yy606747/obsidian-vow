@@ -75,11 +75,27 @@ ROUTE_INVENTORY = {
         "shadow_evidence": False,
     },
     "mobile_screen.py": {
+        "classification": "legacy_retired_compatibility_only",
+        "shadow_evidence": False,
+    },
+    "look_at_me.py": {
         "classification": "service_backed_external_io_mutable",
+        "shadow_evidence": False,
+    },
+    "together.py": {
+        "classification": "service_backed_external_io_mutable",
+        "shadow_evidence": False,
+    },
+    "stickers.py": {
+        "classification": "service_backed_mutable",
         "shadow_evidence": False,
     },
     "schedule.py": {
         "classification": "legacy_mutable",
+        "shadow_evidence": False,
+    },
+    "scenes.py": {
+        "classification": "service_backed_external_io_mutable",
         "shadow_evidence": False,
     },
     "sensing.py": {

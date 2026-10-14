@@ -34,6 +34,7 @@ from config import BASE_DIR, PUBLIC_DIR, UPLOADS_DIR, SCREENSHOTS_DIR, SETTINGS,
 from database import get_db, init_db
 from app.background_tasks import begin_task_lifecycle, create_tracked_task
 from app.lifecycle import RuntimeResources
+from provider_http import provider_http_lifespan
 from ws import manager
 from app.devices import device_service
 from sentinel_runtime import sentinel_runtime
@@ -66,6 +67,7 @@ from routes import mobile_screen as mobile_screen_routes
 from routes import vows as vows_routes
 from routes import presence as presence_routes
 from routes import push as push_routes
+from routes import scenes as scene_routes
 
 
 _RING_KEEPALIVE_COOLDOWN_SEC = 60.0
@@ -95,13 +97,14 @@ async def lifespan(app: FastAPI):
     app.state.runtime_resources = resources
     app.state.ready = False
     begin_task_lifecycle()
-    try:
-        async with _runtime_lifespan(app):
-            app.state.ready = True
-            yield
-    finally:
-        app.state.ready = False
-        await resources.shutdown(timeout=5.0)
+    async with provider_http_lifespan():
+        try:
+            async with _runtime_lifespan(app):
+                app.state.ready = True
+                yield
+        finally:
+            app.state.ready = False
+            await resources.shutdown(timeout=5.0)
 
 
 @asynccontextmanager
@@ -110,6 +113,8 @@ async def _runtime_lifespan(app: FastAPI):
 
     validate_tool_registry()
     await init_db()
+    from app.scenes.session import get_scene_service
+    await get_scene_service().recover()
     if TEST_MODE:
         # 隔离检查只初始化临时数据库，不重放任务、启动线程或执行清理。
         yield
@@ -127,6 +132,8 @@ async def _runtime_lifespan(app: FastAPI):
     await sprite_library.reconcile_seed_lifecycle(device_id="pc")
     from app.web_search import web_search_service
     await web_search_service.resume_queued()
+    from app.heart_works.service import heart_work_service
+    create_tracked_task(heart_work_service.run_loop(), name="heart_works")
     # First migration/startup preserves every raw day still on disk in its
     # durable row before the configured retention policy prunes old files.
     try:
@@ -139,12 +146,8 @@ async def _runtime_lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Cleanup] startup prune failed: {e}")
     from app.pc_screen.service import cleanup_expired_files as cleanup_screen_files
-    from app.mobile_screen import mobile_screen_service
-    def cleanup_all_screen_files():
-        cleanup_screen_files()
-        mobile_screen_service.cleanup_expired_files()
     try:
-        cleanup_all_screen_files()
+        cleanup_screen_files()
     except Exception as e:
         print(f"[PCScreen] startup cleanup failed: {e}")
     loop = asyncio.get_event_loop()
@@ -242,6 +245,9 @@ async def _runtime_lifespan(app: FastAPI):
 
     from app.memory_v3.card_generation import run_relational_card_generation_loop
 
+    from app.memory_v2.compaction import run_loop as run_memory_compaction_loop
+    create_tracked_task(run_memory_compaction_loop(), name="memory_compaction")
+
     create_tracked_task(
         run_relational_card_generation_loop(interval_sec=300.0), name="memory_relational_cards",
     )
@@ -255,10 +261,20 @@ async def _runtime_lifespan(app: FastAPI):
     async def _screen_cleanup_loop():
         while True:
             await asyncio.sleep(900)
-            cleanup_all_screen_files()
+            cleanup_screen_files()
     create_tracked_task(_screen_cleanup_loop(), name="screen_cleanup")
 
-    yield
+    from app.scenes.scheduler import run_loop as run_scene_loop
+    scenes = get_scene_service()
+    create_tracked_task(run_scene_loop(scenes), name="scenes")
+    from app.together.service import get_together_service, run_loop as run_together_loop
+    together = get_together_service()
+    create_tracked_task(run_together_loop(together), name="together")
+    try:
+        yield
+    finally:
+        await together.close()
+        await scenes.close()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -402,6 +418,9 @@ app.include_router(look_at_me_router)
 app.include_router(vows_routes.router)
 app.include_router(presence_routes.router)
 app.include_router(push_routes.router)
+app.include_router(scene_routes.router)
+from routes.together import router as together_router
+app.include_router(together_router)
 
 
 # 页面
@@ -448,6 +467,10 @@ async def location_page():
 @app.get("/devices")
 async def devices_page():
     return FileResponse(BASE_DIR / "static" / "devices.html", headers=_PAGE_CACHE)
+
+@app.get("/scenes")
+async def scenes_page():
+    return FileResponse(BASE_DIR / "static" / "scenes.html", headers={"Cache-Control": "no-store"})
 
 @app.get("/heart-whispers")
 async def heart_whispers_page():

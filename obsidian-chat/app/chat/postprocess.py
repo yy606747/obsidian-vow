@@ -24,6 +24,7 @@ from app.tools.service import tool_service
 from app.vows.service import VowExtract, extract_vow_marker, find_vow_markers, strip_vow_markers
 from app.memory_v3.recall_intent import extract_recall_intent
 from app.web_search.intent import extract_web_search_intent
+from .query_syntax import QueryIntent, extract_query
 from app.working_model.request_tag import (
     WorkingModelRequestCandidate,
     extract_working_model_request,
@@ -42,7 +43,6 @@ from .commands import (
     SELF_WAKE_PATTERN,
     RING_TOUCH_PATTERN,
     SCREEN_CHECK_PATTERN,
-    MOBILE_SCREEN_CHECK_PATTERN,
     TOY_CMD_PATTERN,
     UPDATE_MODEL_CMD_PATTERN,
     UNFINISHED_UPDATE_MODEL_CMD_PATTERN,
@@ -59,7 +59,6 @@ ALL_COMMANDS = frozenset({
     "cam",
     "activity",
     "screen",
-    "mobile_screen",
     "poi",
     "schedule",
     "heart",
@@ -386,6 +385,7 @@ class PostProcessResult:
     tide_intent: str = ""
     recall_intent: str = ""
     web_search_intent: str = ""
+    query_intent: QueryIntent | None = None
     vow: VowExtract = field(default_factory=lambda: VowExtract(found=False))
 
     @property
@@ -442,6 +442,11 @@ class PostProcessor:
         # 数据，不能借一条私有通道触发另一条。
         structured_like = looks_like_structured_reply(text)
         text, structured_actions, structured_ok = _extract_structured_reply(text)
+        # Remove free-form queries before looking for any nested action/state
+        # syntax. A quoted command inside a query cannot execute as an action.
+        text, query_intent = extract_query(text)
+        if memory_eval_mode or (structured_like and not structured_ok):
+            query_intent = None
         # Free expressions are inert data even if they quote another control tag.
         from .control_syntax import iter_value_control_markers
         protected_invitations = {}
@@ -571,11 +576,6 @@ class PostProcessor:
         if screen_check_reasons:
             text = SCREEN_CHECK_PATTERN.sub("", text).strip()
 
-        # 移动端截图意图由 parse_tool_intents 经 tool_intents 携带；这里只需把
-        # 可见文本里的标记清掉，避免 [MOBILE_SCREEN_CHECK:...] 出现在回复里。
-        if "mobile_screen" in enabled and MOBILE_SCREEN_CHECK_PATTERN.search(text):
-            text = MOBILE_SCREEN_CHECK_PATTERN.sub("", text).strip()
-
         poi_categories = POI_SEARCH_PATTERN.findall(text) if "poi" in enabled else []
         if poi_categories:
             text = POI_SEARCH_PATTERN.sub("", text).strip()
@@ -633,5 +633,6 @@ class PostProcessor:
             tide_intent=tide_intent,
             recall_intent=recall_intent,
             web_search_intent=web_search_intent,
+            query_intent=query_intent,
             vow=vow_extract,
         )

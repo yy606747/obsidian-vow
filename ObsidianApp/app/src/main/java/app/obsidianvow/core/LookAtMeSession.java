@@ -6,6 +6,7 @@ final class LookAtMeSession {
     String decision = "", outcome = "", reason = "";
     long seconds, expires, choiceDeadline, start, end, actualMs, acceptedAt;
     long anchorElapsed, anchorWall, boot, sequence;
+    long togetherHold;
     boolean notified;
 
     void anchorResponse(long serverNow, long expiresAt, long sent, long received) {

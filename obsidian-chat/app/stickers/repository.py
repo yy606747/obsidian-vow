@@ -97,6 +97,15 @@ class StickerRepository:
             await db.commit()
         return await self.get(sticker_id)
 
+    async def remove_for_user(self, sticker_ids: list[str]) -> None:
+        # Collection membership is independent of Core's collection and message attachments.
+        now = self.now()
+        async with self._db() as db:
+            await db.executemany(
+                'UPDATE stickers SET user_saved=0,updated_at=? WHERE id=? AND user_saved=1',
+                [(now, sticker_id) for sticker_id in sticker_ids])
+            await db.commit()
+
     async def set_summary(self, sticker_id: str, *, summary: dict | None = None, error: str = '') -> None:
         async with self._db() as db:
             await db.execute('UPDATE stickers SET summary_json=?,status=?,error=?,updated_at=? WHERE id=?',

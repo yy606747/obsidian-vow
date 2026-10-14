@@ -1179,6 +1179,11 @@ class SentinelRuntime:
 
     async def _analyze_and_log_impl(self, _unused=None):
         cleanup_old_logs(3)
+        # Sensors keep collecting independently; skip the paid judgment while
+        # this phone is already in an owner-initiated companionship session.
+        from app.together.coexist import is_active as together_active
+        if await together_active():
+            return {"status": "deferred_together"}
         cycle_started_at = time.perf_counter()
         cycle_request_id = f"sentinel_cycle_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
         context_errors: list[str] = []
@@ -1812,6 +1817,9 @@ class SentinelRuntime:
         core_reason: str,
         allow_legacy_fallback: bool,
     ) -> dict:
+        from app.together.coexist import is_active as together_active
+        if await together_active():
+            return {"status": "deferred_together", "should_fallback": False}
         try:
             execution_context = await read_core_wake_execution_context(reference_time=reference_time)
             preflight = build_core_wake_preflight(
@@ -1850,7 +1858,7 @@ class SentinelRuntime:
                 ))
             return {
                 "status": execution["status"],
-                "should_fallback": allow_legacy_fallback and execution["status"] != "core_succeeded",
+                "should_fallback": allow_legacy_fallback and execution["status"] != "core_succeeded" and not await together_active(),
                 "core_wake_execution": compact_execution,
             }
         except asyncio.CancelledError as exc:
@@ -1912,6 +1920,9 @@ class SentinelRuntime:
 
     async def _call_core(self, trigger_log: str, last_user_ts: float, summary: str = "",
                          core_reason: str = "", cached_logs: list = None):
+        from app.together.coexist import is_active as together_active
+        if await together_active():
+            return
         wb = load_worldbook()
         user_name, ai_name = resolve_worldbook_names(wb)
         trigger_log = _relationship_prompt_text(
@@ -2035,6 +2046,7 @@ class SentinelRuntime:
                     core_parts.append(f"\n最近 2 小时体感/体征：\n{st}")
             except Exception:
                 pass
+        creation_facts = '\n'.join(core_parts[1:])
         core_parts.append(
             f"\n【重要】只基于以上信号、聊天记录和本轮注入上下文说话。不要编造{user_name}没说过的事、没发生过的场景。"
             f"信号不足不代表没话说——结合最近聊天和注入的近期时间线，找一个{user_name}会在意的点自然地搭话。"
@@ -2109,7 +2121,7 @@ class SentinelRuntime:
         if working_model_block:
             relationship_inject.extend([
                 {"role": "user", "content": working_model_block},
-                {"role": "assistant", "content": "（嗯，这是我此刻对她的认识。）"},
+                {"role": "assistant", "content": f"（嗯，这是我此刻对{user_name}的认识。）"},
             ])
         if desire_block:
             relationship_inject.extend([
@@ -2135,6 +2147,8 @@ class SentinelRuntime:
             context_errors.append(msg)
             print(f"[Sentinel] {msg}")
 
+        if await together_active():
+            return
         await manager.broadcast({"type": "monitor_alert", "data": {"content": f"哨兵唤醒了{ai_name}"}})
 
         # 先插一条系统提示，让聊天页面知道"哨兵唤醒了 AI"
@@ -2181,13 +2195,21 @@ class SentinelRuntime:
                 {"role": "assistant", "content": "（嗯，查询能力和已经返回的资料我都清楚。）"},
             ]
         from app.daily_chat.service import cross_day_prompt
-        daily_background = await cross_day_prompt(conv_id, user_name=user_name, ai_name=ai_name, db_factory=get_db)
-        messages = prefix + vow_inject + relationship_inject + timeline_inject + daily_background + history + web_inject + [
+        daily_background = await cross_day_prompt(conv_id, user_name=user_name, ai_name=ai_name, context_limit=20, current_message_count=len(history), db_factory=get_db)
+        messages = prefix + vow_inject + relationship_inject + timeline_inject + daily_background + history + [
             {"role": "user", "content": core_prompt}
         ]
+        from app.heart_works.entry import attach
+        heart_entry = attach(messages, source='sentinel_legacy', turn_id=sys_msg_id, conv_id=conv_id,
+            model_key=model_key, user_name=user_name, ai_name=ai_name,
+            context_messages=prefix + vow_inject + relationship_inject + timeline_inject + daily_background + history
+                + [{'role': 'user', 'content': creation_facts}])
+        messages[-1:-1] = web_inject
         _temp = SETTINGS.get("temperature")
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):
+            if await together_active():
+                return
             core_invocation_id = tool_invocation_ledger.new_invocation_id(
                 "sentinel_legacy_core"
             )
@@ -2254,10 +2276,14 @@ class SentinelRuntime:
                 from app.vows.service import strip_vow_markers
                 from app.memory_v3.recall_intent import strip_recall_intent_markers
                 from app.web_search.intent import extract_web_search_intent
+                full_content = heart_entry.extract(full_content)
                 full_content = strip_vow_markers(full_content)
+                heart_work = await heart_entry.commit()
                 full_content, web_search_intent = extract_web_search_intent(full_content)
                 full_content = strip_recall_intent_markers(full_content)
                 if not full_content.strip():
+                    if heart_work:
+                        return
                     if attempt < max_attempts:
                         print(f"[Sentinel→Core] 第 {attempt} 次调用返回空，{10}s 后重试")
                         await asyncio.sleep(10)
@@ -2291,16 +2317,21 @@ class SentinelRuntime:
 
                 now = time.time()
                 msg_id = f"msg_{int(now*1000)}_sentinel"
-                async with get_db() as db:
-                    await db.execute(
-                        "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                        (msg_id, conv_id, "assistant", full_content, now, "[]")
-                    )
-                    await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
-                    await db.commit()
                 ai_msg = {"id": msg_id, "conv_id": conv_id, "role": "assistant",
                           "content": full_content, "created_at": now, "attachments": []}
-                await manager.broadcast({"type": "msg_created", "data": ai_msg})
+                async with get_db() as db:
+                    await db.execute("BEGIN IMMEDIATE")
+                    from app.together.delivery import defer_in_tx
+                    deferred = await defer_in_tx(db, [ai_msg])
+                    if not deferred:
+                        await db.execute(
+                            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+                            (msg_id, conv_id, "assistant", full_content, now, "[]")
+                        )
+                        await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
+                    await db.commit()
+                if not deferred:
+                    await manager.broadcast({"type": "msg_created", "data": ai_msg})
                 try:
                     await web_search_service.finalize_independent(
                         conv_id=conv_id,

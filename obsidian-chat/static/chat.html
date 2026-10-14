@@ -10,12 +10,13 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#13151d">
-<link rel="stylesheet" href="/static/chat.css?v=20260913-avatar-details">
-<link rel="stylesheet" href="/static/vow.css?v=20260913-mood-glow">
+<link rel="stylesheet" href="/static/chat.css?v=20261010-continuity">
+<link rel="stylesheet" href="/static/vow.css?v=20260920-together-room">
+<link rel="stylesheet" href="/static/scene-controls.css?v=20260926-scene-layout">
 <link rel="stylesheet" href="/static/heart-notes.css?v=20260913-avatar-details">
-<link rel="stylesheet" href="/static/markdown.css?v=20260913-markdown">
+<link rel="stylesheet" href="/static/markdown.css?v=20261009-math">
 <link rel="stylesheet" href="/static/documents.css?v=20260913-documents">
-<script src="/static/vow.js?v=20260913-gold-dust"></script>
+<script src="/static/vow.js?v=20260920-companion-names"></script>
 <link rel="stylesheet" href="/static/gold-dust.css?v=20260913-gold-dust">
 <script src="/static/gold-dust.js?v=20260913-gold-dust" defer></script>
 </head>
@@ -34,9 +35,11 @@
       <details>
         <summary><span data-vow-icon="heart"></span>亲密与工具</summary>
         <div>
-          <button data-action="openWhisper"><span data-vow-icon="heart"></span>密语时刻</button>
+          <button data-action="openWhisper"><span data-vow-icon="heart"></span>密语</button>
           <button data-action="openAiDom"><span data-vow-icon="lock"></span>亲密控制</button>
-          <button data-action="openTide"><span data-vow-icon="wave"></span>潮汐控制</button>
+          <button data-action="openTide"><span data-vow-icon="wave"></span>潮汐</button>
+          <button data-action="openSubPage" data-subpage="/scenes"><span data-vow-icon="lock"></span>小剧场</button>
+          <button id="togetherOpen"><span data-vow-icon="heart"></span>相伴</button>
           <button data-action="openSubPage" data-subpage="/devices"><span data-vow-icon="devices"></span>设备面板</button>
           <button id="sysLogBtn" data-action="openSystemLog"><span data-vow-icon="log"></span>系统日志</button>
           <button data-action="openSubPage" data-subpage="/"><span data-vow-icon="home"></span>返回小屋</button>
@@ -96,6 +99,16 @@
         </label>
       </div>
       <button class="config-btn" data-action="toggleConfig" aria-label="聊天与语音设置" data-vow-icon="settings"></button>
+    </div>
+    <div id="sceneGlobalChatSlot" class="scene-control-slot">
+      <section id="sceneGlobalBar" class="scene-global-bar" aria-label="小剧场控制" hidden>
+        <span id="sceneGlobalStatus" role="status"></span>
+        <div class="scene-global-actions">
+          <button type="button" id="sceneGlobalOpen">返回场景</button>
+          <button type="button" id="sceneGlobalPause">暂停</button>
+          <button type="button" id="sceneGlobalEnd">停止设备</button>
+        </div>
+      </section>
     </div>
     <div class="config-popup" id="configPopup">
       <label>模型</label>
@@ -161,16 +174,26 @@
     </div>
     <div class="messages" id="messages"></div>
     <div class="input-area">
+      <div class="together-chat-notice" id="togetherChatNotice" role="status" hidden>
+        <span id="togetherChatStatus">正在相伴中。</span>
+        <button type="button" id="togetherResume">返回相伴</button>
+      </div>
       <section class="sticker-panel" id="stickerPanel" aria-label="表情面板" hidden>
         <div class="sticker-panel-header">
           <strong>我的表情 <span id="stickerCount"></span></strong>
           <div>
             <button type="button" id="stickerAddBtn" data-sticker-action="add">＋ 添加表情</button>
-            <button type="button" data-sticker-action="refresh" aria-label="刷新表情">↻</button>
+            <button type="button" id="stickerManageBtn" data-sticker-action="manage" aria-pressed="false" disabled>管理</button>
+            <button type="button" id="stickerRefreshBtn" data-sticker-action="refresh" aria-label="刷新表情">↻</button>
             <button type="button" data-sticker-action="close" aria-label="收起表情面板">✕</button>
           </div>
         </div>
         <div class="sticker-grid" id="stickerGrid" aria-live="polite"></div>
+        <div class="sticker-manage-bar" id="stickerManageBar" hidden>
+          <span id="stickerSelectedCount" role="status">已选 0 张</span>
+          <button type="button" id="stickerSelectAllBtn" data-sticker-action="select-all">全选</button>
+          <button type="button" id="stickerRemoveBtn" data-sticker-action="remove" disabled>移除</button>
+        </div>
         <input class="hidden-file-input" type="file" id="stickerFileInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
       </section>
       <div class="preview-area" id="previewArea"></div>
@@ -196,32 +219,37 @@
 <script src="/static/vendor/dompurify.min.js?v=3.4.15"></script>
 <script src="/static/js/chat/core.js?v=20260913-markdown"></script>
 <script src="/static/js/chat/state.js?v=20260913-heart-notes"></script>
-<script src="/static/js/chat/markdown.js?v=20260913-markdown"></script>
+<script src="/static/js/chat/math.js?v=20261009-math"></script>
+<script src="/static/js/chat/markdown.js?v=20261009-math"></script>
 <script src="/static/js/chat/documents.js?v=20260913-documents"></script>
 <script src="/static/js/chat/heart-notes.js?v=20260913-avatar-details"></script>
-<script src="/static/js/chat/control_runtime.js?v=20260908-daily"></script>
+<script src="/static/js/chat/control_runtime.js?v=20260919-scenes"></script>
+<script src="/static/js/chat/scene_hardware.js?v=20260926-five-devices"></script>
+<script src="/static/js/chat/scene_runtime.js?v=20260927-scene-finish"></script>
+<script src="/static/js/chat/together.js?v=20260920-companion-names"></script>
 <script src="/static/js/chat/control_toy_router.js?v=20260905-brand"></script>
 <script src="/static/js/chat/tide_toy_router.js?v=20260905-brand"></script>
-<script src="/static/js/chat/control_emergency_stop.js?v=20260905-brand"></script>
+<script src="/static/js/chat/control_emergency_stop.js?v=20260926-hardware"></script>
 <script src="/static/js/chat/mood.js?v=20260913-heart-notes"></script>
 <script src="/static/js/chat/config_panel.js?v=20260908-daily"></script>
-<script src="/static/js/chat/render.js?v=20260913-markdown"></script>
-<script src="/static/js/chat/lifecycle.js?v=20260913-markdown"></script>
+<script src="/static/js/chat/render.js?v=20261009-smooth-timeline"></script>
+<script src="/static/js/chat/lifecycle.js?v=20260926-hardware"></script>
 <script src="/static/js/chat/daily.js?v=20260908-daily"></script>
 <script src="/static/js/chat/alarms.js?v=20260905-brand"></script>
-<script src="/static/js/chat/debug_log_facade.js?v=20260905-brand"></script>
+<script src="/static/js/chat/debug_log_facade.js?v=20261009-smooth-timeline"></script>
 <script src="/static/js/chat/music_cards.js?v=20260905-brand"></script>
-<script src="/static/js/chat/realtime.js?v=20260913-heart-notes"></script>
-<script src="/static/js/chat/conversations.js?v=20260909-dailyfix"></script>
+<script src="/static/js/chat/realtime.js?v=20260919-scenes"></script>
+<script src="/static/js/chat/conversations.js?v=20261010-continuity"></script>
 <script src="/static/js/chat/toy_bridge.js?v=20260905-brand"></script>
-<script src="/static/js/chat/whisper_toy_facade.js?v=20260913-markdown"></script>
+<script src="/static/js/chat/whisper_toy_facade.js?v=20260920-companion-names"></script>
 <script src="/static/js/chat/ai_dom_facade.js?v=20260913-markdown"></script>
-<script src="/static/js/chat/tide_facade.js?v=20260905-brand"></script>
-<script src="/static/js/chat/send.js?v=20260913-documents"></script>
-<script src="/static/js/chat/messages.js?v=20260913-markdown"></script>
-<script src="/static/js/chat/indicators.js?v=20260913-heart-notes"></script>
-<script src="/static/js/chat/ui.js?v=20260913-documents"></script>
-<script src="/static/js/chat/stickers.js?v=20260911-sticker-collections"></script>
+<script src="/static/js/chat/tide_facade.js?v=20260920-companion-names"></script>
+<script src="/static/js/chat/send.js?v=20261010-continuity"></script>
+<script src="/static/js/chat/messages.js?v=20261010-continuity"></script>
+<script src="/static/js/chat/indicators.js?v=20261010-continuity"></script>
+<script src="/static/js/chat/ui.js?v=20261010-continuity"></script>
+<script src="/static/js/chat/heart-work-reference.js?v=20261010-continuity"></script>
+<script src="/static/js/chat/stickers.js?v=20260921-sticker-remove"></script>
 <script src="/static/js/chat/boot.js?v=20260913-refined"></script>
 <script src="/static/js/chat/voice_facade.js?v=20260905-brand"></script>
 <script src="/static/js/chat/tts.js?v=20260913-markdown"></script>
@@ -233,9 +261,10 @@
     <button type="button" data-vow-home aria-label="返回小屋" title="返回小屋" data-vow-icon="back"></button>
     <span id="subPageTitle"></span>
   </div>
+  <div id="sceneGlobalSubpageSlot" class="scene-control-slot"></div>
   <iframe id="subPageFrame" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"></iframe>
 </div>
-<script src="/static/js/chat/subpage.js?v=20260913-refined"></script>
+<script src="/static/js/chat/subpage.js?v=20260926-scene-layout"></script>
 <script src="/static/web_push.js?v=20260905-brand"></script>
 </body>
 </html>

@@ -1,4 +1,20 @@
 // ── AI 输入等待动画 ──
+function clearQueryProgress(msgId) {
+  document.getElementById(`query_${msgId}`)?.remove();
+}
+function showQueryProgress(msgId, event, content) {
+  clearQueryProgress(msgId);
+  const text = event.status === 'answering' ? '正在接着说…'
+    : event.kind === 'memory' ? '正在翻回忆…' : '正在查资料…';
+  if (!content) { _startTypingAnim(msgId, text); return; }
+  const body = document.getElementById(`m_${msgId}`)?.querySelector('.msg-body');
+  if (!body) return;
+  const label = document.createElement('div');
+  label.className = 'query-progress';
+  label.id = `query_${msgId}`;
+  label.textContent = text;
+  body.appendChild(label);
+}
 let _typingTimer = null;
 let _typingShownAt = 0;
 const _TYPING_MIN_MS = 600;  // 泡泡最小显示时长，防止首字节太快导致闪现
@@ -8,7 +24,7 @@ async function _awaitTypingFloor() {
   _typingShownAt = 0;  // 只对首个 chunk 生效
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
 }
-function _startTypingAnim(msgId) {
+function _startTypingAnim(msgId, statusText = '') {
   _stopTypingAnim();
   _typingShownAt = Date.now();
   const container = document.getElementById(`m_${msgId}`);
@@ -16,7 +32,7 @@ function _startTypingAnim(msgId) {
   const bubble = container.querySelector('.msg-bubble');
   if (!bubble) return;
   bubble.classList.add('typing-bubble');
-  const texts = _typingMoodTexts[_lastUserMood] || _typingMoodTexts.neutral;
+  const texts = statusText ? [statusText] : (_typingMoodTexts[_lastUserMood] || _typingMoodTexts.neutral);
   bubble.innerHTML = `<span class="typing-text">${texts[0]}</span><span class="typing-dots"><span></span><span></span><span></span></span>`;
   let idx = 0;
   _typingTimer = setInterval(() => {
@@ -24,7 +40,7 @@ function _startTypingAnim(msgId) {
     if (!label) { _stopTypingAnim(); return; }
     idx = (idx + 1) % texts.length;
     label.style.opacity = '0';
-    setTimeout(() => { if (label.parentNode) { label.textContent = texts[idx]; label.style.opacity = '1'; } }, 200);
+    setTimeout(() => { if (label.parentNode) { label.textContent = !statusText && Date.now() - _typingShownAt > 15000 ? '回复还在路上，稍等一下…' : texts[idx]; label.style.opacity = '1'; } }, 200);
   }, 1200);
 }
 function _stopTypingAnim() {

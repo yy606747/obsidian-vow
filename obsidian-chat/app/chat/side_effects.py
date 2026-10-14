@@ -108,7 +108,8 @@ async def _store_remember_notes(notes: list[str], conv_id: str) -> None:
             mem = await memory_service.create_memory(
                 content, "ai_note", source_conv=conv_id, importance=0.6
             )
-            await manager.broadcast({"type": "memory_added", "data": mem})
+            if not mem.get("deduplicated"):
+                await manager.broadcast({"type": "memory_added", "data": mem})
         except Exception as e:
             print(f"[REMEMBER] 落盘失败: {e}")
 
@@ -298,6 +299,7 @@ async def perform_poi_check(
     categories: list[str],
     *,
     request_id: str = "",
+    heart_work_origin: dict | None = None,
 ):
     """Core 主动搜索周边 POI：拿最新坐标 → 搜索 → 携带结果自动追加一轮 Core 回复"""
     from location import (
@@ -409,7 +411,6 @@ async def perform_poi_check(
     from app.daily_chat.service import resolve_conversation_id, cross_day_prompt
     conv_id = resolve_conversation_id(conv_id)
     prefix = build_worldbook_prefix(wb)
-    prefix += await cross_day_prompt(conv_id, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db)
 
     # 获取最近对话上下文
     import aiosqlite
@@ -421,6 +422,7 @@ async def perform_poi_check(
         )
         rows = await cur.fetchall()
     recent = [{"role": r["role"], "content": r["content"], "attachments": []} for r in reversed(rows)]
+    prefix += await cross_day_prompt(conv_id, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], context_limit=6, current_message_count=len(recent), db_factory=get_db)
 
     loc_prompt = format_location_for_prompt()
     poi_prompt = (
@@ -432,6 +434,8 @@ async def perform_poi_check(
     messages = prefix + vow_inject + recent + [
         {"role": "user", "content": poi_prompt}
     ]
+    from app.heart_works.entry import attach_followup
+    heart_entry = attach_followup(messages, heart_work_origin)
 
     invocation_id = tool_invocation_ledger.new_invocation_id("main_poi_followup")
     observation_context = ToolContext(
@@ -440,7 +444,7 @@ async def perform_poi_check(
         model_key=model_key,
         metadata={
             "source": "poi_followup",
-            "source_chain": "main",
+            "source_chain": heart_work_origin['origin']['source'] if heart_work_origin else 'main',
             "invocation_id": invocation_id,
             "correlation_id": request_id,
         },
@@ -474,6 +478,10 @@ async def perform_poi_check(
         if provider_error
         else raw_output
     )
+    if heart_entry:
+        full_text = heart_entry.extract(full_text)
+        if not provider_error:
+            await heart_entry.commit()
 
     # strip 先于一切后续处理（§4.4）：本路径不允许立约，剥除即丢弃；剥空不落库
     full_text = strip_recall_intent_markers(
@@ -553,6 +561,7 @@ async def perform_activity_check(
     n: int = 6,
     *,
     request_id: str = "",
+    heart_work_origin: dict | None = None,
 ):
     """Core 在聊天中使用 [查看动态:n]：获取摘要 → 注入 prompt → Core 回应"""
     n = max(1, min(12, n)) if n > 0 else 6
@@ -583,7 +592,6 @@ async def perform_activity_check(
     from app.daily_chat.service import resolve_conversation_id, cross_day_prompt
     conv_id = resolve_conversation_id(conv_id)
     prefix = build_worldbook_prefix(wb)
-    prefix += await cross_day_prompt(conv_id, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db)
 
     import aiosqlite
     async with get_db() as db:
@@ -594,6 +602,7 @@ async def perform_activity_check(
         )
         rows = await cur.fetchall()
     recent = [{"role": r["role"], "content": r["content"], "attachments": []} for r in reversed(rows)]
+    prefix += await cross_day_prompt(conv_id, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], context_limit=6, current_message_count=len(recent), db_factory=get_db)
 
     activity_prompt = (
         f"你刚才想了解{user_name}最近在干什么，以下是系统采集到的{user_name}过去{minutes}分钟的设备使用动态（每10分钟一条摘要）：\n\n"
@@ -603,6 +612,8 @@ async def perform_activity_check(
     messages = prefix + vow_inject + recent + [
         {"role": "user", "content": activity_prompt}
     ]
+    from app.heart_works.entry import attach_followup
+    heart_entry = attach_followup(messages, heart_work_origin)
 
     invocation_id = tool_invocation_ledger.new_invocation_id(
         "main_activity_followup"
@@ -613,7 +624,7 @@ async def perform_activity_check(
         model_key=model_key,
         metadata={
             "source": "activity_followup",
-            "source_chain": "main",
+            "source_chain": heart_work_origin['origin']['source'] if heart_work_origin else 'main',
             "invocation_id": invocation_id,
             "correlation_id": request_id,
         },
@@ -643,6 +654,10 @@ async def perform_activity_check(
         error=provider_error,
     )
     full_text = f"[查看动态失败] {provider_error}" if provider_error else raw_output
+    if heart_entry:
+        full_text = heart_entry.extract(full_text)
+        if not provider_error:
+            await heart_entry.commit()
 
     full_text = strip_recall_intent_markers(
         strip_vow_markers(_strip_retry(full_text))
@@ -747,7 +762,6 @@ async def perform_schedule_list_followup(
     from app.daily_chat.service import resolve_conversation_id, cross_day_prompt
     conv_id = resolve_conversation_id(conv_id)
     prefix = build_worldbook_prefix(wb)
-    prefix += await cross_day_prompt(conv_id, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db)
 
     import aiosqlite
 
@@ -763,6 +777,7 @@ async def perform_schedule_list_followup(
         {"role": row["role"], "content": row["content"], "attachments": []}
         for row in reversed(rows)
     ]
+    prefix += await cross_day_prompt(conv_id, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], context_limit=6, current_message_count=len(recent), db_factory=get_db)
     vow_inject = _vow_inject_pair(vow_block)
     prompt_text = _schedule_list_followup_prompt(result, user_name)
     messages = prefix + vow_inject + recent + [
@@ -876,8 +891,8 @@ async def perform_schedule_list_followup(
 
 
 _PC_REJECT_TEXT = {
-    "denied": "她没有允许这次截图",
-    "confirm_timeout": "确认弹窗超时，她没有明确同意",
+    "denied": "这次截图未获同意",
+    "confirm_timeout": "确认弹窗超时，未收到明确同意",
     "offline": "PC 截图 agent 当前不在线",
     "locked": "电脑处于锁屏状态",
     "rate_limited": "截图频率限制还没结束",
@@ -888,22 +903,9 @@ _PC_REJECT_TEXT = {
     "request_expired": "等待截图结果超时",
 }
 
-# Mobile shares the base wording; offline/locked are filled in per device, and
-# the Android-only capture failures are added.
-_MOBILE_REJECT_TEXT = {
-    **_PC_REJECT_TEXT,
-    "hard_blocked": "这台设备没有截图能力",
-    "permission_denied": "她在系统弹窗里没有授权录屏",
-    "projection_failed": "系统录屏初始化失败",
-    "capture_failed": "截图采集失败",
-    "ambiguous_target": "有多台设备在线，没说清要看手机还是平板",
-}
-
-
 @dataclass(frozen=True)
 class _ScreenFollowupOps:
-    """Service operations the follow-up runner needs, so the same flow serves
-    both the PC and mobile screen services (plan §9.3)."""
+    """PC screenshot follow-up dependencies."""
     timeout: float
     expire: Callable[[Any], Any]
     audit: Callable[[str, Any], Awaitable[None]]
@@ -923,30 +925,8 @@ async def perform_screen_check(request: ScreenCheckRequest):
     await _run_screen_followup(request, ops=ops, screen_label="电脑", reject_text=_PC_REJECT_TEXT)
 
 
-async def perform_mobile_screen_check(request):
-    """Wait for a mobile screenshot result, then append a Core follow-up.
-
-    Same runner as PC; only the service ops and the device label differ."""
-    from app.mobile_screen import mobile_screen_service as mobile_service
-
-    label = request.target_device_name or "手机"
-    reject_text = dict(_MOBILE_REJECT_TEXT)
-    reject_text["offline"] = f"{label}端当前不在线，打开 App 后才能截图"
-    reject_text["locked"] = f"{label}处于锁屏状态"
-    ops = _ScreenFollowupOps(
-        timeout=mobile_service.request_timeout_sec(),
-        expire=mobile_service.expire_request,
-        audit=mobile_service.audit_screen_event,
-        delete_files=mobile_service.delete_request_files,
-        release=mobile_service.release_request,
-    )
-    await _run_screen_followup(request, ops=ops, screen_label=label, reject_text=reject_text)
-
-
 async def _run_screen_followup(request, *, ops: _ScreenFollowupOps, screen_label: str, reject_text: dict):
-    """Shared follow-up runner: wait for the screenshot result, then append a
-    Core reply. Behaviour-preserving extraction of the original PC flow; the
-    only variation points are the service ``ops`` and the human ``screen_label``."""
+    """Wait for a PC screenshot result, then append a Core reply."""
     try:
         try:
             await asyncio.wait_for(request._done_event.wait(), timeout=ops.timeout)
@@ -978,6 +958,8 @@ async def _run_screen_followup(request, *, ops: _ScreenFollowupOps, screen_label
             request, wb, user_name, screen_label=screen_label, reject_text=reject_text,
             vow_block=vow_block,
         )
+        from app.heart_works.entry import attach_followup
+        heart_entry = attach_followup(messages, getattr(request, 'heart_work_origin', None))
 
         invocation_id = tool_invocation_ledger.new_invocation_id(
             "main_screen_followup"
@@ -988,7 +970,7 @@ async def _run_screen_followup(request, *, ops: _ScreenFollowupOps, screen_label
             model_key=request.model_key,
             metadata={
                 "source": "screen_followup",
-                "source_chain": "main",
+                "source_chain": heart_entry.origin['source'] if heart_entry else 'main',
                 "invocation_id": invocation_id,
                 "correlation_id": request.request_id,
             },
@@ -1023,6 +1005,10 @@ async def _run_screen_followup(request, *, ops: _ScreenFollowupOps, screen_label
             else raw_output
         )
 
+        if heart_entry:
+            full_text = heart_entry.extract(full_text)
+            if not provider_error:
+                await heart_entry.commit()
         full_text = strip_recall_intent_markers(
             strip_vow_markers(_strip_retry(full_text))
         )
@@ -1102,12 +1088,6 @@ def _screen_event_payload(request) -> dict:
         "status": request.status,
         "reject_reason": request.reject_reason,
     }
-    # 移动端请求带目标设备身份，让前端/日志能区分手机与平板（PC 请求无这些字段）。
-    target_id = getattr(request, "target_device_id", None)
-    if target_id:
-        payload["target_device_id"] = target_id
-        payload["target_device_name"] = getattr(request, "target_device_name", "")
-        payload["target_device_type"] = getattr(request, "target_device_type", "")
     return payload
 
 
@@ -1118,7 +1098,6 @@ async def _screen_followup_messages(
     from app.daily_chat.service import resolve_conversation_id, cross_day_prompt
     target = resolve_conversation_id(request.conv_id)
     prefix = build_worldbook_prefix(wb)
-    prefix += await cross_day_prompt(target, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db)
 
     import aiosqlite
     async with get_db() as db:
@@ -1129,13 +1108,14 @@ async def _screen_followup_messages(
         )
         rows = await cur.fetchall()
     recent = [{"role": r["role"], "content": r["content"], "attachments": []} for r in reversed(rows)]
+    prefix += await cross_day_prompt(target, user_name=user_name, ai_name=resolve_worldbook_names(wb)[1], context_limit=6, current_message_count=len(recent), db_factory=get_db)
     vow_inject = _vow_inject_pair(vow_block)
 
     if request.status == "completed" and request.image_path:
         prompt = (
             f"你刚才请求查看{user_name}当前{screen_label}屏幕，原因是：{request.reason}\n\n"
             f"这张图片是{user_name}明确同意后采集的一次性截图。请根据画面自然接上对话，"
-            "只概括她大概在做什么或你接下来要怎么管她。不要逐字转述屏幕文字、文件路径、聊天内容或账号信息。"
+            f"只概括{user_name}大概在做什么或你接下来要怎么管{user_name}。不要逐字转述屏幕文字、文件路径、聊天内容或账号信息。"
             "不要说“我看到图片里”这种工具口吻，也不要再说“让我看一眼”。"
         )
         return prefix + vow_inject + recent + [{"role": "user", "content": prompt, "attachments": [request.image_path]}]
@@ -1144,6 +1124,6 @@ async def _screen_followup_messages(
     prompt = (
         f"你刚才想查看{user_name}当前{screen_label}画面，原因是：{request.reason}\n\n"
         f"但这次没有拿到截图，原因：{reason_text}。请自然接上对话，不要编造你看到了什么。"
-        "如果是她拒绝或超时，不要施压，轻轻接住即可。"
+        f"如果是{user_name}拒绝或超时，不要施压，轻轻接住即可。"
     )
     return prefix + vow_inject + recent + [{"role": "user", "content": prompt}]

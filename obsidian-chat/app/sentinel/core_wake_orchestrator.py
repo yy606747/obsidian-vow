@@ -15,7 +15,7 @@ from app.context_delivery import (
     ContextDeliveryProjection,
     render_context_delivery_projection,
 )
-from app.tools.prompt_renderers import render_registered_capabilities
+from app.tools.prompt_renderers import render_registered_capabilities, render_tool_usage_policy
 from app.tools.registry import validate_turn_advertisement
 from app.vows.service import strip_vow_markers
 from app.memory_v3.recall_intent import strip_recall_intent_markers
@@ -67,7 +67,6 @@ CORE_WAKE_EXECUTION_STEP_DEFINITIONS = (
     ("update_conversation", "database.update.conversation", True),
     ("broadcast_msg_created", "websocket.broadcast.msg_created.assistant_message", True),
     ("request_screen_check", "pc_screen.request", True),
-    ("request_mobile_screen_check", "mobile_screen.request", True),
     ("broadcast_toy_command", "websocket.broadcast.toy_command", True),
     ("write_monitor_log", "monitor_log.write.core_result", True),
 )
@@ -96,7 +95,6 @@ PLANNED_CORE_WAKE_PRODUCTION_EFFECTS = (
     "database.update.conversation",
     "websocket.broadcast.msg_created.assistant_message",
     "pc_screen.request",
-    "mobile_screen.request",
     "websocket.broadcast.toy_command",
     "monitor_log.write.core_result",
 )
@@ -118,12 +116,10 @@ _EXECUTION_CONTEXT_ALLOWED_FIELDS = {
     "control_epoch",
     "owner_client_id",
     "control_device_id",
-    "autonomous_mobile_screen_target",
     "presence_identity_block",
 }
 _RECENT_MESSAGE_ALLOWED_FIELDS = {"id", "role", "content"}
 _RECENT_MESSAGE_ROLES = {"user", "assistant"}
-_AUTONOMOUS_MOBILE_TARGET_ALLOWED_FIELDS = {"device_id", "device_name", "device_type", "label"}
 _RING_TOUCH_PATTERN = re.compile(r"\[RING:([^\]]+)\]")
 
 
@@ -373,7 +369,7 @@ async def _execute_core_wake_flow_inner(
         if working_model_block:
             relationship_messages.extend([
                 {"role": "user", "content": working_model_block},
-                {"role": "assistant", "content": "（嗯，这是我此刻对她的认识。）"},
+                {"role": "assistant", "content": "（嗯，这份认识我记得。）"},
             ])
         if desire_block:
             relationship_messages.extend([
@@ -452,6 +448,10 @@ async def _execute_core_wake_flow_inner(
         + messages[-1:]
     )
     prepare_expression = getattr(ports, 'prepare_expression_turn', None)
+    set_heart_context = getattr(ports, 'set_heart_creation_context', None)
+    if set_heart_context is not None:
+        set_heart_context(vow_messages + relationship_messages + timeline_messages + messages[:-1]
+            + [{'role': 'user', 'content': preflight_payload['core_request'].get('creation_facts', '')}])
     if prepare_expression is not None:
         await prepare_expression(messages=core_messages,
             conv_id=preflight_payload['conv_id'], model_key=preflight_payload['model_key'],
@@ -494,7 +494,6 @@ async def _execute_core_wake_flow_inner(
     full_content = stream_result["content"]
     toy_commands = stream_result["toy_commands"]
     screen_check_reasons = stream_result["screen_check_reasons"]
-    mobile_screen_checks = stream_result.get("mobile_screen_checks") or []
     ring_touch_descriptions = stream_result.get("ring_touch_descriptions") or []
     web_search_intent = str(stream_result.get("web_search_intent") or "")
     expression_delivery = {'content': full_content, 'attachments': [], 'delivered': False}
@@ -514,8 +513,6 @@ async def _execute_core_wake_flow_inner(
         state["toy_commands"] = list(toy_commands)
     if screen_check_reasons:
         state["screen_check_reasons"] = list(screen_check_reasons)
-    if mobile_screen_checks:
-        state["mobile_screen_checks"] = list(mobile_screen_checks)
     if ring_touch_descriptions:
         state["ring_touch_descriptions"] = list(ring_touch_descriptions)
 
@@ -648,22 +645,6 @@ async def _execute_core_wake_flow_inner(
     else:
         _mark_step(state, "request_screen_check", "skipped")
 
-    if mobile_screen_checks:
-        mobile_requests = await _request_mobile_screen_checks(
-            ports=ports,
-            state=state,
-            checks=mobile_screen_checks,
-            conv_id=preflight_payload["conv_id"],
-            msg_id=assistant_message["id"],
-            model_key=preflight_payload["model_key"],
-            request_id=request_id or assistant_message["id"],
-            record_production_side_effects=record_production_side_effects,
-        )
-        if mobile_requests:
-            state["mobile_screen_check_requests"] = mobile_requests
-        _mark_step(state, "request_mobile_screen_check", "succeeded" if mobile_requests else "skipped")
-    else:
-        _mark_step(state, "request_mobile_screen_check", "skipped")
 
     if toy_commands:
         toy_delivery = await ports.broadcast_toy_command(
@@ -1028,11 +1009,10 @@ async def _stream_core_with_retry(
         full_content, ring_touch_descriptions = _extract_ring_touch_markers(full_content)
         full_content, toy_commands = _strip_toy_commands(full_content)
         full_content, screen_check_reasons = _strip_screen_check_commands(full_content)
-        full_content, mobile_screen_checks = _strip_mobile_screen_check_commands(full_content)
         from app.chat.control_syntax import strip_control_markers
         full_content = strip_control_markers(full_content).strip()
-        if not full_content and (screen_check_reasons or mobile_screen_checks):
-            full_content = _screen_tool_only_fallback_text(screen_check_reasons, mobile_screen_checks)
+        if not full_content and screen_check_reasons:
+            full_content = _screen_tool_only_fallback_text(screen_check_reasons)
         if not full_content and not expression_pending:
             attempt_record["status"] = "empty_after_tool_strip"
             if attempt < max_attempts:
@@ -1054,8 +1034,6 @@ async def _stream_core_with_retry(
             attempt_record["toy_command_count"] = len(toy_commands)
         if screen_check_reasons:
             attempt_record["screen_check_count"] = len(screen_check_reasons)
-        if mobile_screen_checks:
-            attempt_record["mobile_screen_check_count"] = len(mobile_screen_checks)
         if ring_touch_descriptions:
             attempt_record["ring_touch_count"] = len(ring_touch_descriptions)
         state["core_attempts"].append(attempt_record)
@@ -1065,7 +1043,6 @@ async def _stream_core_with_retry(
             "content": full_content,
             "toy_commands": toy_commands,
             "screen_check_reasons": screen_check_reasons,
-            "mobile_screen_checks": mobile_screen_checks,
             "ring_touch_descriptions": ring_touch_descriptions,
             "web_search_intent": web_search_intent,
         }
@@ -1116,7 +1093,6 @@ def _skip_after_stream_failure(state: dict[str, Any]) -> None:
         "update_conversation",
         "broadcast_msg_created",
         "request_screen_check",
-        "request_mobile_screen_check",
         "broadcast_toy_command",
     ):
         _mark_step(state, name, "skipped")
@@ -1157,51 +1133,6 @@ async def _request_screen_checks(
         else:
             payload = {"status": "unknown"}
         payload.setdefault("reason", reason)
-        payload.setdefault("index", index)
-        results.append(payload)
-    return results
-
-
-async def _request_mobile_screen_checks(
-    *,
-    ports: Any,
-    state: dict[str, Any],
-    checks: Sequence[Mapping[str, str]],
-    conv_id: str,
-    msg_id: str,
-    model_key: str,
-    request_id: str,
-    record_production_side_effects: bool,
-) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    for index, check in enumerate(checks, 1):
-        target = str(check.get("target") or "")
-        reason = str(check.get("reason") or "")
-        try:
-            result = await ports.request_mobile_screen_check(
-                conv_id=conv_id,
-                msg_id=msg_id,
-                model_key=model_key,
-                target=target,
-                reason=reason,
-                request_id=request_id,
-                wake_id=request_id,
-            )
-            _record_step_effect(
-                state,
-                "request_mobile_screen_check",
-                record_production_side_effects=record_production_side_effects,
-            )
-        except Exception as exc:
-            state["context_errors"].append(
-                f"mobile_screen_check_failed[{index}]: {type(exc).__name__}: {exc}")
-            continue
-        if isinstance(result, Mapping):
-            payload = dict(result)
-        else:
-            payload = {"status": "unknown"}
-        payload.setdefault("reason", reason)
-        payload.setdefault("target", target)
         payload.setdefault("index", index)
         results.append(payload)
     return results
@@ -1262,10 +1193,6 @@ async def _write_result_monitor_log(
         entry["screen_check_reasons"] = list(state["screen_check_reasons"])
     if state.get("screen_check_requests"):
         entry["screen_check_requests"] = list(state["screen_check_requests"])
-    if state.get("mobile_screen_checks"):
-        entry["mobile_screen_checks"] = list(state["mobile_screen_checks"])
-    if state.get("mobile_screen_check_requests"):
-        entry["mobile_screen_check_requests"] = list(state["mobile_screen_check_requests"])
     if state.get("ring_touch_descriptions"):
         entry["ring_touch_descriptions"] = list(state["ring_touch_descriptions"])
     if state.get("ring_touch_delivery"):
@@ -1361,28 +1288,7 @@ def _strip_screen_check_commands(content: str) -> tuple[str, list[str]]:
     return re.sub(r"\[SCREEN_CHECK:[^\]]+\]", "", content).strip(), reasons
 
 
-def _strip_mobile_screen_check_commands(content: str) -> tuple[str, list[dict[str, str]]]:
-    """解析自动线路里的 [MOBILE_SCREEN_CHECK:目标|原因]，返回 (清洗后正文, 列表)。"""
-    checks: list[dict[str, str]] = []
-    for raw in re.findall(r"\[MOBILE_SCREEN_CHECK:([^\]]+)\]", content):
-        raw = raw.strip()
-        if not raw:
-            continue
-        if "|" in raw:
-            target, reason = raw.split("|", 1)
-        else:
-            target, reason = "", raw
-        reason = reason.strip()
-        if reason:
-            checks.append({"target": target.strip(), "reason": reason})
-    if not checks:
-        return content.strip(), []
-    return re.sub(r"\[MOBILE_SCREEN_CHECK:[^\]]+\]", "", content).strip(), checks
-
-
-def _screen_tool_only_fallback_text(screen_reasons: Sequence[str], mobile_checks: Sequence[Mapping[str, str]]) -> str:
-    if mobile_checks:
-        return "我想确认一下你现在在做什么。"
+def _screen_tool_only_fallback_text(screen_reasons: Sequence[str]) -> str:
     if screen_reasons:
         return "我想确认一下你现在在做什么。"
     return ""
@@ -1495,7 +1401,6 @@ def _step(name: str, effect: str, production_side_effect: bool, status: str) -> 
     return payload
 
 
-
 def build_core_wake_preflight(
     *,
     wake_package: Mapping[str, Any],
@@ -1565,6 +1470,7 @@ def build_core_wake_preflight(
             "persona_message_count": len(persona_messages),
             "history_message_count": len(context["recent_messages"]),
             "core_prompt": core_prompt,
+            "creation_facts": _build_core_prompt(package, context, facts_only=True),
             "prompt_char_count": len(core_prompt),
             "system_notice": _system_notice(package, context),
             "monitor_alert": _monitor_alert(context),
@@ -1694,9 +1600,6 @@ def _validated_execution_context(execution_context: Mapping[str, Any] | None) ->
         "control_epoch": _preflight_optional_non_negative_int(context.get("control_epoch"), key="control_epoch"),
         "owner_client_id": _preflight_optional_text(context.get("owner_client_id"), key="owner_client_id"),
         "control_device_id": _preflight_optional_text(context.get("control_device_id"), key="control_device_id"),
-        "autonomous_mobile_screen_target": _validated_autonomous_mobile_screen_target(
-            context.get("autonomous_mobile_screen_target")
-        ),
         "presence_identity_block": _preflight_optional_text(
             context.get("presence_identity_block"),
             key="presence_identity_block",
@@ -1746,29 +1649,6 @@ def _preflight_optional_bool(value: Any, *, key: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"core wake preflight execution_context {key} must be a boolean")
     return value
-
-
-def _validated_autonomous_mobile_screen_target(value: Any) -> dict[str, str]:
-    if value is None:
-        return {}
-    target = _validate_exact_keys(
-        value,
-        allowed=_AUTONOMOUS_MOBILE_TARGET_ALLOWED_FIELDS,
-        label="core wake preflight execution_context autonomous_mobile_screen_target",
-        require_all=False,
-    )
-    device_id = _preflight_optional_text(target.get("device_id"), key="autonomous_mobile_screen_target.device_id")
-    if not device_id:
-        return {}
-    device_name = _preflight_optional_text(target.get("device_name"), key="autonomous_mobile_screen_target.device_name")
-    device_type = _preflight_optional_text(target.get("device_type"), key="autonomous_mobile_screen_target.device_type")
-    label = _preflight_optional_text(target.get("label"), key="autonomous_mobile_screen_target.label")
-    return {
-        "device_id": device_id,
-        "device_name": device_name,
-        "device_type": device_type,
-        "label": label or device_name or device_type or "这台移动设备",
-    }
 
 
 def _validated_recent_messages(value: Any) -> tuple[list[dict[str, str]], list[str]]:
@@ -1836,34 +1716,35 @@ def _sentinel_ring_touch_enabled() -> bool:
         return False
 
 
-def _build_core_prompt(package: Mapping[str, Any], context: Mapping[str, Any]) -> str:
+def _build_core_prompt(package: Mapping[str, Any], context: Mapping[str, Any], *, facts_only=False) -> str:
     user_name = context["user_name"]
+    ai_name = context["ai_name"]
     core_parts = [
+        render_tool_usage_policy(user_name=user_name, ai_name=ai_name),
         f"{user_name}是你的人——{user_name}这么久没动静，你该去看看了。",
         f"【{user_name}】已经{_format_age(context['last_user_message_age_sec'])}没有和你说话了。",
-        f"哨兵唤醒你的原因：{_relationship_text(package['wake_reason'], context)}",
+        f"这次想找{user_name}的原因：{_relationship_text(package['wake_reason'], context)}",
         f"这段时间{user_name}的整体状况：{_relationship_text(package['sentinel']['summary'], context)}",
-        f"最新一条哨兵日志：{_relationship_text(package['sentinel']['monitoringlog'], context)}",
-        f"Attention 简报：\n{_relationship_text(package['attention']['compact_text'], context)}",
     ]
     if package["sentinel"]["uncertainty"]:
         core_parts.append(f"不确定性：{_relationship_text(package['sentinel']['uncertainty'], context)}")
-    if package["sentinel"]["tone_hint"]:
-        core_parts.append(f"语气提示：{_relationship_text(package['sentinel']['tone_hint'], context)}")
+    # Full monitor logs and tone_hint remain in the package/trace, not in the
+    # Core request. Core already receives the reason, summary and recent chat.
     projection = package.get("context", {}).get("context_projection")
+    rendered_projection = ""
     if isinstance(projection, Mapping):
         rendered_projection = render_context_delivery_projection(
             projection,
             user_name=user_name,
-            ai_name=str(context["ai_name"]),
+            ai_name=str(ai_name),
         )
-        if rendered_projection:
-            core_parts.append(rendered_projection)
-    _append_list_section(
-        core_parts,
-        title="最近的哨兵记录",
-        items=[_relationship_text(item, context) for item in package["context"]["recent_sentinel_logs"]],
-    )
+    if rendered_projection:
+        core_parts.append(rendered_projection)
+    attention_text = _relationship_text(package["attention"]["compact_text"], context).strip()
+    if attention_text and attention_text not in rendered_projection:
+        # A device snapshot need not cover chat/attention evidence. Omit only
+        # text already present, including retaining legacy/empty projections.
+        core_parts.append(f"Attention 简报：\n{attention_text}")
     _append_list_section(
         core_parts,
         title="最近聊天片段",
@@ -1874,6 +1755,8 @@ def _build_core_prompt(package: Mapping[str, Any], context: Mapping[str, Any]) -
         title="硬限制",
         items=[_hard_limit_relationship_text(item, context) for item in package["hard_limits"]],
     )
+    if facts_only:
+        return '\n'.join(core_parts[2:])
     available_tools: set[str] = set()
     toy_available = _sentinel_toy_capability_enabled(context)
     if toy_available:
@@ -1884,14 +1767,12 @@ def _build_core_prompt(package: Mapping[str, Any], context: Mapping[str, Any]) -
     pc_state = package["attention"].get("world_state", {}).get("pc_activity")
     if pc_state == "active":
         available_tools.add("pc.screen_check")
-    mobile_target = context.get("autonomous_mobile_screen_target") or {}
-    if mobile_target:
-        available_tools.add("mobile.screen_check")
     rendered_tools = render_registered_capabilities(
         "sentinel_v2",
         capabilities=available_tools,
         context={
             "user_name": user_name,
+            "ai_name": ai_name,
             "toy_available": toy_available,
             "toy_variant": "sentinel",
             "ring_available": ring_available,
@@ -1899,18 +1780,16 @@ def _build_core_prompt(package: Mapping[str, Any], context: Mapping[str, Any]) -
             "pc_foreground": package["attention"].get("world_state", {}).get(
                 "pc_foreground"
             ),
-            "mobile_screen_available": bool(mobile_target),
-            "mobile_screen_target": mobile_target,
         },
     )
     advertised_tools = tuple(tool_name for tool_name, _prose in rendered_tools)
     validate_turn_advertisement(available_tools, advertised_tools)
     core_parts.extend(f"\n{prose}" for _tool_name, prose in rendered_tools)
     core_parts.append(
-        f"信号不足不代表没话说——翻翻你们的记忆和最近聊天，找一个{user_name}会在意的点自然地搭话。"
+        f"信号不足不代表没话说——翻翻你与{user_name}的记忆和最近聊天，找一个{user_name}会在意的点自然地搭话。"
         f"实在没有切入点，就用你了解的{user_name}的习惯或日常节点来关心{user_name}。"
         f"不要提 Sentinel、Attention、Gate 或系统内部结构。"
-        f"想念、关心或想陪{user_name}一会儿，都可以用自己的口吻直接表达。"
+        f"想念、关心或想陪{user_name}一会儿，都可以用你自己的口吻直接表达。"
     )
     return "\n".join(core_parts)
 
@@ -1925,7 +1804,7 @@ def _relationship_text(value: Any, context: Mapping[str, Any]) -> str:
 
 
 def _hard_limit_relationship_text(value: Any, context: Mapping[str, Any]) -> str:
-    """Resolve the controlled owner placeholder without rewriting quoted chat."""
+    """Resolve the owner placeholder; keep direct address under Core's identity."""
 
     return _relationship_text(value, context).replace(
         "她",

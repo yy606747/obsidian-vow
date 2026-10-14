@@ -62,6 +62,8 @@ class WorkingModelPipelineInput:
     writer_prompt_version: str
     source_kind: str = "chat"
     reflection_log_id: str | None = None
+    together_source_id: str | None = None
+    together_attempt: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -132,8 +134,28 @@ def capture_reflection_working_model_pipeline_input(
     )
 
 
+def capture_together_working_model_pipeline_input(
+    *, conv_id: str, together_source_id: str, statement: str, source: str,
+    model_key: str, identity_snapshot: Mapping[str, str], together_attempt: int = 0,
+) -> WorkingModelPipelineInput:
+    """A real together outbox source, never a synthetic ordinary chat message."""
+    gate_slot = get_slot(WORKING_MODEL_GATE_SLOT) or {}
+    identity = dict(identity_snapshot)
+    return WorkingModelPipelineInput(
+        conv_id=conv_id, origin_user_message_id=None, origin_assistant_message_id=None,
+        statement=statement.strip(), source=source, model_key=model_key, identity_snapshot=identity,
+        gate_model=str(gate_slot.get("model") or ""), gate_prompt_version=WORKING_MODEL_GATE_PROMPT_VERSION,
+        writer_prompt_version=writer_prompt_version(identity), source_kind="together",
+        together_source_id=together_source_id, together_attempt=together_attempt,
+    )
+
+
 def stable_working_model_request_id(value: WorkingModelPipelineInput) -> str:
-    if value.source_kind == "reflection":
+    if value.source_kind == "together":
+        payload = {"conv_id": value.conv_id, "source_kind": "together",
+                   "together_source_id": value.together_source_id, "attempt": value.together_attempt,
+                   "statement": value.statement}
+    elif value.source_kind == "reflection":
         payload = {
             "conv_id": value.conv_id,
             "source_kind": "reflection",
@@ -401,6 +423,15 @@ async def _default_memory_insert(db, **kwargs) -> dict:
 
 
 async def _persist_memory_outcome(
+    db_factory, **kwargs,
+) -> tuple[dict, dict]:
+    from app.memory_v2 import ai_note_dedup
+
+    async with ai_note_dedup.write_lock():
+        return await _persist_memory_outcome_locked(db_factory, **kwargs)
+
+
+async def _persist_memory_outcome_locked(
     db_factory,
     *,
     value: WorkingModelPipelineInput,
@@ -417,7 +448,12 @@ async def _persist_memory_outcome(
     memory_prepare: Callable[[str], Awaitable[bytes | None]],
     memory_insert_in_tx: Callable[..., Awaitable[dict]],
 ) -> tuple[dict, dict]:
+    from app.memory_v2 import ai_note_dedup
+
     embedding_blob = await memory_prepare(value.statement)
+    duplicate = await ai_note_dedup.find_duplicate(
+        value.statement, embedding_blob, now, db_factory=db_factory,
+    )
     memory_id = stable_working_model_memory_id(request_id)
     async with db_factory() as db:
         await db.execute("BEGIN IMMEDIATE")
@@ -428,16 +464,21 @@ async def _persist_memory_outcome(
             if current["status"] != REQUEST_STATUS_PROCESSING:
                 await db.rollback()
                 return current, {}
-            memory = await memory_insert_in_tx(
-                db,
-                memory_id=memory_id,
-                content=value.statement,
-                source_conv=value.conv_id,
-                origin_request_id=request_id,
-                embedding_blob=embedding_blob,
-                created_at=now,
-                importance=0.6,
+            memory = await ai_note_dedup.reuse_in_tx(
+                db, duplicate, seen_at=now, origin_request_id=request_id,
             )
+            if memory is None:
+                memory = await memory_insert_in_tx(
+                    db,
+                    memory_id=memory_id,
+                    content=value.statement,
+                    source_conv=value.conv_id,
+                    origin_request_id=request_id,
+                    embedding_blob=embedding_blob,
+                    created_at=now,
+                    importance=0.6,
+                )
+            memory_id = memory.get("id") or memory_id
             validate_terminal_request_outcome(
                 status="routed",
                 route=route,
@@ -463,7 +504,7 @@ async def _persist_memory_outcome(
             )
             row = await repository.get_request(db, request_id)
             await db.commit()
-            if memory:
+            if memory and (not memory.get("deduplicated") or memory.get("index_created")):
                 from app.memory_v2.hybrid_recall import invalidate_full_corpus_cache
 
                 invalidate_full_corpus_cache(notes=True)
@@ -474,7 +515,7 @@ async def _persist_memory_outcome(
 
 
 async def _broadcast_memory(memory: dict) -> None:
-    if not memory:
+    if not memory or memory.get("deduplicated"):
         return
     try:
         from ws import manager
@@ -528,6 +569,8 @@ async def _persist_integrated_outcome(
                 if value.source_kind == "reflection"
                 else {"statement": value.statement, "source": value.source}
             )
+            if value.source_kind == "together":
+                version_reason.update(source_kind="together", together_source_id=value.together_source_id)
             await repository.insert_version(
                 db,
                 version_id=working_model_id,
@@ -615,7 +658,7 @@ async def run_working_model_pipeline(
         now=clock(),
     )
 
-    if value.source_kind not in {"chat", "reflection"}:
+    if value.source_kind not in {"chat", "reflection", "together"}:
         if claimed:
             row = await _set_request_outcome(
                 db_factory,
@@ -670,6 +713,25 @@ async def run_working_model_pipeline(
                 "reflection_log_id": value.reflection_log_id,
             }
 
+    together_owner_message = None
+    together_owner_message_id = None
+    if value.source_kind == "together":
+        try:
+            from app.together.evidence import reload_source
+            reloaded_source, together_owner_message, together_owner_message_id = await reload_source(db_factory, value)
+            value = replace(value, source=reloaded_source)
+            if claimed:
+                async with db_factory() as db:
+                    await db.execute("UPDATE working_model_requests SET source=? WHERE id=?", (reloaded_source, request_id))
+                    await db.commit()
+        except Exception:
+            if claimed:
+                row = await _set_request_outcome(db_factory, request_id=request_id, status="failed", route=None,
+                    gate_reason=None, gate_model=value.gate_model or None, gate_prompt_version=value.gate_prompt_version,
+                    failure_code="together_source_invalid", now=clock())
+                return {"request": row, "deduplicated": False}
+            return {"request": created, "deduplicated": True}
+
     if not claimed:
         return {
             "request": created,
@@ -705,6 +767,13 @@ async def run_working_model_pipeline(
             statement=value.statement,
             provider=gate_provider,
             model=value.gate_model or None,
+        )
+    elif value.source_kind == "together":
+        latest_user_message = together_owner_message
+        gate_result = await run_working_model_gate(
+            statement=value.statement, source=value.source,
+            latest_user_message=together_owner_message or f"{value.identity_snapshot['user_name']}本轮没有新发言；依据来自本场明确标注的观察和表达。",
+            provider=gate_provider, model=value.gate_model or None,
         )
     else:
         latest_user_message, assistant_message_exists = await _load_exact_origin_messages(
@@ -860,7 +929,10 @@ async def run_working_model_pipeline(
             statement=value.statement,
             source=value.source,
             original_user_message=latest_user_message,
-            original_user_message_id=value.origin_user_message_id if latest_user_message is not None else None,
+            # The writer needs the actual independent-message id alongside its
+            # verbatim text. Keep the ordinary chat origin columns unset.
+            original_user_message_id=(together_owner_message_id if value.source_kind == "together"
+                                      else value.origin_user_message_id) if latest_user_message is not None else None,
             provider=writer_provider,
         )
         writer_results.append(writer_result.to_dict())

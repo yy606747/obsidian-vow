@@ -110,11 +110,11 @@ def test_look_at_me_midnight_moves_only_window_not_event_or_deadline(tmp_path):
         assert moved['conv_id']==target and moved['origin_conv_id']=='old'
         assert moved['expected_end_at']==deadline and moved['core_state']=='done'
         assert moved['response_day']=='2026-09-07'
-        assert '约好的腻歪时间' in fact(moved,user_name='青禾',ai_name='临川',now=f.now,timezone='Asia/Shanghai')
+        assert '约好的相处时间' in fact(moved,user_name='青禾',ai_name='临川',now=f.now,timezone='Asia/Shanghai')
     run_case(tmp_path,case)
 
 
-def test_fixed_background_is_independent_of_today_messages_and_setting_changes(tmp_path):
+def test_inheritance_candidates_stay_fixed_when_messages_and_settings_change(tmp_path):
     async def case(f):
         state = await f.cross_midnight()
         target = state['active_conv_id']
@@ -282,7 +282,8 @@ def test_calendar_midnight_respects_timezone_and_dst():
     assert calendar_day(timestamp('2026-09-08T00:00:00'), 'Asia/Shanghai')[0] == '2026-09-08'
 
 
-def test_inherited_messages_only_enter_prompt_and_never_the_http_page(tmp_path, monkeypatch):
+@pytest.mark.parametrize('attachment_policy', ['last_message', 'last_user'])
+def test_inherited_messages_slide_out_of_prompt_and_never_enter_http_page(tmp_path, monkeypatch, attachment_policy):
     from app.chat import history, crud_routes
     from app.daily_chat import service
     async def case(f):
@@ -292,24 +293,124 @@ def test_inherited_messages_only_enter_prompt_and_never_the_http_page(tmp_path, 
         monkeypatch.setattr(crud_routes, 'get_db', f.db)
         monkeypatch.setattr(history, 'load_worldbook', lambda: {'user_name': '青禾', 'ai_name': '临川'})
         assert await crud_routes.list_messages(target, limit=50, before=None) == []
-        empty_ctx = await history.prepare_chat_history(target, context_limit=10, attachment_policy='last_user')
-        assert len(empty_ctx.cross_day_message_ids) == 30
+        empty_ctx = await history.prepare_chat_history(target, context_limit=10, attachment_policy=attachment_policy)
+        assert empty_ctx.cross_day_message_ids == tuple(f'm{i:02}' for i in range(30, 40))
         for i in range(12):
             await f.message(f'today{i:02}', target, at=f.now+i+1, role='user' if i % 2 == 0 else 'assistant')
-        for limit in (5, 10):
-            ctx = await history.prepare_chat_history(target, context_limit=limit, attachment_policy='last_user')
-            assert len(ctx.cross_day_message_ids) == 30
-            assert len(ctx.visible_message_ids) == 30 + limit
-            block = next(m['content'] for m in ctx.history if '[跨日背景' in m['content'])
-            assert block.count('原话 m') == 30 and '原话 today' not in block
+            ctx = await history.prepare_chat_history(target, context_limit=10, attachment_policy=attachment_policy)
+            inherited_ids = [f'm{j:02}' for j in range(31+i, 40)]
+            today_ids = [f'today{j:02}' for j in range(max(0, i-9), i+1)]
+            assert ctx.cross_day_message_ids == tuple(inherited_ids)
+            assert ctx.visible_message_ids == inherited_ids + today_ids
+            assert ctx.latest_user_message_id == f'today{i if i % 2 == 0 else i-1:02}'
+            blocks = [m['content'] for m in ctx.history if '[跨日背景' in m['content']]
+            assert bool(blocks) == bool(inherited_ids)
+            if blocks:
+                assert blocks[0].count('原话 m') == len(inherited_ids)
+                assert '原话 today' not in blocks[0]
+        for limit in (5, 10, 30, 50):
+            ctx = await history.prepare_chat_history(target, context_limit=limit, attachment_policy=attachment_policy)
+            inherited_count = min(30, max(0, limit-12))
+            assert len(ctx.cross_day_message_ids) == inherited_count
+            assert len(ctx.visible_message_ids) == inherited_count + min(12, limit)
+            assert any('[跨日背景' in m['content'] for m in ctx.history) == bool(inherited_count)
             page = await crud_routes.list_messages(target, limit=limit, before=None)
-            assert len(page) == limit
+            assert len(page) == min(12, limit)
             assert all(m['conv_id'] == target and m['id'].startswith('today') for m in page)
             assert not any(m.get('inherited') or 'origin_conv_id' in m for m in page)
         old_page = await crud_routes.list_messages('old', limit=50, before=None)
         assert len(old_page) == 40
         async with f.db() as db:
             assert (await (await db.execute('SELECT COUNT(*) FROM messages')).fetchone())[0] == 52
+    run_case(tmp_path, case)
+
+
+def test_system_events_do_not_consume_utterance_slots(tmp_path, monkeypatch):
+    from app.chat import history
+    from app.daily_chat import service
+
+    async def case(f):
+        target = (await f.cross_midnight())['active_conv_id']
+        monkeypatch.setattr(service, 'daily_chat', f.service)
+        monkeypatch.setattr(history, 'get_db', f.db)
+        monkeypatch.setattr(history, 'load_worldbook', lambda: {'user_name': '青禾', 'ai_name': '临川'})
+        await f.message('today-user', target, at=f.now+1, role='user')
+        await f.message('filtered-event', target, at=f.now+2, role='system')
+        ctx = await history.prepare_chat_history(target, context_limit=2, attachment_policy='last_message')
+        assert ctx.cross_day_message_ids == ('m39',)
+        assert ctx.visible_message_ids == ['m39', 'today-user']
+        assert ctx.previous_conversation_id is None
+    run_case(tmp_path, case)
+
+
+def test_sliding_history_releases_timeline_entries_and_refills_after_deletion(tmp_path, monkeypatch):
+    from app.chat import history
+    from app.daily_chat import service
+    from app.memory_v3.timeline import build_timeline_prompt_block
+
+    async def case(f):
+        target = (await f.cross_midnight())['active_conv_id']
+        monkeypatch.setattr(service, 'daily_chat', f.service)
+        monkeypatch.setattr(history, 'get_db', f.db)
+        monkeypatch.setattr(history, 'load_worldbook', lambda: {'user_name': '青禾', 'ai_name': '临川'})
+        candidates = await f.inherited(target)
+
+        async def prepare():
+            return await history.prepare_chat_history(target, context_limit=30, attachment_policy='last_user')
+
+        def timeline(ctx):
+            return build_timeline_prompt_block(
+                {'entries_json': json.dumps([{'text': '青禾提到明天的安排。', 'source_message_ids': ['m10']}])},
+                visible_message_ids=ctx.visible_message_ids,
+                source_created_at={m['id']: m['created_at'] for m in candidates},
+                reference_ts=f.now, max_chars=800, user_name='青禾', ai_name='临川',
+            )
+
+        assert timeline(await prepare())['deduped_indices'] == [0]
+        await f.message('today-user', target, at=f.now+1, role='user')
+        await f.message('today-answer', target, at=f.now+2)
+        ctx = await prepare()
+        assert ctx.cross_day_message_ids == tuple(f'm{i:02}' for i in range(12, 40))
+        assert timeline(ctx)['deduped_indices'] == []
+        assert '青禾提到明天的安排' in timeline(ctx)['content']
+
+        # Regeneration removes the old answer before rebuilding its prompt.
+        async with f.db() as db:
+            await db.execute("DELETE FROM messages WHERE id='today-answer'")
+            await db.commit()
+        ctx = await prepare()
+        assert ctx.cross_day_message_ids[0] == 'm11'
+        assert ctx.visible_message_ids[-1] == 'today-user'
+        assert len(ctx.visible_message_ids) == 30
+
+        # The next rollover keeps the same tail across more than one day.
+        f.now = timestamp('2026-09-09T00:00:00')
+        target = (await f.service.ensure_current())['active_conv_id']
+        assert (await prepare()).visible_message_ids == ctx.visible_message_ids
+        await f.message('next-day-user', target, at=f.now+1, role='user')
+        assert (await prepare()).visible_message_ids == ctx.visible_message_ids[1:] + ['next-day-user']
+    run_case(tmp_path, case)
+
+
+@pytest.mark.parametrize('context_limit', [6, 15, 20])
+def test_cross_day_prompt_shares_callers_history_budget(tmp_path, monkeypatch, context_limit):
+    from app.daily_chat import service
+
+    async def case(f):
+        target = (await f.cross_midnight())['active_conv_id']
+        monkeypatch.setattr(service, 'daily_chat', f.service)
+        for count in (0, 1, context_limit-1, context_limit, context_limit+1):
+            blocks = await service.cross_day_prompt(
+                target, user_name='青禾', ai_name='临川', context_limit=context_limit,
+                current_message_count=count, db_factory=f.db,
+            )
+            remaining = max(0, context_limit-count)
+            if remaining:
+                assert blocks[0]['content'].count('原话 m') == remaining
+                assert '原话 m39' in blocks[0]['content']
+                assert f'原话 m{39-remaining:02}' not in blocks[0]['content']
+            else:
+                assert blocks == []
     run_case(tmp_path, case)
 
 

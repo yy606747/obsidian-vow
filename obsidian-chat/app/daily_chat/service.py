@@ -288,11 +288,25 @@ async def active_conversation_in_tx(db):
     return await cursor.fetchone()
 
 
-async def cross_day_prompt(conv_id: str, *, user_name: str, ai_name: str, db_factory=None) -> list[dict]:
+def select_cross_day_messages(
+    messages: list[dict], *, context_limit: int, current_message_count: int,
+) -> list[dict]:
+    """Fill the recent-history window with the newest inherited records."""
+    remaining = max(0, context_limit - current_message_count)
+    return messages[-remaining:] if remaining else []
+
+
+async def cross_day_prompt(
+    conv_id: str, *, user_name: str, ai_name: str, context_limit: int,
+    current_message_count: int, db_factory=None,
+) -> list[dict]:
     if not daily_chat.state.get('enabled'):
         return []
     async with (db_factory() if db_factory else daily_chat.db()) as db:
         records = await inherited_messages_in_tx(db, resolve_conversation_id(conv_id))
+    records = select_cross_day_messages(
+        records, context_limit=context_limit, current_message_count=current_message_count,
+    )
     return build_cross_day_context(records, user_name=user_name, ai_name=ai_name,
                                    timezone=daily_chat.state.get('timezone') or daily_chat.timezone())
 
@@ -307,6 +321,7 @@ def build_cross_day_context(messages: list[dict], *, user_name: str, ai_name: st
     from app.chat.audio_input import attachment_mime_type, attachment_url
     from app.chat.image_history import image_history_config
     from app.documents.service import is_document
+    from app.heart_works.chat_reference import is_reference
     limits = image_history_config()
     user_ids = [m['id'] for m in messages if m['role'] == 'user'] + list(today_user_ids)
     allowed = set(user_ids[-limits['image_history_user_turns']:]) if limits['image_history_user_turns'] else set()
@@ -323,7 +338,7 @@ def build_cross_day_context(messages: list[dict], *, user_name: str, ai_name: st
             attachments = []
         retained = []
         for attachment in attachments:
-            if is_document(attachment):
+            if is_document(attachment) or is_reference(attachment):
                 retained.append(attachment)
                 continue
             if record['role'] == 'assistant' and isinstance(attachment, dict) and attachment.get('type') == 'sticker':
@@ -366,6 +381,8 @@ def build_cross_day_background(messages: list[dict], *, user_name: str, ai_name:
         name = user_name if message['role'] == 'user' else ai_name
         at = datetime.fromtimestamp(message['created_at'], ZoneInfo(timezone)).strftime('%Y-%m-%d %H:%M:%S')
         content = str(message.get('content') or '')
+        from app.together.shared_history import ended_context_note
+        content += ended_context_note(message)
         lines.append(f'[{at}] {name}：{content}')
         raw_attachments = message.get('attachments') or []
         try:

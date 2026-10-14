@@ -47,7 +47,8 @@ from app.vows.service import ai_quota_remaining, vow_service
 from .error_text import looks_like_model_error_text
 from .commands import WORKING_MODEL_REQUEST_CLOSE, WORKING_MODEL_REQUEST_OPEN
 from .memory_context import _record_v2_memory_usage_for_chat
-from .postprocess import PostProcessor, looks_like_structured_reply, strip_retry_marker
+from .postprocess import PostProcessor, PostProcessResult, looks_like_structured_reply, strip_retry_marker
+from .response_status import defer_empty_notice, has_delivery_candidate, is_filtered, merge_retry_usage, retry_empty_reply
 from .worldbook import load_worldbook_names
 from .side_effects import (
     VOW_BLOCKED_TEXT,
@@ -58,11 +59,9 @@ from .side_effects import (
     perform_poi_check,
     perform_schedule_list_followup,
     perform_screen_check,
-    perform_mobile_screen_check,
     persist_vow_blocked_message,
 )
 from app.pc_screen import service as screen_service
-from app.mobile_screen import mobile_screen_service
 from app.tools.schemas import ToolContext, ToolIntent, ToolStatus
 from app.tools.ledger import tool_invocation_ledger
 from app.tools.service import tool_service
@@ -865,6 +864,7 @@ async def _execute_poi_search(intent: ToolIntent, context: ToolContext) -> dict:
                 context.model_key or "",
                 categories,
                 request_id=request_id,
+                **({'heart_work_origin': context.metadata['heart_work_origin']} if context.metadata.get('heart_work_origin') else {}),
             ),
             name=f"poi_check:{context.conv_id}:{context.msg_id or intent.id}",
         )
@@ -890,6 +890,7 @@ async def _execute_activity_summary(intent: ToolIntent, context: ToolContext) ->
             context.model_key or "",
             n,
             request_id=request_id,
+            **({'heart_work_origin': context.metadata['heart_work_origin']} if context.metadata.get('heart_work_origin') else {}),
         ),
         name=f"activity_check:{context.conv_id}:{context.msg_id or intent.id}",
     )
@@ -919,6 +920,7 @@ async def _execute_screen_check(intent: ToolIntent, context: ToolContext) -> dic
             "followup": False,
         }
     if request.status == "pending":
+        request.heart_work_origin = context.metadata.get('heart_work_origin')
         create_tracked_task(
             perform_screen_check(request),
             name=f"screen_check:{context.conv_id}:{context.msg_id or intent.id}",
@@ -931,6 +933,7 @@ async def _execute_screen_check(intent: ToolIntent, context: ToolContext) -> dic
             "reason": request.reason,
         }
 
+    request.heart_work_origin = context.metadata.get('heart_work_origin')
     create_tracked_task(
         perform_screen_check(request),
         name=f"screen_check_rejected:{context.conv_id}:{context.msg_id or intent.id}",
@@ -940,135 +943,6 @@ async def _execute_screen_check(intent: ToolIntent, context: ToolContext) -> dic
         "conv_id": context.conv_id,
         "msg_id": context.msg_id,
         "request_id": request.request_id,
-        "reason": request.reason,
-        "reject_reason": request.reject_reason,
-    }
-
-
-def _mobile_screen_check_intents(postprocessed) -> list[ToolIntent]:
-    return [
-        intent for intent in getattr(postprocessed, "tool_intents", ())
-        if intent.tool_name == "mobile.screen_check"
-    ]
-
-
-async def _resolve_mobile_target(target: str) -> tuple[str | None, str | None]:
-    """把用户语义目标解析为真实 device_id。
-
-    只在可截图（screen.capture + 在线）的 android 设备里选；目标可为设备名、
-    “手机/平板”类型词或 device_id。返回 (device_id, error)：
-    error 为 None 表示成功；"offline" 表示无可用/未匹配；"ambiguous_target"
-    表示多台候选但目标不明确——绝不在歧义时擅自投递，避免投错设备。
-    """
-    from app.devices import DeviceStatus
-
-    driver = device_service.get_driver("android_mobile")
-    if driver is None:
-        return None, "offline"
-    candidates = [
-        d for d in await driver.list_devices()
-        if d.status is DeviceStatus.ONLINE
-        and "screen.capture" in d.capabilities
-        and bool(d.metadata.get("screen_agent_online"))
-    ]
-    if not candidates:
-        return None, "offline"
-
-    target = str(target or "").strip().lower()
-    if target:
-        type_hint = ""
-        if any(k in target for k in ("平板", "tablet", "pad")):
-            type_hint = "tablet"
-        elif any(k in target for k in ("手机", "phone", "mobile")):
-            type_hint = "phone"
-        matches = [
-            d for d in candidates
-            if target == d.device_id.lower()
-            or (d.name and target in d.name.lower())
-            or (type_hint and str(d.metadata.get("device_type") or "").lower() == type_hint)
-        ]
-        if not matches:
-            return None, "offline"          # 指定了目标却没匹配上 → 不乱投
-        if len(matches) > 1:
-            return None, "ambiguous_target"  # 同一目标匹配多台 → 让模型说清
-        return matches[0].device_id, None
-
-    # 目标为空：唯一在线设备才自动选；多台时拒绝并要求模型明确目标（隐私安全）。
-    if len(candidates) == 1:
-        return candidates[0].device_id, None
-    return None, "ambiguous_target"
-
-
-async def _execute_mobile_screen_check(intent: ToolIntent, context: ToolContext) -> dict:
-    reason = str(intent.arguments.get("reason") or "").strip()
-    # Autonomous/system-triggered callers may preselect one audited target.
-    # When present, that server-side choice outranks model-authored marker
-    # arguments; ordinary chat contexts do not set it and remain unchanged.
-    locked_target = str(
-        (getattr(context, "metadata", {}) or {}).get("mobile_target_device_id")
-        or ""
-    ).strip()
-    target = locked_target or str(intent.arguments.get("target") or "").strip()
-
-    device_id, err = await _resolve_mobile_target(target)
-    if err:
-        # 没有创建真实 request，但仍构造一个 rejected 请求跑 follow-up，
-        # 这样模型/用户会收到一句自然语言解释，而不是命令凭空消失。
-        rejected = mobile_screen_service.build_rejected_request(
-            conv_id=context.conv_id,
-            msg_id=context.msg_id or intent.id,
-            model_key=context.model_key or "",
-            target_label=target,
-            reason=reason,
-            reject_reason=err,
-        )
-        create_tracked_task(
-            perform_mobile_screen_check(rejected),
-            name=f"mobile_screen_unresolved:{context.conv_id}:{context.msg_id or intent.id}",
-        )
-        return {
-            "type": "screen_check_rejected",
-            "conv_id": context.conv_id,
-            "msg_id": context.msg_id,
-            "request_id": rejected.request_id,
-            "reason": rejected.reason,
-            "target": target,
-            "reject_reason": err,
-        }
-
-    request = await mobile_screen_service.create_request(
-        conv_id=context.conv_id,
-        msg_id=context.msg_id or intent.id,
-        model_key=context.model_key or "",
-        target_device_id=device_id,
-        reason=reason,
-    )
-    if request.status == "pending":
-        create_tracked_task(
-            perform_mobile_screen_check(request),
-            name=f"mobile_screen_check:{context.conv_id}:{context.msg_id or intent.id}",
-        )
-        return {
-            "type": "screen_check_pending",
-            "conv_id": context.conv_id,
-            "msg_id": context.msg_id,
-            "request_id": request.request_id,
-            "target_device_id": request.target_device_id,
-            "target_device_name": request.target_device_name,
-            "reason": request.reason,
-        }
-
-    create_tracked_task(
-        perform_mobile_screen_check(request),
-        name=f"mobile_screen_check_rejected:{context.conv_id}:{context.msg_id or intent.id}",
-    )
-    return {
-        "type": "screen_check_rejected",
-        "conv_id": context.conv_id,
-        "msg_id": context.msg_id,
-        "request_id": request.request_id,
-        "target_device_id": request.target_device_id,
-        "target_device_name": request.target_device_name,
         "reason": request.reason,
         "reject_reason": request.reject_reason,
     }
@@ -1218,6 +1092,39 @@ async def replace_message_and_freeze_vow_context(conv_id: str, message_id: str) 
     )
 
 
+# Interactive replies should not spend the transport's entire 120 s read timeout
+# waiting for the first text. Retry once before any output, using the same prompt.
+CHAT_FIRST_TEXT_TIMEOUT_SEC = 35.0
+CHAT_STREAM_IDLE_TIMEOUT_SEC = 45.0
+
+
+async def _stream_with_deadline(iterator, usage_meta):
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    deadline = started + CHAT_FIRST_TEXT_TIMEOUT_SEC
+    phase = "first_text"
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(anext(iterator), timeout=max(0.001, deadline - loop.time()))
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError as exc:
+                usage_meta["stream_timeout_phase"] = phase
+                usage_meta.setdefault("provider_calls", []).append({
+                    "scope": "core", "ok": False, "error_type": "timeout", "retryable": phase == "first_text",
+                    "elapsed_ms": round((loop.time() - started) * 1000),
+                    "message": f"{phase}_timeout",
+                })
+                raise TimeoutError(f"{phase}_timeout: 等待模型回复超时") from exc
+            if str(chunk).strip() and chunk != "\x00RETRY\x00":
+                phase = "idle"
+                deadline = loop.time() + CHAT_STREAM_IDLE_TIMEOUT_SEC
+            yield chunk
+    finally:
+        await iterator.aclose()
+
+
 async def stream_chat_response(
     *,
     conv_id: str,
@@ -1254,6 +1161,9 @@ async def stream_chat_response(
         presence_outcomes_consumed = 0
         sticker_delivery = StickerDelivery()
         turn_outcome = "pipeline_failed"
+        response_status = ""
+        attempt_usages: list[dict] = []
+        model_elapsed_ms = 0.0
         tool_context: ToolContext | None = None
         buffering_structured_reply: bool | None = None
         visible_filter = _UpdateModelStreamFilter()
@@ -1286,38 +1196,100 @@ async def stream_chat_response(
             )
             await queue.put({"id": ai_msg_id, "type": "start", "turn_id": trace.turn_id, "conv_id": conv_id,
                              "user_message_id": prompt_meta.get('current_user_message_id')})
-            await tool_invocation_ledger.record_model_request(
-                tool_context,
-                invocation_id=model_invocation_id,
-                request_snapshot=history,
-                advertised_tools=prompt_meta.get("advertised_tools") or (),
-                metadata={
-                    "prompt_source": str(
-                        prompt_meta.get("prompt_source") or "send"
-                    ),
-                    "temperature": temperature,
-                    "diagnostics": trace.snapshot(),
-                    "image_history": prompt_meta.get("image_history"),
-                },
-            )
-            trace.start("model")
-            try:
-                async for chunk in stream_ai(history, model_key, usage_meta, temperature):
-                    chunk = str(chunk)
-                    raw_model_output += chunk
-                    full_text += chunk
-                    if buffering_structured_reply is None:
-                        probe = full_text.lstrip()
-                        if not probe:
+            for attempt in range(2):
+                if attempt:
+                    usage_meta.clear()
+                    full_text = raw_model_output = provider_error = ""
+                    has_error = False
+                    response_status = ""
+                    buffering_structured_reply = None
+                    visible_filter = _UpdateModelStreamFilter()
+                    working_model_request_filter = _WorkingModelRequestStreamFilter()
+                    ring_filter = _RingTouchStreamFilter()
+                    recall_filter = _RecallIntentStreamFilter()
+                    web_search_filter = _WebSearchIntentStreamFilter()
+                    self_wake_filter = _SelfWakeStreamFilter()
+                    tide_filter = _TideIntentStreamFilter()
+                    vow_filter = _VowStreamFilter()
+                    control_marker_filter = ControlMarkerStreamFilter()
+                    model_invocation_id = tool_invocation_ledger.new_invocation_id("main_core")
+                    prompt_meta["invocation_id"] = model_invocation_id
+                    tool_context = _tool_context(
+                        conv_id=conv_id, msg_id=ai_msg_id, model_key=model_key,
+                        prompt_meta=prompt_meta, memory_eval_mode=memory_eval_mode,
+                    )
+                await tool_invocation_ledger.record_model_request(
+                    tool_context,
+                    invocation_id=model_invocation_id,
+                    request_snapshot=history,
+                    advertised_tools=prompt_meta.get("advertised_tools") or (),
+                    metadata={
+                        "prompt_source": str(
+                            prompt_meta.get("prompt_source") or "send"
+                        ),
+                        "temperature": temperature,
+                        "attempt": attempt + 1,
+                        "diagnostics": trace.snapshot(),
+                        "image_history": prompt_meta.get("image_history"),
+                    },
+                )
+                trace.start("model")
+                notice_token = defer_empty_notice.set(True)
+                try:
+                    retry_options = {"retry_prohibited": False} if attempt else {}
+                    provider_stream = stream_ai(history, model_key, usage_meta, temperature, **retry_options)
+                    chunks = provider_stream if memory_eval_mode else _stream_with_deadline(provider_stream, usage_meta)
+                    async for chunk in chunks:
+                        chunk = str(chunk)
+                        raw_model_output += chunk
+                        if chunk == "\x00RETRY\x00":
+                            # Native Gemini can retry inside stream_ai itself.
+                            full_text = ""
+                            buffering_structured_reply = None
+                            visible_filter = _UpdateModelStreamFilter()
+                            working_model_request_filter = _WorkingModelRequestStreamFilter()
+                            ring_filter = _RingTouchStreamFilter()
+                            recall_filter = _RecallIntentStreamFilter()
+                            web_search_filter = _WebSearchIntentStreamFilter()
+                            self_wake_filter = _SelfWakeStreamFilter()
+                            tide_filter = _TideIntentStreamFilter()
+                            vow_filter = _VowStreamFilter()
+                            control_marker_filter = ControlMarkerStreamFilter()
+                            await queue.put({"type": "retry", "attempt": 2})
                             continue
-                        buffering_structured_reply = looks_like_structured_reply(probe)
+                        full_text += chunk
+                        # Hold provider errors until the retry decision is final.
+                        if looks_like_model_error_text(full_text):
+                            continue
+                        if buffering_structured_reply is None:
+                            probe = full_text.lstrip()
+                            if not probe:
+                                continue
+                            buffering_structured_reply = looks_like_structured_reply(probe)
+                            if not buffering_structured_reply:
+                                visible = vow_filter.feed(
+                                    tide_filter.feed(
+                                        recall_filter.feed(
+                                            ring_filter.feed(
+                                                working_model_request_filter.feed(
+                                                    visible_filter.feed(full_text)
+                                                )
+                                            )
+                                        )
+                                    )
+                                )
+                                visible = self_wake_filter.feed(web_search_filter.feed(visible))
+                                visible = control_marker_filter.feed(visible)
+                                if visible:
+                                    await queue.put({"type": "chunk", "content": visible})
+                            continue
                         if not buffering_structured_reply:
                             visible = vow_filter.feed(
                                 tide_filter.feed(
                                     recall_filter.feed(
                                         ring_filter.feed(
                                             working_model_request_filter.feed(
-                                                visible_filter.feed(full_text)
+                                                visible_filter.feed(chunk)
                                             )
                                         )
                                     )
@@ -1327,125 +1299,158 @@ async def stream_chat_response(
                             visible = control_marker_filter.feed(visible)
                             if visible:
                                 await queue.put({"type": "chunk", "content": visible})
-                        continue
-                    if not buffering_structured_reply:
-                        visible = vow_filter.feed(
-                            tide_filter.feed(
-                                recall_filter.feed(
-                                    ring_filter.feed(
-                                        working_model_request_filter.feed(
-                                            visible_filter.feed(chunk)
-                                        )
-                                    )
+                except Exception as exc:
+                    has_error = True
+                    turn_outcome = "provider_failed"
+                    provider_error = str(exc)
+                    error_text = f"\n[请求出错: {str(exc)}]"
+                    full_text += error_text
+                finally:
+                    defer_empty_notice.reset(notice_token)
+                    trace.finish("model")
+                    model_elapsed_ms += trace.timings["model_ms"] or 0
+                    trace.timings["model_ms"] = model_elapsed_ms
+
+                full_text = strip_retry_marker(full_text)
+                stripped = full_text.strip()
+                if not has_error and stripped and looks_like_model_error_text(stripped):
+                    has_error = True
+                    turn_outcome = "provider_failed"
+                elif not has_error:
+                    turn_outcome = "succeeded" if stripped else "invalid_output"
+                if not buffering_structured_reply:
+                    visible_tail = vow_filter.feed(
+                        tide_filter.feed(
+                            recall_filter.feed(
+                                ring_filter.feed(
+                                    working_model_request_filter.feed(visible_filter.flush())
                                 )
                             )
                         )
-                        visible = self_wake_filter.feed(web_search_filter.feed(visible))
-                        visible = control_marker_filter.feed(visible)
-                        if visible:
-                            await queue.put({"type": "chunk", "content": visible})
-            except Exception as exc:
-                has_error = True
-                turn_outcome = "provider_failed"
-                provider_error = str(exc)
-                error_text = f"\n[请求出错: {str(exc)}]"
-                full_text += error_text
-                await queue.put({"type": "chunk", "content": error_text})
-            finally:
-                trace.finish("model")
-
-            full_text = strip_retry_marker(full_text)
-            stripped = full_text.strip()
-            if not has_error and stripped and looks_like_model_error_text(stripped):
-                has_error = True
-                turn_outcome = "provider_failed"
-            elif not has_error:
-                turn_outcome = "succeeded" if stripped else "invalid_output"
-            await tool_invocation_ledger.record_model_output(
-                tool_context,
-                invocation_id=model_invocation_id,
-                raw_output=raw_model_output,
-                outcome=("failed" if has_error else (
-                    "succeeded" if stripped else "unknown"
-                )),
-                error=provider_error,
-                metadata={"turn_outcome": turn_outcome, "diagnostics": trace.snapshot(usage_meta)},
-            )
-            if not buffering_structured_reply:
-                visible_tail = vow_filter.feed(
-                    tide_filter.feed(
-                        recall_filter.feed(
-                            ring_filter.feed(
-                                working_model_request_filter.feed(visible_filter.flush())
+                    )
+                    visible_tail += vow_filter.feed(
+                        tide_filter.feed(
+                            recall_filter.feed(
+                                ring_filter.feed(working_model_request_filter.flush())
                             )
                         )
                     )
-                )
-                visible_tail += vow_filter.feed(
-                    tide_filter.feed(
-                        recall_filter.feed(
-                            ring_filter.feed(working_model_request_filter.flush())
-                        )
+                    visible_tail += vow_filter.feed(
+                        tide_filter.feed(recall_filter.feed(ring_filter.flush()))
                     )
-                )
-                visible_tail += vow_filter.feed(
-                    tide_filter.feed(recall_filter.feed(ring_filter.flush()))
-                )
-                visible_tail += vow_filter.feed(tide_filter.feed(recall_filter.flush()))
-                visible_tail += vow_filter.feed(tide_filter.flush())
-                visible_tail += vow_filter.flush()
-                visible_tail = web_search_filter.feed(visible_tail) + web_search_filter.flush()
-                visible_tail = self_wake_filter.feed(visible_tail) + self_wake_filter.flush()
-                visible_tail = control_marker_filter.feed(visible_tail)
-                visible_tail += control_marker_filter.flush()
-                if visible_tail:
-                    await queue.put({"type": "chunk", "content": visible_tail})
+                    visible_tail += vow_filter.feed(tide_filter.feed(recall_filter.flush()))
+                    visible_tail += vow_filter.feed(tide_filter.flush())
+                    visible_tail += vow_filter.flush()
+                    visible_tail = web_search_filter.feed(visible_tail) + web_search_filter.flush()
+                    visible_tail = self_wake_filter.feed(visible_tail) + self_wake_filter.flush()
+                    visible_tail = control_marker_filter.feed(visible_tail)
+                    visible_tail += control_marker_filter.flush()
+                    if visible_tail:
+                        await queue.put({"type": "chunk", "content": visible_tail})
 
-            conv_id = daily_chat.resolve(conv_id)
-            tool_context = replace(tool_context, conv_id=conv_id)
-            try:
+                conv_id = daily_chat.resolve(conv_id)
+                tool_context = replace(tool_context, conv_id=conv_id)
+                accepted_raw_output = full_text
                 try:
-                    postprocessed = await _post_processor.process(
-                        full_text,
-                        conv_id=conv_id,
-                        memory_eval_mode=memory_eval_mode,
-                        enabled_commands=turn_profile.enabled_commands,
-                        tool_context=tool_context,
-                    )
-                except TypeError as exc:
-                    # Compatibility for injected pre-ledger/pre-profile
-                    # processors in tests and local extensions.
-                    if "tool_context" in str(exc):
-                        try:
-                            postprocessed = await _post_processor.process(
-                                full_text,
-                                conv_id=conv_id,
-                                memory_eval_mode=memory_eval_mode,
-                                enabled_commands=turn_profile.enabled_commands,
-                            )
-                        except TypeError as legacy_exc:
-                            if "enabled_commands" not in str(legacy_exc):
-                                raise
-                            postprocessed = await _post_processor.process(
-                                full_text,
-                                conv_id=conv_id,
-                                memory_eval_mode=memory_eval_mode,
-                            )
-                    elif "enabled_commands" in str(exc):
+                    try:
                         postprocessed = await _post_processor.process(
                             full_text,
                             conv_id=conv_id,
                             memory_eval_mode=memory_eval_mode,
+                            enabled_commands=turn_profile.enabled_commands,
+                            tool_context=tool_context,
                         )
-                    else:
-                        raise
-            except Exception:
-                if turn_outcome == "succeeded":
-                    turn_outcome = "postprocess_failed"
-                raise
-            full_text = postprocessed.content
-            if buffering_structured_reply and full_text:
-                await queue.put({"type": "chunk", "content": full_text})
+                    except TypeError as exc:
+                        # Compatibility for injected pre-ledger/pre-profile
+                        # processors in tests and local extensions.
+                        if "tool_context" in str(exc):
+                            try:
+                                postprocessed = await _post_processor.process(
+                                    full_text,
+                                    conv_id=conv_id,
+                                    memory_eval_mode=memory_eval_mode,
+                                    enabled_commands=turn_profile.enabled_commands,
+                                )
+                            except TypeError as legacy_exc:
+                                if "enabled_commands" not in str(legacy_exc):
+                                    raise
+                                postprocessed = await _post_processor.process(
+                                    full_text,
+                                    conv_id=conv_id,
+                                    memory_eval_mode=memory_eval_mode,
+                                )
+                        elif "enabled_commands" in str(exc):
+                            postprocessed = await _post_processor.process(
+                                full_text,
+                                conv_id=conv_id,
+                                memory_eval_mode=memory_eval_mode,
+                            )
+                        else:
+                            raise
+                except Exception:
+                    if turn_outcome == "succeeded":
+                        turn_outcome = "postprocess_failed"
+                    await tool_invocation_ledger.record_model_output(
+                        tool_context, invocation_id=model_invocation_id,
+                        raw_output=raw_model_output, outcome="failed",
+                        metadata={"turn_outcome": turn_outcome, "attempt": attempt + 1,
+                                  "diagnostics": trace.snapshot(usage_meta)},
+                    )
+                    raise
+                full_text = postprocessed.content
+                if buffering_structured_reply and full_text and not has_error:
+                    await queue.put({"type": "chunk", "content": full_text})
+
+                queried = False
+                if not has_error and not memory_eval_mode and not is_filtered(usage_meta):
+                    from .query_turn import continue_query
+                    postprocessed, queried = await continue_query(
+                        first=postprocessed, raw_output=accepted_raw_output, history=history,
+                        prompt_meta=prompt_meta, context=tool_context, model_key=model_key,
+                        temperature=temperature, usage=usage_meta, stream_model=stream_ai,
+                        bounded_stream=_stream_with_deadline, processor=_post_processor,
+                        queue=queue, enabled_commands=turn_profile.enabled_commands,
+                    )
+                    full_text = postprocessed.content
+                    if queried:
+                        model_elapsed_ms += (prompt_meta.get('same_turn_query') or {}).get('continuation_ms', 0)
+                        trace.timings['model_ms'] = model_elapsed_ms
+
+                timeout_retry = (usage_meta.get("stream_timeout_phase") == "first_text"
+                                 and not raw_model_output.strip())
+                should_retry = (attempt == 0 and not memory_eval_mode and not queried and
+                                (timeout_retry or (not provider_error and
+                                 retry_empty_reply(raw_model_output, postprocessed, usage_meta))))
+                if is_filtered(usage_meta):
+                    response_status = "filtered_empty" if has_error or not full_text.strip() else "filtered_partial"
+                    turn_outcome = response_status
+                    has_error = response_status == "filtered_empty"
+                    if has_error:
+                        full_text = "[错误] 回复被上游拦截（content_filter）"
+                    # A filtered attempt contributes visible text only, never actions.
+                    postprocessed = PostProcessResult(content=full_text)
+                elif not has_error and not has_delivery_candidate(postprocessed):
+                    has_error = True
+                    turn_outcome = "invalid_output"
+                    full_text = "[请求出错: 本轮没有可交付的文字或附件]"
+                    postprocessed = PostProcessResult(content=full_text)
+                await tool_invocation_ledger.record_model_output(
+                    tool_context, invocation_id=model_invocation_id,
+                    raw_output=raw_model_output,
+                    outcome=("failed" if has_error else "partial" if response_status else "succeeded"),
+                    error=provider_error,
+                    metadata={"turn_outcome": turn_outcome, "attempt": attempt + 1,
+                              "finish_reason": usage_meta.get("finish_reason"),
+                              "retrying": should_retry, "diagnostics": trace.snapshot(usage_meta)},
+                )
+                attempt_usages.append(dict(usage_meta))
+                if should_retry:
+                    await queue.put({"type": "retry", "attempt": 2, "reason": "timeout" if timeout_retry else "empty_reply"})
+                    continue
+                merge_retry_usage(usage_meta, attempt_usages)
+                if has_error:
+                    await queue.put({"type": "chunk", "content": full_text})
+                break
 
             music_execution = await execute_postprocessed_actions(
                 postprocessed,
@@ -1611,8 +1616,8 @@ async def stream_chat_response(
                                 )
                                 full_text = f"{base_text}\n\n{vow_note}".strip()
                                 await db2.execute(
-                                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json),
+                                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, response_status) VALUES (?,?,?,?,?,?,?)",
+                                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json, response_status),
                                 )
                                 await db2.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
                                 pending_tx = await pending_recall_service.apply_after_assistant_in_tx(
@@ -1623,9 +1628,7 @@ async def stream_chat_response(
                                     current_user_message_id=current_user_message_id or None,
                                     selected_pending_id=selected_pending_id or None,
                                     recall_intent=getattr(postprocessed, "recall_intent", ""),
-                                    allow_new_intent=(
-                                        prompt_source == "send" and not memory_eval_mode
-                                    ),
+                                    allow_new_intent=False,
                                     config_snapshot=memory_v3_snapshot,
                                 )
                                 web_tx = await web_search_service.finalize_dialogue_turn_in_tx(
@@ -1635,12 +1638,7 @@ async def stream_chat_response(
                                     assistant_message_id=ai_msg_id,
                                     intent_text=getattr(postprocessed, "web_search_intent", ""),
                                     origin_source="send",
-                                    allow_new_intent=(
-                                        prompt_source == "send"
-                                        and turn_profile.allows_marker("web_search_intent")
-                                        and bool(base_text.strip())
-                                        and not memory_eval_mode
-                                    ),
+                                    allow_new_intent=False,
                                     now=now2,
                                     replay_from_assistant_message_id=(
                                         str((prompt_meta.get("web_search") or {}).get("assistant_message_id") or "")
@@ -1681,8 +1679,8 @@ async def stream_chat_response(
                     async with get_db() as db2:
                         await db2.execute("BEGIN IMMEDIATE")
                         await db2.execute(
-                            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                            (ai_msg_id, conv_id, "assistant", full_text, now2, att_json),
+                            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, response_status) VALUES (?,?,?,?,?,?,?)",
+                            (ai_msg_id, conv_id, "assistant", full_text, now2, att_json, response_status),
                         )
                         await db2.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
                         pending_tx = await pending_recall_service.apply_after_assistant_in_tx(
@@ -1693,9 +1691,7 @@ async def stream_chat_response(
                             current_user_message_id=current_user_message_id or None,
                             selected_pending_id=selected_pending_id or None,
                             recall_intent=getattr(postprocessed, "recall_intent", ""),
-                            allow_new_intent=(
-                                prompt_source == "send" and not memory_eval_mode
-                            ),
+                            allow_new_intent=False,
                             config_snapshot=memory_v3_snapshot,
                         )
                         web_tx = await web_search_service.finalize_dialogue_turn_in_tx(
@@ -1705,12 +1701,7 @@ async def stream_chat_response(
                             assistant_message_id=ai_msg_id,
                             intent_text=getattr(postprocessed, "web_search_intent", ""),
                             origin_source="send",
-                            allow_new_intent=(
-                                prompt_source == "send"
-                                and turn_profile.allows_marker("web_search_intent")
-                                and bool(base_text.strip())
-                                and not memory_eval_mode
-                            ),
+                            allow_new_intent=False,
                             now=now2,
                             replay_from_assistant_message_id=(
                                 str((prompt_meta.get("web_search") or {}).get("assistant_message_id") or "")
@@ -1768,6 +1759,7 @@ async def stream_chat_response(
                 "content": full_text,
                 "created_at": now2,
                 "attachments": message_atts,
+                "response_status": response_status,
             }
             if has_error:
                 ai_msg.update(transient_error=True, persisted=False, error_text=full_text)
@@ -1775,7 +1767,8 @@ async def stream_chat_response(
                 trace.visible()
             if not invitation_only:
                 await manager.broadcast({"type": "msg_created", "data": ai_msg})
-            if sticker_delivery.attachments:
+            if sticker_delivery.attachments or response_status == "filtered_partial":
+                ai_msg["persisted"] = assistant_persisted
                 await queue.put({"type": "message", "message": ai_msg})
             if full_text or sticker_delivery.attachments:
                 await tool_invocation_ledger.record_visible_message(
@@ -1824,7 +1817,7 @@ async def stream_chat_response(
             toy_intents = _with_control_toy_fallback(
                 _toy_command_intents(postprocessed),
                 tool_context,
-                has_error=has_error,
+                has_error=has_error or bool(response_status),
             )
             toy_execution = await execute_postprocessed_actions(
                 postprocessed,
@@ -1832,7 +1825,7 @@ async def stream_chat_response(
                 context=tool_context,
                 only_capabilities=frozenset({"device.toy"}),
                 allow_toy_fallback=True,
-                has_error=has_error,
+                has_error=has_error or bool(response_status),
             )
             toy_results = toy_execution.results_for("device.toy")
             toy_data = _toy_payload_from_results(toy_results)
@@ -1908,17 +1901,6 @@ async def stream_chat_response(
                 await queue.put(screen_data)
                 await manager.broadcast({"type": screen_data.get("type", "screen_check_pending"), "data": screen_data})
 
-            mobile_execution = await execute_postprocessed_actions(
-                postprocessed,
-                profile=turn_profile,
-                context=tool_context,
-                only_capabilities=frozenset({"mobile.screen_check"}),
-            )
-            mobile_screen_results = mobile_execution.results_for("mobile.screen_check")
-            for ms_data in _executed_payloads(mobile_screen_results):
-                await queue.put(ms_data)
-                await manager.broadcast({"type": ms_data.get("type", "screen_check_pending"), "data": ms_data})
-
             if not has_error and assistant_persisted:
                 for image_result in pending_image_views:
                     from app.image_memory.view import followup as image_view_followup
@@ -1969,10 +1951,13 @@ async def stream_chat_response(
                 "debug_top6": prompt_meta["debug_top6"],
                 "memory_v2_recall": memory_v2_recall_debug,
                 "timeline": prompt_meta.get("timeline"),
+                "same_turn_query": prompt_meta.get("same_turn_query"),
                 "prompt_messages": prompt_meta["prompt_messages"],
                 "prompt_count": prompt_meta["prompt_count"],
                 "usage": usage_meta if usage_meta else None,
                 "has_error": has_error,
+                "response_status": response_status,
+                "auto_retry_count": len(attempt_usages) - 1,
                 "error_text": full_text if has_error else None,
                 "chat_mode": tool_context.mode,
                 "mode_source": tool_context.metadata.get("mode_source"),
@@ -2000,7 +1985,7 @@ async def stream_chat_response(
             turn_outcome = "cancelled"
             raise
         except Exception:
-            if turn_outcome in {"succeeded", "invalid_output"}:
+            if turn_outcome in {"succeeded", "invalid_output", "filtered_partial"}:
                 turn_outcome = "pipeline_failed"
             import traceback
 
@@ -2041,13 +2026,16 @@ async def stream_chat_response(
                         "memory_eval_mode": bool(memory_eval_mode),
                         "assistant_persisted": assistant_persisted,
                         "has_error": has_error,
+                        "response_status": response_status,
+                        "auto_retry_count": max(0, len(attempt_usages) - 1),
                         "diagnostics": trace.snapshot(usage_meta, finished=True),
                     },
                 )
             await queue.put({"type": "done"})
             current_turn.reset(trace_token)
 
-    create_tracked_task(_bg_generate(), name=f"chat_stream:{conv_id}:{ai_msg_id}")
+    from app.together.chat_gate import bind_generation
+    bind_generation(create_tracked_task(_bg_generate(), name=f"chat_stream:{conv_id}:{ai_msg_id}"))
 
     async def generate():
         while True:

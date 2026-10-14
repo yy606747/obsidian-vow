@@ -76,6 +76,8 @@ class ContextTriggerShadowRuleEngine:
         self._long_silence_sec = threshold
         self._last_interaction_at: dict[str, float] = {}
         self._screen_state: dict[str, str] = {}
+        self._screen_observed_at: dict[str, float] = {}
+        self._phone_ids: set[str] = set()
         self._lock = threading.RLock()
 
     def evaluate(self, record: EvidenceRecord) -> ShadowRuleEvaluation | None:
@@ -93,6 +95,36 @@ class ContextTriggerShadowRuleEngine:
         with self._lock:
             self._last_interaction_at.clear()
             self._screen_state.clear()
+            self._screen_observed_at.clear()
+            self._phone_ids.clear()
+
+    def _interaction_device_key(self, record: EvidenceRecord) -> str | None:
+        """Bridge the old anonymous phone stream only to a single known phone.
+
+        Tablets retain their own identity. Once two phones are known, anonymous
+        sensing can no longer supply either phone's interaction history.
+        """
+        reported = _device_key(record)
+        device_type = str(record.payload.get("device_type") or record.payload.get("device") or "")
+        if reported != "android-phone" and device_type == "phone":
+            if not self._phone_ids:
+                previous = self._last_interaction_at.pop("android-phone", None)
+                if previous is not None:
+                    self._last_interaction_at[reported] = max(
+                        previous, self._last_interaction_at.get(reported, previous)
+                    )
+                screen_at = self._screen_observed_at.pop("android-phone", None)
+                screen = self._screen_state.pop("android-phone", None)
+                if screen is not None and screen_at is not None and screen_at >= self._screen_observed_at.get(reported, -1):
+                    self._screen_observed_at[reported] = screen_at
+                    self._screen_state[reported] = screen
+            self._phone_ids.add(reported)
+        if reported == "android-phone":
+            if len(self._phone_ids) > 1:
+                return None
+            if self._phone_ids:
+                return next(iter(self._phone_ids))
+        return reported
 
     def _evaluate_location(
         self,
@@ -142,18 +174,34 @@ class ContextTriggerShadowRuleEngine:
         self,
         record: EvidenceRecord,
     ) -> ShadowRuleEvaluation | None:
-        device_key = _device_key(record)
+        if record.kind != "sensing.unlock" and _reported_screen_state(record) is None:
+            return None
+        device_key = self._interaction_device_key(record)
+        if device_key is None:
+            return ShadowRuleEvaluation(
+                rule=RULE_FIRST_INTERACTION_AFTER_LONG_SILENCE,
+                source_event_id=_source_event_id(record, event_name="ambiguous_device_identity"),
+                occurred_at=record.observed_at,
+                evaluation_status=EVALUATION_UNAVAILABLE,
+                evaluation_reason="ambiguous_device_identity",
+                features={"device_key": _device_key(record), "missing_reason": "ambiguous_device_identity"},
+            )
         interaction_kind = ""
 
         if record.kind == "sensing.unlock":
             interaction_kind = "unlock"
-            self._screen_state[device_key] = "on"
+            if record.observed_at >= self._screen_observed_at.get(device_key, -1):
+                self._screen_state[device_key] = "on"
+                self._screen_observed_at[device_key] = record.observed_at
         else:
             reported_state = _reported_screen_state(record)
             if reported_state is None:
                 return None
+            if record.observed_at < self._screen_observed_at.get(device_key, -1):
+                return None  # Delayed sensor ticks must not invent an off->on edge.
             prior_state = self._screen_state.get(device_key)
             self._screen_state[device_key] = reported_state
+            self._screen_observed_at[device_key] = record.observed_at
             if not (prior_state == "off" and reported_state == "on"):
                 return None
             interaction_kind = "screen_off_to_on"
@@ -163,6 +211,8 @@ class ContextTriggerShadowRuleEngine:
         features: dict[str, Any] = {
             "interaction_event": interaction_kind,
             "device_key": device_key,
+            "reported_device_key": _device_key(record),
+            "device_type": str(record.payload.get("device_type") or record.payload.get("device") or ""),
             "evidence_id": record.id,
             "shadow_threshold_sec": self._long_silence_sec,
         }

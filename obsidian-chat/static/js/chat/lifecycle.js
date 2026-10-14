@@ -115,6 +115,7 @@ function onChatForeground() {
 }
 
 function onChatBackground() {
+  window.SceneRuntime?.background?.();
   persistChatDraft();
   chatNativeForeground = false;
   window.ChatMarkdown?.suspend();

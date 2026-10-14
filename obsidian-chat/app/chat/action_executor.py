@@ -61,7 +61,6 @@ _EXECUTION_ORDER = (
     "location.poi_search",
     "activity.summary",
     "pc.screen_check",
-    "mobile.screen_check",
 )
 
 EXECUTOR_TOOL_CAPABILITIES = frozenset(
@@ -265,10 +264,6 @@ async def _standard_bindings(
         "pc.screen_check": (
             streaming._screen_check_intents(postprocessed),
             streaming._execute_screen_check,
-        ),
-        "mobile.screen_check": (
-            streaming._mobile_screen_check_intents(postprocessed),
-            streaming._execute_mobile_screen_check,
         ),
     }
     # Schedules are one group because their original executor preserved marker

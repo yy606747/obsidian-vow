@@ -72,6 +72,7 @@ body {
 .app-grid::-webkit-scrollbar { display: none; }
 
 .app-icon {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -195,8 +196,8 @@ body {
 #subPageOverlay.show { display: flex; }
 #subPageFrame { flex: 1; border: none; width: 100%; }
 </style>
-<link rel="stylesheet" href="/static/home.css?v=20260913-refined">
-<script src="/static/home.js?v=20260913-refined" defer></script>
+<link rel="stylesheet" href="/static/home.css?v=20260920-wall">
+<script src="/static/home.js?v=20260920-wall" defer></script>
 <link rel="stylesheet" href="/static/gold-dust.css?v=20260913-gold-dust">
 <script src="/static/gold-dust.js?v=20260913-gold-dust" defer></script>
 </head>
@@ -234,7 +235,8 @@ const APPS = [
   { id: 'worldbook',name: '世界书',   icon: '/public/optimized/function_0010_世界书.webp',     url: '/worldbook' },
   { id: 'activity', name: '活动日志', icon: '/public/optimized/function_0008_活动日志.webp',   url: '/activity-logs' },
   { id: 'moments',  name: '心语',     icon: '/public/optimized/function_0002_心语.webp',       url: '/heart-whispers',  dock: true },
-  { id: 'whisper',  name: '密语时刻', icon: '/public/optimized/function_0003_密语时刻.webp',   url: '/chat?whisper=1' },
+  { id: 'whisper',  name: '密语', icon: '/public/optimized/function_0003_密语时刻.webp',   url: '/chat?whisper=1' },
+  { id: 'scenes',   name: '小剧场',   icon: '/public/optimized/scene-theater-v1.png',         url: '/scenes',  dock: true },
   { id: 'alarm',    name: '闹钟',     icon: '/public/optimized/function_0004_闹钟日程.webp',   url: '/schedule' },
   { id: 'settings', name: '设置',     icon: '/public/optimized/function_0005_设置.webp',       url: '/settings' },
   { id: 'logs',     name: '监控日志', icon: '/public/optimized/function_0006_监控日志.webp',   url: '/monitor-logs' },
@@ -258,6 +260,7 @@ function appHTML(app) {
   const disabled = !app.url;
   return `
     <a class="app-icon ${disabled ? 'disabled' : ''}"
+       ${app.id === 'moments' ? 'data-heart-archive' : ''}
        ${app.url ? `onclick="openApp('${app.url}')"` : `onclick="showToast('${app.name} — 还在做哦！😏')"`}
        role="button" tabindex="0">
       <div class="icon-img"><img src="${app.icon}" alt="${app.name}" width="60" height="60" loading="eager" decoding="async" draggable="false"></div>
@@ -331,5 +334,7 @@ updateBackground();
 // home.js refreshes the clock only while this page is visible.
 </script>
 <script src="/static/web_push.js?v=20260905-brand"></script>
+<style>.heart-work-unread::after { content:''; position:absolute; width:7px; height:7px; border-radius:50%; background:var(--accent,#d4943a); right:4px; top:4px; }</style>
+<script src="/static/heart-works-indicator.js?v=20260928-heart-works"></script>
 </body>
 </html>

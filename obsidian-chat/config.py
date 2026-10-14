@@ -448,8 +448,9 @@ def _ensure_endpoints_and_slots(data: dict) -> bool:
     if "screen_capture_enabled" not in data:
         data["screen_capture_enabled"] = False
         changed = True
-    if "mobile_screen_capture_enabled" not in data:
-        data["mobile_screen_capture_enabled"] = False
+    # Phone/tablet one-shot checks were replaced by owner-initiated Together.
+    if "mobile_screen_capture_enabled" in data:
+        del data["mobile_screen_capture_enabled"]
         changed = True
     if "smart_ring_touch_enabled" not in data:
         data["smart_ring_touch_enabled"] = False
@@ -560,6 +561,8 @@ def resolve_core_model(model_key: str) -> dict | None:
                 "audio_input": um.get("audio_input") is True,
                 "image_input": um.get("image_input"),
                 "thinking_level": um.get("thinking_level"),
+                "enable_thinking": um.get("enable_thinking"),
+                "thinking_budget": um.get("thinking_budget"),
             }
     return None
 

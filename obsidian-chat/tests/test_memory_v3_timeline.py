@@ -369,7 +369,7 @@ def test_generation_prompt_contains_formatted_times_and_no_priority_ordering():
         ai_name="阿澈",
     )
 
-    assert timeline_mod.PROMPT_VERSION == "recent-timeline-v4"
+    assert timeline_mod.PROMPT_VERSION == "recent-timeline-v5"
     assert '"now": "2026-08-11 14:20"' in prompt
     assert '"window_start": "2026-08-09 00:00"' in prompt
     assert '"time": "08-10 23:50"' in prompt
@@ -414,7 +414,7 @@ def test_timeline_hours_48_does_not_clip_the_natural_three_day_window(
     assert [row["id"] for row in rows] == ["u-old"]
     assert meta["requested_window_start_ts"] == _ts(2026, 8, 9)
     assert meta["configured_hours_ignored_for_window"] == 48
-    assert captured_params == [(_ts(2026, 8, 9), now, timeline_mod.MAX_SOURCE_MESSAGES)]
+    assert captured_params == [(_ts(2026, 8, 9), now)]
 
 
 def test_refresh_persists_soft_drop_diagnostics_without_renderer_budget(
@@ -697,3 +697,78 @@ def test_disabling_timeline_cancels_a_sleeping_refresh():
         return task.cancelled()
 
     assert asyncio.run(scenario()) is True
+
+
+
+def test_busy_recent_day_does_not_evict_previous_days(tmp_path, monkeypatch):
+    path = tmp_path / "balanced.db"
+    asyncio.run(_create_db(path))
+    factory = _get_db_factory(path)
+    monkeypatch.setattr(timeline_mod, "get_db", factory)
+
+    async def scenario():
+        async with factory() as db:
+            await db.executemany("INSERT INTO messages VALUES (?,?,?,?,?)", [
+                (f"d{day}-{i}", "conv", "user" if i % 2 == 0 else "assistant", "模拟内容。" * 100,
+                 _ts(2026, 8, day, 1) + i * 60)
+                for day in (9, 10, 11) for i in range(300)
+            ])
+            await db.commit()
+        return await timeline_mod._recent_source_messages(now=_ts(2026, 8, 11, 23), hours=72)
+
+    rows, meta = asyncio.run(scenario())
+    assert len(rows) <= timeline_mod.MAX_SOURCE_MESSAGES
+    assert meta["source_prompt_chars_estimate"] <= timeline_mod.MAX_SOURCE_PROMPT_CHARS
+    assert meta["source_truncated"] is True
+    for day in (9, 10, 11):
+        assert f"d{day}-0" in {row["id"] for row in rows}
+        assert f"d{day}-299" in {row["id"] for row in rows}
+        coverage = meta["source_coverage"][f"2026-08-{day:02d}"]
+        assert 0 < coverage["selected"] < coverage["available"] == 300
+    assert [row["created_at"] for row in rows] == sorted(row["created_at"] for row in rows)
+
+
+def test_regeneration_invalidates_only_entries_with_changed_sources(tmp_path, monkeypatch):
+    path = tmp_path / "entry-drift.db"
+    asyncio.run(_create_db(path))
+    factory = _get_db_factory(path)
+    monkeypatch.setattr(timeline_mod, "get_db", factory)
+    monkeypatch.setattr(repositories, "get_db", factory)
+
+    async def scenario():
+        sources = _sources() + [dict(id="unrelated", conv_id="conv", role="assistant", content="随口一说", created_at=902)]
+        async with factory() as db:
+            await db.executemany("INSERT INTO messages VALUES (?,?,?,?,?)", [
+                (row["id"], row["conv_id"], row["role"], row["content"], row["created_at"]) for row in sources
+            ])
+            await db.commit()
+        service = timeline_mod.TimelineService(repositories.TimelineRepository())
+        service.start_background_refresh = lambda *_: None
+        await service.repository.append_active(
+            window_start_ts=800, window_end_ts=1000,
+            entries=[{"text":"复诊安排已经定下。", "source_message_ids":["u1"]},
+                     {"text":"出门前可以核对随身物品。", "source_message_ids":["a1"]}],
+            source_message_ids=[row["id"] for row in sources], source_hash=source_hash_for_messages(sources),
+            prompt_version=timeline_mod.PROMPT_VERSION,
+            metadata={"entry_source_hashes":{row["id"]:source_hash_for_messages([row]) for row in sources[:2]}},
+        )
+        async with factory() as db:
+            await db.execute("DELETE FROM messages WHERE id='unrelated'")
+            await db.commit()
+        intact = await service.prompt_context(visible_messages=[], config_snapshot=_config(), now=1001)
+        async with factory() as db:
+            await db.execute("UPDATE messages SET content='重新生成了' WHERE id='a1'")
+            await db.commit()
+        partial = await service.prompt_context(visible_messages=[], config_snapshot=_config(), now=1002)
+        async with factory() as db:
+            await db.execute("DELETE FROM messages WHERE id='u1'")
+            await db.commit()
+        empty = await service.prompt_context(visible_messages=[], config_snapshot=_config(), now=1003)
+        return intact, partial, empty
+
+    intact, partial, empty = asyncio.run(scenario())
+    assert intact["status"] == "injected" and len(intact["entries"]) == 2
+    assert partial["status"] == "injected" and len(partial["entries"]) == 1
+    assert partial["changed_entry_indices"] == [1]
+    assert "复诊安排" in partial["block"] and "随身物品" not in partial["block"]
+    assert empty["status"] == "source_changed" and not empty["block"]

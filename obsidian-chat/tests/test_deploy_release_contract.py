@@ -14,8 +14,10 @@ def test_deploy_script_is_valid_and_preserves_recovery_before_mutation():
     assert subprocess.run(["bash", "-n", str(script)], capture_output=True).returncode == 0
     text = script.read_text()
     calls = text[text.rindex("\nprepare_source_snapshot\n"):]
+    assert calls.index("maintain_server_images before") < calls.index("prepare_recovery_image")
     assert calls.index("prepare_recovery_image") < calls.index("rsync_apply") < calls.index("runtime_sync")
     assert calls.index("smoke_checks") < calls.index("commit_container")
+    assert calls.index("commit_container") < calls.index("maintain_server_images after")
     assert 'docker commit "$CONTAINER_NAME" "$RECOVERY_IMAGE_NAME"' in text
     assert 'docker image prune' not in text
     assert '"${LOCAL_RELEASE_DIR}/source/"' in text

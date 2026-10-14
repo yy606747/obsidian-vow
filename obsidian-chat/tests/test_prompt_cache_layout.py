@@ -109,8 +109,9 @@ def test_ability_builder_splits_stable_commands_from_runtime_context(monkeypatch
     stable, dynamic = prompt_builder.split_ability_prompt(block)
 
     assert "[REMEMBER:" in stable
-    assert "她此刻明确表达的边界与安全停止" in stable
-    assert "召回内容是帮助理解关系连续性的证据" in stable
+    assert "用户A当前明确的边界与安全停止" in stable
+    assert "区分用户A亲口说过的事实、过去的推断和可能过时的状态" in stable
+    assert "冲突时以当前消息为准" in stable
     assert "当前日程列表" not in stable
     assert "当前日程列表" in dynamic
 

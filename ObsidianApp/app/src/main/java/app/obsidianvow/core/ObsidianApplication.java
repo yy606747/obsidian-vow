@@ -7,5 +7,6 @@ public final class ObsidianApplication extends Application {
     public void onCreate() {
         super.onCreate();
         BrandCompatibility.migratePreferences(this);
+        registerActivityLifecycleCallbacks(new TogetherUi());
     }
 }

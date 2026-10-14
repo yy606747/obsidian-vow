@@ -8,7 +8,7 @@
     modal.id = "tideModal";
     modal.innerHTML = `
       <div class="modal whisper-modal">
-        <h3>🌊 潮汐控制</h3>
+        <h3>🌊 潮汐</h3>
         <div class="whisper-conn-bar">
           <div class="whisper-conn-left">
             <div class="whisper-dot off" id="tideDot"></div>

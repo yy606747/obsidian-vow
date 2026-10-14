@@ -135,11 +135,12 @@ def delete_request_files(request: ScreenCheckRequest) -> None:
             pass
 
 def cleanup_expired_files(now: float | None = None) -> int:
-    if not SCREEN_TMP_DIR.exists():
-        return 0
     reference = time.time() if now is None else float(now)
     deleted = 0
-    for path in SCREEN_TMP_DIR.glob("*.jpg"):
+    # Retain the existing 15-minute TTL for abandoned legacy mobile captures,
+    # without retaining their retired request service or touching unrelated uploads.
+    temporary = [*SCREEN_TMP_DIR.glob("*.jpg"), *(SCREENSHOTS_DIR / "mobile_tmp").glob("*.jpg")]
+    for path in temporary:
         try:
             if reference - path.stat().st_mtime > SCREENSHOT_TTL_SEC:
                 (UPLOADS_DIR / path.name).unlink(missing_ok=True)

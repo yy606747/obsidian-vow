@@ -25,6 +25,7 @@ import weakref
 from typing import Any, Literal
 
 import httpx
+from provider_http import provider_client
 
 from config import SETTINGS, get_key
 from provider_status import (
@@ -52,6 +53,7 @@ DEFAULT_EMBEDDING_CONFIG: dict[str, Any] = {
     "batch_size": 8,
     "request_interval_sec": 0.0,
     "timeout_sec": 60.0,
+    "query_timeout_sec": 4.0,
     "max_retries": 3,
     "initial_backoff_sec": 1.0,
     "max_backoff_sec": 30.0,
@@ -171,6 +173,7 @@ def load_embedding_config(overrides: dict | None = None) -> dict[str, Any]:
         "batch_size": batch_size,
         "request_interval_sec": request_interval,
         "timeout_sec": timeout,
+        "query_timeout_sec": _as_float(raw.get("query_timeout_sec"), 4.0, 0.1, 30.0),
         "max_retries": max_retries,
         "initial_backoff_sec": initial_backoff,
         "max_backoff_sec": max_backoff,
@@ -403,11 +406,12 @@ async def _request_batch_once(
         started_at = time.perf_counter()
         last_response = None
         try:
-            async with httpx.AsyncClient(
-                timeout=float(config["timeout_sec"]),
+            async with provider_client(
                 proxy=str(config.get("proxy_url") or "") or None,
             ) as client:
-                response = await client.post(url, json=body, headers=headers)
+                response = await client.post(
+                    url, json=body, headers=headers, timeout=float(config["timeout_sec"]),
+                )
             last_response = response
             if response.status_code == 200:
                 payload = response.json()

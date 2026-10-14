@@ -7,6 +7,10 @@ function fmtTime(ts) {
 // ── 渲染 ──
 function chatErrorDisplay(errorText) {
   const detail = String(errorText || "");
+  if (/timeout|超时/i.test(detail)) return '回复等得太久了，点“重试”再试一次。';
+  if (/content_filter/.test(detail)) {
+    return '回复被上游拦截，点“重试”再试一次。';
+  }
   if (/empty_response|本轮没有可交付的文字或附件/.test(detail)) {
     return '这次没有收到回复，点“重试”再试一次。';
   }
@@ -33,84 +37,129 @@ function renderConvList() {
   }).join("");
 }
 
-function renderMessages() {
+// Keep unchanged rows (including selection, audio, menus and streaming UI) alive.
+let renderedConversationId = null;
+const renderedMessageRows = new Map();
+
+function renderMessageRow(m) {
+  if (m.inherited) return '';
+  const isUser = m.role === "user";
+  const id = escHtml(m.id);
+  const createdAt = Number(m.created_at) || 0;
+  const isErrorMsg = typeof isErrorLikeAssistantMessage === "function"
+    ? isErrorLikeAssistantMessage(m)
+    : Boolean(m.transient_error);
+
+  // 隐藏监控相关消息（日志已独立存储）
+  if (m.role === "cam_user" || m.role === "cam_log" || m.role === "cam_trigger" || m.role === "trigger") {
+    return '';
+  }
+
+  // 系统提示消息（居中显示）
+  if (m.role === "system") {
+    return `<div class="msg-row system" id="m_${id}" data-created-at="${createdAt}"><div class="system-notice">${escHtml(m.content)}</div><button class="system-del" data-msg-action="delete" data-msg-id="${id}" title="删除">✕</button></div>`;
+  }
+
+  const roleLabel = isErrorMsg ? '请求错误' : (isUser ? (worldBook.user_name || '你') : (worldBook.ai_name || 'AI'));
+  const time = m.created_at ? fmtTime(m.created_at) : "";
+  const primaryAction = isUser
+    ? `<button data-msg-action="edit" data-msg-id="${id}">编辑</button>`
+    : `<button data-msg-action="regenerate" data-msg-id="${id}">${isErrorMsg ? '重试' : '重新生成'}</button>`;
+  const collectAction = (isUser || m.role === 'assistant') && m.attachments?.some(item => item?.type === 'sticker' && item.id)
+    ? `<button data-msg-action="collectSticker" data-msg-id="${id}">收藏表情</button>` : '';
+  const actionsHtml = `${primaryAction}${collectAction}<button data-msg-action="delete" data-msg-id="${id}">删除</button><button data-msg-action="copy" data-msg-id="${id}">复制</button>`;
+  const dotsLeft = isUser ? `<button class="msg-dots" data-msg-action="toggleMenu" data-msg-id="${id}">&#8943;</button>` : '';
+  const dotsRight = !isUser ? `<button class="msg-dots" data-msg-action="toggleMenu" data-msg-id="${id}">&#8943;</button>` : '';
+  const displayContent = isErrorMsg ? chatErrorDisplay(m.error_text || m.content)
+    : isUser ? String(m.content || "") : cleanAssistantContent(m.content);
+  const stickerOnly = !displayContent.trim() && m.attachments?.length && m.attachments.every(item => item?.type === 'sticker');
+  const layout = window.ChatMarkdown?.prepare(displayContent, { plain: isErrorMsg, msgId: m.id })
+    || { expanded: false, html: `<div class="msg-bubble">${formatMsg(displayContent)}</div>` };
+  const attachmentsHtml = stickerOnly
+    ? `<div class="msg-sticker-only">${renderAttachments(m.attachments)}</div>`
+    : renderAttachments(m.attachments);
+  const avatarSrc = avatarUrl(isUser ? 'user' : 'ai');
+  const avatarHtml = `<img class="msg-avatar" src="${avatarSrc}" alt="">`;
+  const ttsBtn = !isUser && !isErrorMsg && !stickerOnly ? `<button class="tts-replay-btn" data-msg-action="replayTTS" data-msg-id="${id}" title="重听语音">${window.VowUI?.icon('volume') || '♪'}</button>` : '';
+  return `
+  <div class="msg-row ${m.role}${isErrorMsg ? ' transient-error' : ''}${layout.expanded ? ' md-expanded' : ''}" id="m_${id}" data-created-at="${createdAt}">
+    <div class="msg-avatar-col">
+      ${m.role === 'assistant' ? `<span class="msg-avatar-frame">${avatarHtml}</span>` : avatarHtml}
+      ${ttsBtn}
+    </div>
+    <div class="msg-body">
+      <div class="msg-role-row">
+        ${dotsLeft}<span class="msg-role-name">${roleLabel}</span><span class="msg-time">${time}</span>${dotsRight}
+        <div class="msg-menu" id="menu_${m.id}">${actionsHtml}</div>
+      </div>
+      <div class="msg-content" data-msg-content>${displayContent.trim() ? layout.html : ''}</div>
+      <div class="msg-attachments">${attachmentsHtml}</div>
+      ${m.response_status === 'filtered_partial' ? `<div class="msg-response-notice" role="status">回复被上游截断，已保留收到的内容。<button data-msg-action="regenerate" data-msg-id="${id}">重新生成</button></div>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderMessages({ scroll = 'auto' } = {}) {
+  const el = $("messages");
+  const changedConversation = renderedConversationId !== currentConvId;
+  const follow = scroll === 'bottom' || (scroll === 'auto' && (changedConversation
+    || (el.scrollHeight - el.scrollTop - el.clientHeight < 80 && !document.querySelector('.heart-note-open'))));
+  const viewportTop = el.getBoundingClientRect().top;
+  const anchor = follow ? null : [...el.children].find(row => row.classList.contains('msg-row')
+    && row.getBoundingClientRect().bottom > viewportTop);
+  const anchorTop = anchor?.getBoundingClientRect().top;
   window.ChatMarkdown?.suspend();
   window.ChatHeartNotes?.beforeRender();
-  const el = $("messages");
-
-  if (!currentConvId) {
-    el.innerHTML = `<div class="empty-state"><div class="icon">${window.VowUI?.icon('chat') || '◇'}</div><div class="hint">选择对话或新建对话</div></div>`;
+  if (changedConversation) {
+    el.replaceChildren();
+    renderedMessageRows.clear();
+    renderedConversationId = currentConvId;
+  }
+  if (!currentConvId || currentMessages.length === 0) {
+    el.innerHTML = !currentConvId
+      ? `<div class="empty-state"><div class="icon">${window.VowUI?.icon('chat') || '◇'}</div><div class="hint">选择对话或新建对话</div></div>`
+      : '<div class="empty-state"><div class="icon">◇</div><div class="hint">暂无消息</div><div class="vow-empty-note">可以发送文字、语音或图片。</div></div>';
+    renderedMessageRows.clear();
     _restoreMoodGlows();
     window.ChatMarkdown?.didRender();
     window.ChatHeartNotes?.restore();
     return;
   }
-
-  if (currentMessages.length === 0) {
-    el.innerHTML = `<div class="empty-state"><div class="icon">${window.VowUI?.icon('chat') || '◇'}</div><div class="hint">暂无消息</div><div class="vow-empty-note">可以发送文字、语音或图片。</div></div>`;
-    _restoreMoodGlows();
-    window.ChatMarkdown?.didRender();
-    window.ChatHeartNotes?.restore();
-    return;
+  el.querySelector(':scope > .empty-state')?.remove();
+  let loadMore = el.querySelector(':scope > .load-more-bar');
+  if (hasMoreMessages && !loadMore) {
+    loadMore = document.createElement('button');
+    loadMore.className = 'load-more-bar';
+    loadMore.dataset.renderAction = 'loadOlderMessages';
+    loadMore.textContent = '⬆ 加载更早的消息';
+    el.prepend(loadMore);
+  } else if (!hasMoreMessages && loadMore) { loadMore.remove(); loadMore = null; }
+  const environment = JSON.stringify([worldBook.user_name, worldBook.ai_name, avatarUrl('user'), avatarUrl('ai')]);
+  const wanted = new Set();
+  let cursor = loadMore ? loadMore.nextElementSibling : el.firstElementChild;
+  for (const message of currentMessages) {
+    if (message.inherited || ['cam_user', 'cam_log', 'cam_trigger', 'trigger'].includes(message.role)) continue;
+    wanted.add(message.id);
+    const signature = environment + JSON.stringify(message);
+    const previous = renderedMessageRows.get(message.id);
+    let node = previous?.node;
+    if (!node?.isConnected || previous.signature !== signature) {
+      const template = document.createElement('template');
+      template.innerHTML = renderMessageRow(message);
+      const replacement = template.content.firstElementChild;
+      if (node?.parentElement === el) {
+        if (cursor === node) cursor = replacement;
+        node.replaceWith(replacement);
+      }
+      node = replacement;
+      renderedMessageRows.set(message.id, { signature, node });
+    }
+    if (node !== cursor) el.insertBefore(node, cursor);
+    cursor = node.nextElementSibling;
   }
-
-  const loadMoreBtn = hasMoreMessages ? '<button class="load-more-bar" data-render-action="loadOlderMessages">⬆ 加载更早的消息</button>' : '';
-  el.innerHTML = loadMoreBtn + currentMessages.map(m => {
-    if (m.inherited) return '';
-    const isUser = m.role === "user";
-    const id = escHtml(m.id);
-    const createdAt = Number(m.created_at) || 0;
-    const isErrorMsg = typeof isErrorLikeAssistantMessage === "function"
-      ? isErrorLikeAssistantMessage(m)
-      : Boolean(m.transient_error);
-
-    // 隐藏监控相关消息（日志已独立存储）
-    if (m.role === "cam_user" || m.role === "cam_log" || m.role === "cam_trigger" || m.role === "trigger") {
-      return '';
-    }
-
-    // 系统提示消息（居中显示）
-    if (m.role === "system") {
-      return `<div class="msg-row system" id="m_${id}" data-created-at="${createdAt}"><div class="system-notice">${escHtml(m.content)}</div><button class="system-del" data-msg-action="delete" data-msg-id="${id}" title="删除">✕</button></div>`;
-    }
-
-    const roleLabel = isErrorMsg ? '请求错误' : (isUser ? (worldBook.user_name || '你') : (worldBook.ai_name || 'AI'));
-    const time = m.created_at ? fmtTime(m.created_at) : "";
-    const primaryAction = isUser
-      ? `<button data-msg-action="edit" data-msg-id="${id}">编辑</button>`
-      : `<button data-msg-action="regenerate" data-msg-id="${id}">${isErrorMsg ? '重试' : '重新生成'}</button>`;
-    const collectAction = (isUser || m.role === 'assistant') && m.attachments?.some(item => item?.type === 'sticker' && item.id)
-      ? `<button data-msg-action="collectSticker" data-msg-id="${id}">收藏表情</button>` : '';
-    const actionsHtml = `${primaryAction}${collectAction}<button data-msg-action="delete" data-msg-id="${id}">删除</button><button data-msg-action="copy" data-msg-id="${id}">复制</button>`;
-    const dotsLeft = isUser ? `<button class="msg-dots" data-msg-action="toggleMenu" data-msg-id="${id}">&#8943;</button>` : '';
-    const dotsRight = !isUser ? `<button class="msg-dots" data-msg-action="toggleMenu" data-msg-id="${id}">&#8943;</button>` : '';
-    const displayContent = isErrorMsg ? chatErrorDisplay(m.error_text || m.content)
-      : isUser ? String(m.content || "") : cleanAssistantContent(m.content);
-    const stickerOnly = !displayContent.trim() && m.attachments?.length && m.attachments.every(item => item?.type === 'sticker');
-    const layout = window.ChatMarkdown?.prepare(displayContent, { plain: isErrorMsg, msgId: m.id })
-      || { expanded: false, html: `<div class="msg-bubble">${formatMsg(displayContent)}</div>` };
-    const attachmentsHtml = stickerOnly
-      ? `<div class="msg-sticker-only">${renderAttachments(m.attachments)}</div>`
-      : renderAttachments(m.attachments);
-    const avatarSrc = avatarUrl(isUser ? 'user' : 'ai');
-    const avatarHtml = `<img class="msg-avatar" src="${avatarSrc}" alt="">`;
-    const ttsBtn = !isUser && !isErrorMsg && !stickerOnly ? `<button class="tts-replay-btn" data-msg-action="replayTTS" data-msg-id="${id}" title="重听语音">${window.VowUI?.icon('volume') || '♪'}</button>` : '';
-    return `
-    <div class="msg-row ${m.role}${isErrorMsg ? ' transient-error' : ''}${layout.expanded ? ' md-expanded' : ''}" id="m_${id}" data-created-at="${createdAt}">
-      <div class="msg-avatar-col">
-        ${m.role === 'assistant' ? `<span class="msg-avatar-frame">${avatarHtml}</span>` : avatarHtml}
-        ${ttsBtn}
-      </div>
-      <div class="msg-body">
-        <div class="msg-role-row">
-          ${dotsLeft}<span class="msg-role-name">${roleLabel}</span><span class="msg-time">${time}</span>${dotsRight}
-          <div class="msg-menu" id="menu_${m.id}">${actionsHtml}</div>
-        </div>
-        <div class="msg-content" data-msg-content>${displayContent.trim() ? layout.html : ''}</div>
-        <div class="msg-attachments">${attachmentsHtml}</div>
-      </div>
-    </div>`;
-  }).join("");
+  for (const [id, row] of renderedMessageRows) {
+    if (!wanted.has(id)) { row.node.remove(); renderedMessageRows.delete(id); }
+  }
   // 恢复音乐卡片
   for (const mid of Object.keys(msgMusicCards)) {
     renderMusicCards(mid);
@@ -169,7 +218,8 @@ function renderMessages() {
       (msgBody || row).appendChild(indicator);
     }
   }
-  scrollBottom();
+  if (follow) scrollBottom({ force: true });
+  else if (anchor?.isConnected) el.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
   // History, WebSocket updates and stream completion share the same mood state.
   _restoreMoodGlows();
   window.ChatMarkdown?.didRender();
@@ -298,9 +348,15 @@ ChatApp.registerModule("render", {
   bindEvents: bindRenderEvents,
 });
 
-function scrollBottom() {
+function scrollBottom({ force = false } = {}) {
   const el = $("messages");
-  requestAnimationFrame(() => el.scrollTop = el.scrollHeight);
+  if (!force && (el.scrollHeight - el.scrollTop - el.clientHeight >= 80
+      || document.querySelector('.heart-note-open'))) return;
+  const top = el.scrollTop;
+  requestAnimationFrame(() => {
+    // Do not override a swipe that happened while this frame was pending.
+    if (el.scrollTop === top) el.scrollTop = el.scrollHeight;
+  });
 }
 
 function renderDebugBar(msgId) {

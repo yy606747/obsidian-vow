@@ -66,9 +66,11 @@ function connectWS() {
     recoverInterruptedStream();
     if (chatInitialized && isChatForeground()) refreshChat();
     if (window.ControlRuntime) ControlRuntime.recover().catch(() => {});
+    window.SceneRuntime?.connectionChanged(true);
   };
   socket.onclose = () => {
     if (ws !== socket) return;
+    window.SceneRuntime?.connectionChanged(false);
     clearChatSocketTimers();
     wsReconnectTimer = setTimeout(() => {
       wsReconnectTimer = null;
@@ -118,6 +120,11 @@ function _forwardWsToSubPage(msg) {
 
 function handleSync(msg) {
   const { type, data } = msg;
+  if (type === 'scene_state' || type === 'scene_playback') {
+    window.SceneRuntime?.handleEvent(msg);
+    _forwardWsToSubPage(msg);
+    return;
+  }
 
   if (chatRefreshEvents && ['msg_created', 'msg_updated', 'msg_deleted'].includes(type) && data) {
     chatRefreshEvents.push({ type, data: { ...data } });

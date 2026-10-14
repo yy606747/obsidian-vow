@@ -468,6 +468,10 @@
   }
 
   async function start(kind, options) {
+    if (global.SceneRuntime?.isActive()) {
+      global.showToast?.('请先结束 AI 主导场景，再切换设备控制模式。');
+      return null;
+    }
     options = options || {};
     const convId = _convId(options.convId);
     if (!convId) return null;

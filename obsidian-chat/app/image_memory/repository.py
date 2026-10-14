@@ -92,29 +92,35 @@ async def reconcile_in_tx(db, conv_id: str) -> None:
 
 
 async def recall_rows(db, conv_ids: list[str] | None = None) -> list[dict]:
+    return [row async for row in iter_recall_rows(db, conv_ids)]
+
+
+async def iter_recall_rows(db, conv_ids: list[str] | None = None, *, recent_after: float | None = None):
     if not enabled():
-        return []
+        return
     from app.memory_v2.embedding import embedding_signature
 
     extra = ""
     params = []
     if conv_ids is not None:
         if not conv_ids:
-            return []
+            return
         extra = " AND o.conv_id IN (" + ",".join("?" for _ in conv_ids) + ")"
-        params = conv_ids
+        params = list(conv_ids)
+    if recent_after is not None:
+        extra += " AND o.source_time>=?"
+        params.append(recent_after)
     cur = await db.execute(
         "SELECT o.*, m.attachments AS source_attachments FROM image_observations o "
         "JOIN messages m ON m.id=o.message_id AND m.conv_id=o.conv_id AND m.role='user' "
         "WHERE o.status='ready'" + extra, params,
     )
-    result = []
     signature = embedding_signature()
-    for raw in await cur.fetchall():
+    async for raw in cur:
         row = dict(raw)
         if row["attachment_url"] not in images(row["source_attachments"]):
             continue
-        result.append({
+        yield {
             "id": row["id"], "conv_id": row["conv_id"],
             "source_type": "image", "attachment_url": row["attachment_url"],
             "message_ids_json": json.dumps([row["message_id"]]),
@@ -125,8 +131,7 @@ async def recall_rows(db, conv_ids: list[str] | None = None) -> list[dict]:
                 "source_start_ts": row["source_time"], "source_end_ts": row["source_time"],
                 "source_message_ids": [row["message_id"]],
             }),
-        })
-    return result
+        }
 
 
 async def valid_items(items: list[dict]) -> list[dict]:

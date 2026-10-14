@@ -104,7 +104,6 @@ public class ObsidianPushService extends Service {
     private static final String PREF_NATIVE_ALARM_SET_PREFIX = "native_alarm_set_";
     private static final long NATIVE_ALARM_MAX_LEAD_SECONDS = 24 * 60 * 60;
     private static final long ALARM_NOTIFICATION_TIMEOUT_MS = 5 * 60_000L;
-    private static final long SCREEN_REQUEST_NOTIFICATION_TIMEOUT_MS = 2 * 60_000L;
 
     private static final long HEARTBEAT_MS  = 60_000;  // 60s 应用层心跳
     private static final long HEALTH_TIMEOUT = 180_000; // 180s 无消息 → 重连
@@ -171,13 +170,6 @@ public class ObsidianPushService extends Service {
     private BroadcastReceiver screenReceiver;
 
     // ── 体感 / 体征上报 ──
-    // ── 移动端截图轮询 ──────────────────────────────────────
-    private static final int SCREEN_POLL_TIMEOUT_SEC = 30;     // 与后端 wait_pending 上限一致
-    private static final int NOTIF_SCREEN_REQ = 2000;
-    private static final long SCREEN_POLL_ERROR_BACKOFF_MS = 10_000;
-    private static final long SCREEN_POLL_PENDING_THROTTLE_MS = 5_000;  // pending 未处理时节流
-    private Thread screenPollThread;
-
     private static final long SENSING_INTERVAL = 5 * 60_000L;  // 5 分钟采样一次（原 15 分钟太稀疏，哨兵判断信号不足）
     private Thread sensingThread;
     private SensingReporter sensingReporter;
@@ -294,7 +286,6 @@ public class ObsidianPushService extends Service {
         startLocationThread();
         startActivityThread();
         startSensingThread();
-        startScreenPollThread();
         if (lookAtMe == null) lookAtMe = new LookAtMeController(this, client);
         return START_STICKY;
     }
@@ -312,7 +303,6 @@ public class ObsidianPushService extends Service {
         if (locationThread != null) locationThread.interrupt();
         if (activityThread != null) activityThread.interrupt();
         if (sensingThread != null) sensingThread.interrupt();
-        if (screenPollThread != null) screenPollThread.interrupt();
         unregisterScreenReceiver();
         if (webSocket != null) try { webSocket.cancel(); } catch (Exception ignored) {}
         if (client != null) client.dispatcher().executorService().shutdown();
@@ -1760,7 +1750,6 @@ public class ObsidianPushService extends Service {
             caps.put("activity.report");
             caps.put("sensing.report");
             caps.put("location.report");
-            caps.put("screen.capture");
             body.put("capabilities", caps);
             JSONObject meta = new JSONObject();
             meta.put("platform", DeviceIdentity.PLATFORM);
@@ -1779,105 +1768,6 @@ public class ObsidianPushService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "📱 device state report failed: " + e.getMessage());
         }
-    }
-
-    // ══════════════════════════════════════════════════════════
-    //  移动端截图轮询 — 长轮询 pending，收到请求弹确认页
-    // ══════════════════════════════════════════════════════════
-
-    private synchronized void startScreenPollThread() {
-        if (screenPollThread != null && screenPollThread.isAlive()) return;
-
-        screenPollThread = new Thread(() -> {
-            Log.i(TAG, "📸 Screen poll thread started");
-            try { Thread.sleep(15000); } catch (InterruptedException e) { return; }
-
-            // 复用带 Bearer 拦截器的共享 client（readTimeout=0，适合长轮询）。
-            // 本地去重：同一 pending 只弹一次，避免反复 startActivity/通知。
-            String lastSurfaced = null;
-            while (shouldRun) {
-                String httpBase = httpBaseFromWs();
-                if (httpBase == null) {
-                    if (!sleepOrBreak(SCREEN_POLL_ERROR_BACKOFF_MS)) break;
-                    continue;
-                }
-                try {
-                    String url = httpBase + "/api/mobile-screen/pending?device_id="
-                            + DeviceIdentity.id(this) + "&timeout=" + SCREEN_POLL_TIMEOUT_SEC;
-                    Request req = new Request.Builder().url(url).get().build();
-                    try (Response resp = client.newCall(req).execute()) {
-                        int code = resp.code();
-                        if (code == 200 && resp.body() != null) {
-                            JSONObject obj = new JSONObject(resp.body().string());
-                            String rid = obj.optString("request_id", "");
-                            if (!rid.isEmpty() && !rid.equals(lastSurfaced)) {
-                                lastSurfaced = rid;
-                                launchScreenConsent(httpBase, obj);
-                            }
-                            // pending 仍在时服务端会立刻返回，节流避免空转打后端。
-                            if (!sleepOrBreak(SCREEN_POLL_PENDING_THROTTLE_MS)) break;
-                        } else if (code == 204) {
-                            lastSurfaced = null;  // 无 pending（已处理/超时），重置去重
-                        } else {
-                            Log.w(TAG, "📸 poll http " + code);
-                            if (!sleepOrBreak(SCREEN_POLL_ERROR_BACKOFF_MS)) break;
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.e(TAG, "📸 screen poll error: " + e.getMessage());
-                    if (!sleepOrBreak(SCREEN_POLL_ERROR_BACKOFF_MS)) break;
-                }
-            }
-            Log.i(TAG, "📸 Screen poll thread exiting");
-        }, "ObsidianScreenPoll");
-        screenPollThread.setDaemon(false);
-        screenPollThread.start();
-    }
-
-    /** sleep 指定毫秒；被中断返回 false 以便跳出轮询循环。 */
-    private boolean sleepOrBreak(long ms) {
-        try { Thread.sleep(ms); return true; }
-        catch (InterruptedException e) { return false; }
-    }
-
-    /** 收到截图请求：弹高优先级通知拉起确认页。 */
-    private void launchScreenConsent(String httpBase, JSONObject req) {
-        String requestId = req.optString("request_id", "");
-        if (requestId.isEmpty()) return;
-        String reason = req.optString("reason", "想确认你当前在做什么");
-        String aiName = req.optString("ai_name", "AI");
-
-        Intent intent = new Intent(this, ScreenCaptureRequestActivity.class);
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        intent.putExtra(ScreenCaptureRequestActivity.EXTRA_REQUEST_ID, requestId);
-        intent.putExtra(ScreenCaptureRequestActivity.EXTRA_REASON, reason);
-        intent.putExtra(ScreenCaptureRequestActivity.EXTRA_AI_NAME, aiName);
-        intent.putExtra(ScreenCaptureRequestActivity.EXTRA_HTTP_BASE, httpBase);
-        intent.putExtra(ScreenCaptureRequestActivity.EXTRA_TOKEN, authToken);
-
-        PendingIntent pi = PendingIntent.getActivity(this, requestId.hashCode(), intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
-        // 应用在前台时直接拉起；否则靠通知触发。
-        try {
-            startActivity(intent);
-        } catch (Exception e) {
-            Log.d(TAG, "📸 direct startActivity blocked, relying on notification");
-        }
-
-        Notification n = new NotificationCompat.Builder(this, CH_ALARM)
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle(aiName + " 想看一下这台设备的屏幕")
-                .setContentText("原因：" + reason)
-                .setStyle(new NotificationCompat.BigTextStyle().bigText("原因：" + reason))
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setContentIntent(pi)
-                .setTimeoutAfter(SCREEN_REQUEST_NOTIFICATION_TIMEOUT_MS)
-                .setAutoCancel(true)
-                .build();
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm != null) nm.notify(NOTIF_SCREEN_REQ, n);
     }
 
     // ══════════════════════════════════════════════════════════

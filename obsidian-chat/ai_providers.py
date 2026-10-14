@@ -11,7 +11,12 @@ import json, base64, mimetypes, traceback, asyncio, re, io, os, time
 import hashlib
 from pathlib import Path
 
+from model_thinking import (
+    THINKING_KEYS, normalize_thinking_level as _normalize_thinking_level,
+    openai_thinking_fields, gemini_thinking_options,
+)
 import httpx
+from provider_http import provider_client
 from prompt_cache import (
     CACHE_BOUNDARY_KEY,
     CACHE_SESSION_KEY,
@@ -39,6 +44,9 @@ from app.chat.audio_input import (
 
 
 # ── 日志脱敏 ──────────────────────────────────────
+from app.provider_privacy import private_provider_scope
+from app.chat.response_status import defer_empty_notice
+
 # Gemini URL 会把 key 拼在 query string，httpx 异常/traceback 会带上整条 URL
 # 凡是向外打印的字符串，过一下 _redact 再输出，避免 key 进日志。
 _REDACT_PATTERNS = [
@@ -49,6 +57,8 @@ _REDACT_PATTERNS = [
 ]
 
 def _redact(text: str) -> str:
+    if private_provider_scope.get():
+        return "[private provider detail]"
     s = str(text)
     for pat, repl in _REDACT_PATTERNS:
         s = pat.sub(repl, s)
@@ -101,6 +111,8 @@ def _resolve_proxy(provider_type: str, endpoint: dict | None,
         env_raw = _env("OBSIDIAN_GEMINI_PROXY", "OBSIDIAN_PROVIDER_PROXY")
         if env_raw:
             return _normalize_proxy_value(env_raw)
+        if preset_gemini:
+            return None
         return None
     env_raw = _env("OBSIDIAN_OPENAI_PROXY", "OBSIDIAN_PROVIDER_PROXY")
     if env_raw:
@@ -114,7 +126,7 @@ def _provider_context(*, scope: str, provider_type: str, label: str, model: str,
     proxy_url = _resolve_proxy(provider_type, endpoint, preset_gemini=preset_gemini)
     return {
         "request_id": new_request_id(),
-        "scope": scope,
+        "scope": private_provider_scope.get() or scope,
         "provider_type": provider_type,
         "provider_label": label,
         "endpoint_id": (endpoint or {}).get("id") or "",
@@ -147,7 +159,7 @@ def _finish_provider_call(meta: dict | None, ctx: dict, *, ok: bool,
         "error_type": error_type or ("ok" if ok else "unknown"),
         "retryable": retryable,
         "elapsed_ms": int((time.monotonic() - start) * 1000),
-        "message": _redact(message),
+        "message": "" if private_provider_scope.get() else _redact(message),
     })
     usage_event_meta = provider_event_usage_meta(meta)
     if usage_event_meta:
@@ -191,7 +203,10 @@ def _openai_text_part(text: str, marker_style: str = "") -> dict:
 
 
 def _attachment_bytes(attachment, path: Path) -> bytes:
-    data = path.read_bytes()
+    from app.ephemeral_media import ephemeral_image_bytes
+    data = ephemeral_image_bytes(attachment)
+    if data is None:
+        data = path.read_bytes()
     expected = attachment.get("expected_sha256") if isinstance(attachment, dict) else None
     if expected and hashlib.sha256(data).hexdigest() != expected:
         raise ValueError("图片来源在请求编码前发生变化")
@@ -199,7 +214,9 @@ def _attachment_bytes(attachment, path: Path) -> bytes:
 
 
 def _required_attachment(attachment) -> bool:
-    return isinstance(attachment, dict) and bool(attachment.get("expected_sha256"))
+    from app.ephemeral_media import ephemeral_image_bytes
+    return (ephemeral_image_bytes(attachment) is not None
+            or isinstance(attachment, dict) and bool(attachment.get("expected_sha256")))
 
 
 def _attachment_payloads(attachment, path: Path, mime: str) -> list[tuple[str, str]]:
@@ -344,7 +361,8 @@ async def call_aipro(messages, model, meta=None, temperature=None, *, include_au
 async def _stream_openai(*, base_url, api_key, messages, model,
                          meta=None, temperature=None, label="OpenAI",
                          endpoint: dict | None = None, scope: str = "core",
-                         include_audio: bool = False, thinking_level: str | None = None):
+                         include_audio: bool = False, thinking_level: str | None = None,
+                         enable_thinking: bool | None = None, thinking_budget: int | None = None):
     meta = reset_usage_meta(meta)
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -363,8 +381,11 @@ async def _stream_openai(*, base_url, api_key, messages, model,
     payload = {"model": model, "messages": api_messages, "stream": True,
                "stream_options": {"include_usage": True}}
     payload.update(policy["request_fields"])
-    if thinking_level is not None:
-        payload["reasoning_effort"] = _normalize_thinking_level(thinking_level).lower()
+    payload.update(openai_thinking_fields(
+        {**(endpoint or {}), "base_url": base_url}, model,
+        enable_thinking=enable_thinking, thinking_level=thinking_level,
+        thinking_budget=thinking_budget,
+    ))
     if temperature is not None:
         payload["temperature"] = temperature
     ctx = _provider_context(
@@ -375,10 +396,11 @@ async def _stream_openai(*, base_url, api_key, messages, model,
     has_text = False
     frames = parse_errors = 0
     try:
-        async with httpx.AsyncClient(
-            timeout=ctx["timeout_sec"], proxy=ctx["proxy_url"] or None
+        async with provider_client(
+            proxy=ctx["proxy_url"] or None
         ) as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as resp:
+            async with client.stream("POST", url, json=payload, headers=headers,
+                                     timeout=ctx["timeout_sec"]) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()
                     try:
@@ -426,18 +448,23 @@ async def _stream_openai(*, base_url, api_key, messages, model,
                         if isinstance(content, str) and content:
                             has_text = has_text or bool(content.strip())
                             yield content
-        if not has_text:
-            reason = (f"流已结束但未收到正文；finish_reason={meta.get('finish_reason') or 'unknown'}；"
+        filtered = str(meta.get("finish_reason") or "").lower() == "content_filter"
+        if filtered or not has_text:
+            error_type = "content_filter" if filtered else "empty_response"
+            detail = "回复被上游过滤截断" if has_text else "流已结束但未收到正文"
+            reason = (f"{detail}；finish_reason={meta.get('finish_reason') or 'unknown'}；"
                       f"frames={frames}；parse_errors={parse_errors}")
             event = _finish_provider_call(
                 meta, ctx, ok=False, start=start, http_status=200,
-                error_type="empty_response", retryable=True, message=reason,
+                error_type=error_type, retryable=not has_text, message=reason,
             )
-            await _broadcast_endpoint_error(
-                scope, ctx["endpoint_id"], reason, status=200, error_type="empty_response",
-                elapsed_ms=event["elapsed_ms"], request_id=event["request_id"],
-            )
-            yield _provider_error_text(label, 200, "empty_response", event["elapsed_ms"], reason, event["request_id"])
+            if not has_text:
+                if not defer_empty_notice.get():
+                    await _broadcast_endpoint_error(
+                        scope, ctx["endpoint_id"], reason, status=200, error_type=error_type,
+                        elapsed_ms=event["elapsed_ms"], request_id=event["request_id"],
+                    )
+                yield _provider_error_text(label, 200, error_type, event["elapsed_ms"], reason, event["request_id"])
             return
         _finish_provider_call(meta, ctx, ok=True, start=start, http_status=200)
     except Exception as e:
@@ -475,19 +502,13 @@ def _vertex_headers(api_key: str) -> dict:
     return headers
 
 
-def _normalize_thinking_level(value: str) -> str:
-    level = str(value).strip().upper()
-    if level not in {"LOW", "MEDIUM", "HIGH"}:
-        raise ValueError("思考强度只支持 LOW、MEDIUM、HIGH")
-    return level
-
-
 def _gemini_stream_payload(
     messages: list,
     temperature: float | None = None,
     *,
     include_audio: bool = False,
     thinking_level: str | None = None,
+    thinking_budget: int | None = None,
 ) -> dict:
     payload = {
         "contents": build_gemini_contents(messages, include_audio=include_audio),
@@ -495,9 +516,15 @@ def _gemini_stream_payload(
     }
     if temperature is not None:
         payload["generationConfig"] = {"temperature": temperature}
+    if thinking_level is not None and thinking_budget is not None:
+        raise ValueError("思考强度和思考预算不能同时指定")
     if thinking_level is not None:
         payload.setdefault("generationConfig", {})["thinkingConfig"] = {
             "thinkingLevel": _normalize_thinking_level(thinking_level),
+        }
+    elif thinking_budget is not None:
+        payload.setdefault("generationConfig", {})["thinkingConfig"] = {
+            "thinkingBudget": int(thinking_budget),
         }
     return payload
 
@@ -564,7 +591,8 @@ async def _stream_gemini(*, base_url, api_key, messages, model,
                          meta=None, temperature=None, label="Gemini",
                          endpoint: dict | None = None, scope: str = "core",
                          preset_gemini: bool = False,
-                         include_audio: bool = False, thinking_level: str | None = None):
+                         include_audio: bool = False, thinking_level: str | None = None,
+                         enable_thinking: bool | None = None, thinking_budget: int | None = None):
     meta = reset_usage_meta(meta)
     url = f"{base_url.rstrip('/')}/models/{model}:streamGenerateContent?alt=sse&key={api_key}"
     policy = cache_request_policy(
@@ -578,7 +606,8 @@ async def _stream_gemini(*, base_url, api_key, messages, model,
         messages,
         temperature,
         include_audio=include_audio,
-        thinking_level=thinking_level,
+        **gemini_thinking_options(enable_thinking=enable_thinking,
+                                 thinking_level=thinking_level, thinking_budget=thinking_budget),
     )
     ctx = _provider_context(
         scope=scope, provider_type="gemini", label=label, model=model,
@@ -586,10 +615,11 @@ async def _stream_gemini(*, base_url, api_key, messages, model,
     )
     start = time.monotonic()
     try:
-        async with httpx.AsyncClient(
-            timeout=ctx["timeout_sec"], proxy=ctx["proxy_url"] or None
+        async with provider_client(
+            proxy=ctx["proxy_url"] or None
         ) as client:
-            async with client.stream("POST", url, json=payload) as resp:
+            async with client.stream("POST", url, json=payload,
+                                     timeout=ctx["timeout_sec"]) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()
                     try:
@@ -621,6 +651,8 @@ async def _stream_gemini(*, base_url, api_key, messages, model,
                                 update_usage_meta(meta, u, provider_type="gemini")
                             cand = chunk.get("candidates", [{}])[0]
                             finish = cand.get("finishReason", "")
+                            if finish and meta is not None:
+                                meta["finish_reason"] = str(finish)[:120]
                             if finish and finish not in ("", "STOP"):
                                 print(f"[{label}] finishReason={finish}, safetyRatings={cand.get('safetyRatings','')}")
                                 if finish == "PROHIBITED_CONTENT" and meta is not None:
@@ -649,7 +681,8 @@ async def _stream_gemini(*, base_url, api_key, messages, model,
 async def _stream_vertex(*, base_url, api_key, messages, model,
                          meta=None, temperature=None, label="Vertex Gemini",
                          endpoint: dict | None = None, scope: str = "core",
-                         include_audio: bool = False, thinking_level: str | None = None):
+                         include_audio: bool = False, thinking_level: str | None = None,
+                         enable_thinking: bool | None = None, thinking_budget: int | None = None):
     meta = reset_usage_meta(meta)
     url = _vertex_model_url(base_url, model, "streamGenerateContent", stream=True)
     policy = cache_request_policy(
@@ -663,7 +696,8 @@ async def _stream_vertex(*, base_url, api_key, messages, model,
         messages,
         temperature,
         include_audio=include_audio,
-        thinking_level=thinking_level,
+        **gemini_thinking_options(enable_thinking=enable_thinking,
+                                 thinking_level=thinking_level, thinking_budget=thinking_budget),
     )
     headers = _vertex_headers(api_key)
     ctx = _provider_context(
@@ -672,10 +706,11 @@ async def _stream_vertex(*, base_url, api_key, messages, model,
     )
     start = time.monotonic()
     try:
-        async with httpx.AsyncClient(
-            timeout=ctx["timeout_sec"], proxy=ctx["proxy_url"] or None
+        async with provider_client(
+            proxy=ctx["proxy_url"] or None
         ) as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as resp:
+            async with client.stream("POST", url, json=payload, headers=headers,
+                                     timeout=ctx["timeout_sec"]) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()
                     try:
@@ -707,6 +742,8 @@ async def _stream_vertex(*, base_url, api_key, messages, model,
                                 update_usage_meta(meta, u, provider_type="vertex")
                             cand = chunk.get("candidates", [{}])[0]
                             finish = cand.get("finishReason", "")
+                            if finish and meta is not None:
+                                meta["finish_reason"] = str(finish)[:120]
                             if finish and finish not in ("", "STOP"):
                                 print(f"[{label}] finishReason={finish}, safetyRatings={cand.get('safetyRatings','')}")
                                 if finish == "PROHIBITED_CONTENT" and meta is not None:
@@ -734,7 +771,7 @@ async def _stream_vertex(*, base_url, api_key, messages, model,
 # ── 自定义端点入口 ────────────────────────────────
 async def call_openai_compat(endpoint: dict, model: str, messages: list,
                              meta=None, temperature=None, *, include_audio=False,
-                             thinking_level=None):
+                             thinking_level=None, enable_thinking=None, thinking_budget=None):
     async for c in _stream_openai(
         base_url=endpoint.get("base_url", ""),
         api_key=endpoint.get("api_key", ""),
@@ -742,13 +779,15 @@ async def call_openai_compat(endpoint: dict, model: str, messages: list,
         label=endpoint.get("name", "自定义"), endpoint=endpoint,
         include_audio=include_audio,
         thinking_level=thinking_level,
+        enable_thinking=enable_thinking,
+        thinking_budget=thinking_budget,
     ):
         yield c
 
 
 async def call_gemini_compat(endpoint: dict, model: str, messages: list,
                              meta=None, temperature=None, *, include_audio=False,
-                             thinking_level=None):
+                             thinking_level=None, enable_thinking=None, thinking_budget=None):
     async for c in _stream_gemini(
         base_url=endpoint.get("base_url", ""),
         api_key=endpoint.get("api_key", ""),
@@ -756,13 +795,15 @@ async def call_gemini_compat(endpoint: dict, model: str, messages: list,
         label=endpoint.get("name", "自定义"), endpoint=endpoint,
         include_audio=include_audio,
         thinking_level=thinking_level,
+        enable_thinking=enable_thinking,
+        thinking_budget=thinking_budget,
     ):
         yield c
 
 
 async def call_vertex_compat(endpoint: dict, model: str, messages: list,
                              meta=None, temperature=None, *, include_audio=False,
-                             thinking_level=None):
+                             thinking_level=None, enable_thinking=None, thinking_budget=None):
     async for c in _stream_vertex(
         base_url=endpoint.get("base_url", ""),
         api_key=endpoint.get("api_key", ""),
@@ -770,6 +811,8 @@ async def call_vertex_compat(endpoint: dict, model: str, messages: list,
         label=endpoint.get("name", "Vertex Gemini"), endpoint=endpoint,
         include_audio=include_audio,
         thinking_level=thinking_level,
+        enable_thinking=enable_thinking,
+        thinking_budget=thinking_budget,
     ):
         yield c
 
@@ -852,8 +895,7 @@ async def stream_ai(messages: list, model_key: str, meta: dict | None = None,
     if cfg.get("_kind") == "custom":
         ep = cfg["endpoint"]
         ep_type = ep.get("type", "openai")
-        if cfg.get("thinking_level") is not None:
-            audio_kwargs["thinking_level"] = cfg["thinking_level"]
+        audio_kwargs.update({key: cfg[key] for key in THINKING_KEYS if cfg.get(key) is not None})
         if ep_type in ("gemini", "vertex"):
             provider_call = call_vertex_compat if ep_type == "vertex" else call_gemini_compat
             async for chunk in provider_call(
@@ -904,6 +946,10 @@ async def stream_ai(messages: list, model_key: str, meta: dict | None = None,
 # ── Slot 辅助（哨兵 / 语音 ASR 用）────────────────
 async def _broadcast_endpoint_error(slot_name: str, endpoint_id: str, error: str, **extra):
     """失败时往前端推一条，用户能第一时间看到是哪个槽位挂了。"""
+    if private_provider_scope.get():
+        # A scene reports a mode-local error; upstream bodies must not leak to
+        # the normal chat's endpoint notifications or saved diagnostics.
+        return
     try:
         from ws import manager
         data = {"slot": slot_name, "endpoint": endpoint_id,
@@ -966,10 +1012,10 @@ async def _call_endpoint_chat_once(
                 payload["temperature"] = temperature
             if max_tokens is not None:
                 payload["max_tokens"] = max_tokens
-            if enable_thinking is not None:
-                payload["enable_thinking"] = enable_thinking
-            if thinking_level is not None:
-                payload["reasoning_effort"] = _normalize_thinking_level(thinking_level).lower()
+            payload.update(openai_thinking_fields(
+                endpoint, model, enable_thinking=enable_thinking,
+                thinking_level=thinking_level, thinking_budget=thinking_budget,
+            ))
             if response_schema is not None:
                 payload["response_format"] = {
                     "type": "json_schema",
@@ -981,12 +1027,12 @@ async def _call_endpoint_chat_once(
                 }
             elif expect_json:
                 payload["response_format"] = {"type": "json_object"}
-            async with httpx.AsyncClient(
-                timeout=ctx["timeout_sec"],
+            async with provider_client(
                 proxy=ctx["proxy_url"] or None,
                 trust_env=False,
             ) as client:
-                resp = await client.post(url, json=payload, headers=headers)
+                resp = await client.post(url, json=payload, headers=headers,
+                                         timeout=ctx["timeout_sec"])
         elif ep_type in ("gemini", "vertex"):
             if ep_type == "vertex":
                 url = _vertex_model_url(endpoint["base_url"], model, "generateContent")
@@ -1003,16 +1049,18 @@ async def _call_endpoint_chat_once(
                 max_tokens,
                 expect_json=expect_json,
                 response_schema=response_schema,
-                thinking_budget=thinking_budget,
-                thinking_level=thinking_level,
+                **gemini_thinking_options(
+                    enable_thinking=enable_thinking,
+                    thinking_budget=thinking_budget, thinking_level=thinking_level,
+                ),
             )
             payload["safetySettings"] = GEMINI_SAFETY_SETTINGS
-            async with httpx.AsyncClient(
-                timeout=ctx["timeout_sec"],
+            async with provider_client(
                 proxy=ctx["proxy_url"] or None,
                 trust_env=False,
             ) as client:
-                resp = await client.post(url, json=payload, headers=headers)
+                resp = await client.post(url, json=payload, headers=headers,
+                                         timeout=ctx["timeout_sec"])
         else:
             await _broadcast_endpoint_error(
                 error_channel,
@@ -1158,6 +1206,7 @@ async def call_core_chat_once(
         usage_meta=usage_meta,
         max_tokens=max_tokens,
         preset_gemini=preset_gemini,
+        **{key: cfg[key] for key in THINKING_KEYS if cfg.get(key) is not None},
     )
 
 
@@ -1187,9 +1236,18 @@ async def call_slot_chat(slot_name: str, messages: list,
     if not model:
         await _broadcast_endpoint_error(slot_name, "", "槽位模型未配置")
         return ""
-    enable_thinking = slot["extras"].get("enable_thinking")
+    extras = slot.get("extras", {})
+    enable_thinking = extras.get("enable_thinking")
     if not isinstance(enable_thinking, bool):
         enable_thinking = None
+    thinking_level = extras.get("thinking_level")
+    # Owner settings take priority over a caller's default budget (often 0).
+    if thinking_level is not None:
+        thinking_budget = None
+    elif extras.get("thinking_budget") is not None:
+        thinking_budget = extras["thinking_budget"]
+    elif enable_thinking is True:
+        thinking_budget = None
     return await _call_endpoint_chat_once(
         endpoint=slot["endpoint"],
         model=model,
@@ -1203,6 +1261,7 @@ async def call_slot_chat(slot_name: str, messages: list,
         max_tokens=max_tokens,
         response_schema=response_schema,
         thinking_budget=thinking_budget,
+        thinking_level=thinking_level,
         enable_thinking=enable_thinking,
     )
 

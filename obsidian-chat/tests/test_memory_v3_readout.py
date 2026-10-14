@@ -4,6 +4,8 @@ import importlib
 import time
 
 import aiosqlite
+import httpx
+import pytest
 
 from app.memory_v2.embedding import pack_embedding
 from app.memory_v2.prompt_block import build_v2_memory_prompt_block
@@ -359,6 +361,58 @@ def test_embedding_failure_keeps_debug_candidates_but_fails_prompt_closed(monkey
     assert result["debug_top"]
     assert block["enabled"] is False
     assert block["items"] == []
+
+
+@pytest.mark.parametrize("waiting_at", ["rate_slot", "retry_backoff"])
+def test_foreground_embedding_budget_covers_waits_and_preserves_approved_pending(monkeypatch, waiting_at):
+    calls, events = [], []
+    real_client = httpx.AsyncClient
+
+    async def fetch_chunks(*_args, **_kwargs):
+        return [_chunk()]
+
+    async def fetch_notes(*_args, **_kwargs):
+        return []
+
+    async def usage(_ids):
+        return {}
+
+    async def rate_slot(_config):
+        if waiting_at == "rate_slot":
+            await asyncio.Event().wait()
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(429, headers={"Retry-After": "30"})
+
+    monkeypatch.setattr(hybrid, "_fetch_chunks", fetch_chunks)
+    monkeypatch.setattr(hybrid, "_fetch_notes", fetch_notes)
+    monkeypatch.setattr(hybrid, "_recent_usage", usage)
+    monkeypatch.setattr(hybrid.embedding, "get_key", lambda *_args: "fixture")
+    monkeypatch.setattr(hybrid.embedding, "_wait_for_rate_slot", rate_slot)
+    monkeypatch.setattr(hybrid.embedding, "record_provider_event", lambda event: events.append(event))
+    monkeypatch.setattr(hybrid.embedding.httpx, "AsyncClient", lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(handler),
+    ))
+
+    async def scenario():
+        plan = await asyncio.wait_for(hybrid.hybrid_recall(
+            "旧事", ["旧事"], query_timeout_sec=0.03,
+        ), timeout=1)
+        assert plan["recall_timing"]["query_embedding_status"] == "timeout"
+        assert plan["semantic_query"] is False and not plan["selected"]
+        assert plan["debug_top"]
+        merged = hybrid.merge_pending_items(plan, [{
+            "id": "approved", "content": "已经筛选通过的回忆", "score": 0.1,
+            "prompt_priority": 1, "lane": "pending",
+        }], top_k=8)
+        block = build_v2_memory_prompt_block(merged)
+        assert block["enabled"] and len(block["items"]) == 1
+        assert "已经筛选通过的回忆" in block["content"]
+
+    asyncio.run(scenario())
+    assert len(calls) == (1 if waiting_at == "retry_backoff" else 0)
+    assert not events or events[0]["http_status"] == 429
 
 
 def test_chat_service_wires_visible_ids_and_final_threshold_into_planner(monkeypatch):

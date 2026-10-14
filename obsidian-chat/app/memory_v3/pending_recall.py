@@ -143,13 +143,14 @@ def selection_prompt_items(selection: dict, candidates: list[dict]) -> list[dict
                 "id": candidate_id,
                 "candidate_id": candidate_id,
                 "source_type": candidate.get("source_type", "chunk"),
+                "work_id": candidate.get("work_id"),
                 "attachment_url": candidate.get("attachment_url"),
-                "kind": "image_observation" if candidate.get("source_type") == "image" else "raw_chunk",
+                "kind": "event" if candidate.get("source_type") == "heart_work" else "image_observation" if candidate.get("source_type") == "image" else "raw_chunk",
                 "lane": "pending",
                 "readout_type": (
-                    "image_observation" if candidate.get("source_type") == "image" else "raw_full" if needs_raw else "relational_card" if has_card else "raw"
+                    "event" if candidate.get("source_type") == "heart_work" else "image_observation" if candidate.get("source_type") == "image" else "raw_full" if needs_raw else "relational_card" if has_card else "raw"
                 ),
-                "needs_raw_detail": needs_raw and candidate.get("source_type") != "image",
+                "needs_raw_detail": needs_raw and candidate.get("source_type") not in {"image", "heart_work"},
                 "content": str(candidate.get("raw_content") or ""),
                 "raw_content": str(candidate.get("raw_content") or ""),
                 "preview": str(candidate.get("readout_text") or ""),

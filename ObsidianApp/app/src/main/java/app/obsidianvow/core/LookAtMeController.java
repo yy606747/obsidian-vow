@@ -34,6 +34,7 @@ final class LookAtMeController {
     private Thread pollThread, uploadThread;
     private long backgroundSince, lastReturn, lastSaved, lastNotification;
     private boolean chatVisible;
+    private boolean serverTogetherHold;
     private String dailyId="";
     private final Runnable ticker=this::tick;
     private final TelephonyManager telephony;
@@ -57,8 +58,8 @@ final class LookAtMeController {
         http=client.newBuilder().dispatcher(new okhttp3.Dispatcher()).readTimeout(40,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build();
         telephony=service.getSystemService(TelephonyManager.class);
         NotificationManager nm=service.getSystemService(NotificationManager.class);
-        nm.createNotificationChannel(new NotificationChannel(CHANNEL,"腻歪时间邀请",NotificationManager.IMPORTANCE_HIGH));
-        nm.createNotificationChannel(new NotificationChannel(RESIDENCE,"腻歪时间",NotificationManager.IMPORTANCE_LOW));
+        nm.createNotificationChannel(new NotificationChannel(CHANNEL,"邀约通知",NotificationManager.IMPORTANCE_HIGH));
+        nm.createNotificationChannel(new NotificationChannel(RESIDENCE,"邀约",NotificationManager.IMPORTANCE_LOW));
         service.registerReceiver(screen,new IntentFilter(Intent.ACTION_SCREEN_OFF));
         instance=this;
         recover();
@@ -94,6 +95,7 @@ final class LookAtMeController {
             s().recover();store.event(active?"finished":"start_failed",observed,
                 json("outcome",s().outcome,"actual_ms",s().actualMs,"reason",s().reason));
         } else if(s().waiting()) {
+            if(s().togetherHold>0)return; // Restore the frozen server deadline before deciding expiry.
             // A fresh process may retain a notification, but never auto-pop an old invitation.
             if(s().boot!=boot()) {
                 s().phase="finished";s().reason="process_restart";
@@ -127,19 +129,44 @@ final class LookAtMeController {
         while(running) {
             String base=base();if(base==null){pause(2000);continue;}
             try {
+                TogetherStore together=new TogetherStore(service);
+                JSONObject end=together.end();
+                if(!end.optString("session_id").isEmpty()) {
+                    String sid=end.optString("session_id");
+                    Request finish=new Request.Builder().url(base+"/api/together/sessions/"+sid+"/actions")
+                        .post(RequestBody.create(end.toString(),MediaType.get("application/json"))).build();
+                    try(Response response=http.newCall(finish).execute()){if(response.isSuccessful())together.ended(sid);}
+                }
                 JSONObject batch=store.firstBatch();
                 if(batch!=null) {
                     JSONObject body=json("device_id",DeviceIdentity.id(service),"events",batch.getJSONArray("events"));
                     Request request=new Request.Builder().url(base+"/api/look-at-me/"+batch.getString("request_id")+"/events")
                         .post(RequestBody.create(body.toString(),MediaType.get("application/json"))).build();
                     try(Response response=http.newCall(request).execute()) {
-                        if(response.isSuccessful()) handler.post(()->store.acknowledge(batch));
+                        if(response.isSuccessful()&&response.body()!=null) {
+                            long acknowledged=new JSONObject(response.body().string()).optLong("processed_seq");
+                            JSONArray sent=batch.getJSONArray("events");
+                            if(sent.length()>0&&sent.getJSONObject(sent.length()-1).optLong("sequence")<=acknowledged)
+                                handler.post(()->store.acknowledge(batch));
+                        }
                     }
                 }
                 try(Response response=http.newCall(new Request.Builder().url(base+"/api/look-at-me/status?device_id="+android.net.Uri.encode(DeviceIdentity.id(service))).build()).execute()) {
                     if(response.isSuccessful()&&response.body()!=null) {
                         JSONObject status=new JSONObject(response.body().string());
                         handler.post(()->{
+                            serverTogetherHold=status.optBoolean("deferred");
+                            if(s()!=null&&s().waiting()&&s().togetherHold>0&&!serverTogetherHold&&!TogetherMediaService.holding()) {
+                                JSONObject pending=status.optJSONObject("request");
+                                if(pending!=null&&s().id.equals(pending.optString("id"))) {
+                                    long now=now();double serverNow=status.optDouble("server_now");
+                                    s().anchorElapsed=now;s().anchorWall=(long)(serverNow*1000);
+                                    s().expires=now+(long)((pending.optDouble("expires_at")-serverNow)*1000);
+                                    s().choiceDeadline=pending.isNull("choice_deadline")?0:now+(long)((pending.optDouble("choice_deadline")-serverNow)*1000);
+                                    s().togetherHold=0;s().boot=boot();store.persist();
+                                    handler.removeCallbacks(ticker);handler.post(ticker);
+                                }
+                            }
                             setEnabled(status.optBoolean("enabled")&&DeviceIdentity.id(service).equals(status.optString("device_id")));
                             String next=status.optString("conv_id","");
                             if(!next.isEmpty()&&!next.equals(dailyId)) {
@@ -184,6 +211,7 @@ final class LookAtMeController {
         showInvitation();
     }
     private void showInvitation() {
+        if(TogetherMediaService.holding()||serverTogetherHold||s()!=null&&s().togetherHold>0)return;
         if(!store.enabled||s()==null||!s().waiting()||!unlocked())return;
         if(s().expired(now())){finish("deadline");return;}
         if(overlay.showing())return;
@@ -199,6 +227,7 @@ final class LookAtMeController {
         } catch(Exception e){finish("permission_missing");}
     }
     private void decide(boolean accept,String reason) {
+        if(TogetherMediaService.holding()||serverTogetherHold)return;
         if(s()==null||!unlocked())return;
         if(!s().decide(accept?"accepted":"rejected",now())){if(s().expired(now()))finish("deadline");return;}
         store.event(accept?"accepted":"rejected",now(),json("reason",reason));
@@ -233,6 +262,11 @@ final class LookAtMeController {
 
     private void tick() {
         if(!running)return;
+        if(s()!=null&&s().waiting()&&(TogetherMediaService.holding()||serverTogetherHold||s().togetherHold>0)) {
+            if(s().togetherHold==0){s().togetherHold=Math.max(1,now());store.persist();}
+            overlay.hide();service.getSystemService(NotificationManager.class).cancel(NOTIFICATION);
+            handler.postDelayed(ticker,1000);return;
+        }
         try {
             if(s()!=null&&s().live()) {
                 long now=now();
@@ -305,7 +339,7 @@ final class LookAtMeController {
             WebViewActivity.openChatIntent(service).setData(android.net.Uri.parse("obsidianvow://look-at-me/invite/"+s().id))
             .putExtra("look_at_me_notification",s().id),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         Notification n=new NotificationCompat.Builder(service,CHANNEL).setSmallIcon(R.mipmap.ic_launcher)
-            .setColor(0xffd4943a).setSubText("◆ Obsidian Vow · 腻歪时间")
+            .setColor(0xffd4943a).setSubText("◆ Obsidian Vow · 邀约")
             .setContentTitle(s().aiName+" · "+LookAtMeOverlay.duration(s().seconds)).setContentText(s().expression)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(s().expression+"\n希望陪伴 "+LookAtMeOverlay.duration(s().seconds)+" · 解锁后查看邀请"))
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -320,7 +354,7 @@ final class LookAtMeController {
         PendingIntent open=PendingIntent.getActivity(service,ACTIVE_NOTIFICATION,WebViewActivity.openChatIntent(service)
             .putExtra("look_at_me_request",s().id),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         Notification n=new NotificationCompat.Builder(service,RESIDENCE).setSmallIcon(R.mipmap.ic_launcher)
-            .setColor(0xffd4943a).setContentTitle("◆ Obsidian Vow · 腻歪时间")
+            .setColor(0xffd4943a).setContentTitle("◆ Obsidian Vow · 邀约")
             .setContentText("还剩 "+LookAtMeOverlay.duration(Math.max(0,(s().end-now()+999)/1000)))
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(0,"立即结束",end)
             .setTimeoutAfter(Math.max(1,s().end-now())).build();

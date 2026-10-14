@@ -21,6 +21,7 @@ import android.os.SystemClock;
 import android.webkit.WebView;
 
 import org.json.JSONObject;
+import java.util.function.BooleanSupplier;
 
 @SuppressLint("MissingPermission")
 public class MuseForegroundService extends Service {
@@ -42,6 +43,11 @@ public class MuseForegroundService extends Service {
     private volatile boolean stopBurstCompleted = true;
     private volatile int curVib = 0;
     private volatile int curThrust = 0;
+    private int appliedVib = -1, appliedThrust = -1;
+    private String appliedSceneToken = ""; // BLE worker only, acknowledged advertisements.
+    private volatile long frameEpoch = 0;
+    private volatile String curSceneToken = "";
+    private long curSceneRevision = -1;
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
     private final Runnable ttlStopRunnable = () -> {
         if (running) handleGlobalStop(ACTION_TTL_STOP);
@@ -51,7 +57,14 @@ public class MuseForegroundService extends Service {
     private BluetoothLeAdvertiser advertiser;
     private AlarmManager alarmManager;
 
-    private final AdvertiseCallback advCallback = MuseBleCommands.callback(TAG);
+    private final AdvertiseCallback advCallback = new AdvertiseCallback() {
+        @Override public void onStartFailure(int code) {
+            android.util.Log.w(TAG, "advertise failed: " + code);
+            if (!curSceneToken.isEmpty()) watchdogHandler.post(() -> {
+                if (running && !curSceneToken.isEmpty()) handleGlobalStop(ACTION_EMERGENCY_STOP);
+            });
+        }
+    };
 
     public static void setWebView(WebView wv) {
         sWebView = wv;
@@ -92,8 +105,14 @@ public class MuseForegroundService extends Service {
         final int nextVib;
         final int nextThrust;
         final int ttlMs;
+        final String sceneToken;
+        final long sceneRevision;
         try {
             JSONObject obj = new JSONObject(json == null ? "{}" : json);
+            sceneToken = obj.optString("scene_token", "");
+            sceneRevision = obj.optLong("scene_revision", -1);
+            if (sceneToken.isEmpty() ? SceneDeviceBridge.active()
+                    : !SceneDeviceBridge.permits(sceneToken, "muse_ble", sceneRevision)) return;
             nextVib = clampPattern(obj.optInt("vib_pattern", 0));
             nextThrust = clampPattern(obj.optInt("thrust_pattern", 0));
             ttlMs = Math.max(500, Math.min(DEFAULT_TTL_MS, obj.optInt("ttl_ms", DEFAULT_TTL_MS)));
@@ -108,6 +127,9 @@ public class MuseForegroundService extends Service {
 
         final int oldVib = curVib;
         final int oldThrust = curThrust;
+        final boolean newSceneFrame = !sceneToken.equals(curSceneToken);
+        curSceneToken = sceneToken;
+        curSceneRevision = sceneRevision;
         running = true;
         stopBurstCompleted = false;
         curVib = nextVib;
@@ -116,31 +138,50 @@ public class MuseForegroundService extends Service {
         scheduleTtlStop(ttlMs);
         callJs("tideNativeBle.onConnected()");
 
-        if (oldVib == nextVib && oldThrust == nextThrust) return;
+        if (oldVib == nextVib && oldThrust == nextThrust && !newSceneFrame) return;
+        final long epoch = ++frameEpoch;
+        final BooleanSupplier valid = () -> running && epoch == frameEpoch && (sceneToken.isEmpty()
+                ? !SceneDeviceBridge.active() : SceneDeviceBridge.permits(sceneToken, "muse_ble", sceneRevision));
         bleHandler.removeCallbacksAndMessages(null);
         bleHandler.post(() -> {
-            if (oldVib != nextVib) {
-                if (oldVib > 0) advertiseCommand(0x30);
-                if (nextVib > 0) advertiseCommand(0x30 + nextVib);
+            if (!valid.getAsBoolean()) return;
+            if (!appliedSceneToken.equals(sceneToken)) { appliedVib=-1;appliedThrust=-1;appliedSceneToken=sceneToken; }
+            int[] vibration=SceneChannelDelta.muse(appliedVib,nextVib,0x30);
+            if(vibration.length>0) {
+                appliedVib=-1;
+                for(int command:vibration) { if(!valid.getAsBoolean()) return;advertiseCommand(command,valid); }
+                if(!valid.getAsBoolean()) return;appliedVib=nextVib;
             }
-            if (oldThrust != nextThrust) {
-                if (oldThrust > 0) advertiseCommand(0x40);
-                if (nextThrust > 0) advertiseCommand(0x40 + nextThrust);
+            int[] thrust=SceneChannelDelta.muse(appliedThrust,nextThrust,0x40);
+            if(thrust.length>0) {
+                appliedThrust=-1;
+                for(int command:thrust) { if(!valid.getAsBoolean()) return;advertiseCommand(command,valid); }
+                if(!valid.getAsBoolean()) return;appliedThrust=nextThrust;
             }
         });
     }
 
     private void handleGlobalStop(String action) {
+        if (ACTION_EMERGENCY_STOP.equals(action) || ACTION_TTL_STOP.equals(action)) SceneDeviceBridge.stoppedByMuse();
+        frameEpoch++;
         running = false;
         stopBurstCompleted = false;
         curVib = 0;
         curThrust = 0;
+        curSceneToken = "";
+        curSceneRevision = -1;
         cancelLocalWatchdog();
         if (bleHandler != null) bleHandler.removeCallbacksAndMessages(null);
         callJs("tideNativeBle.onDisconnected()");
         if (bleHandler != null) {
+            final long stoppedEpoch = frameEpoch;
             bleHandler.post(() -> {
-                for (int i = 0; i < MuseBleCommands.STOP_REPEATS; i++) advertiseCommand(0x00);
+                appliedVib=-1;appliedThrust=-1;appliedSceneToken="";
+                for (int i = 0; i < MuseBleCommands.STOP_REPEATS; i++) {
+                    if (running || frameEpoch != stoppedEpoch) return;
+                    advertiseCommand(0x00, () -> !running && frameEpoch == stoppedEpoch);
+                }
+                if (running || frameEpoch != stoppedEpoch) return;
                 stopCurrentAdv();
                 stopBurstCompleted = true;
                 cancelTtlStop();
@@ -156,6 +197,10 @@ public class MuseForegroundService extends Service {
 
     private void advertiseCommand(int command) {
         MuseBleCommands.advertiseCommand(advertiser, advCallback, command, TAG);
+    }
+
+    private void advertiseCommand(int command, BooleanSupplier valid) {
+        MuseBleCommands.advertiseCommand(advertiser, advCallback, command, TAG, valid);
     }
 
     private void stopCurrentAdv() {

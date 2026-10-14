@@ -17,6 +17,12 @@ public class MuseStopReceiver extends BroadcastReceiver {
         if (intent == null || !MuseForegroundService.ACTION_TTL_STOP.equals(intent.getAction())) {
             return;
         }
+        // A previous frame's alarm can arrive during a deliberate zero-output
+        // step (the stop burst itself takes ~4s). The independent scene lease
+        // owns liveness while healthy. On expiry/process death it cannot mask
+        // this fallback, and explicit emergency-stop actions never use it.
+        if (SceneDeviceBridge.ownsLiveMuse()) return;
+        SceneDeviceBridge.stoppedByMuse();
         PendingResult pending = goAsync();
         Context appContext = context.getApplicationContext();
         new Thread(() -> {

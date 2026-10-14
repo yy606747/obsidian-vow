@@ -102,11 +102,11 @@ class PreparedOpportunityTurn:
     model_key: str
     identity_snapshot: Mapping[str, str]
     reflection_context: CapturedReflectionContext | None
-    mobile_screen_target: Mapping[str, str] | None
     kind: str = "idle"
     advertised_tools: tuple[str, ...] = ()
     user_name: str = ""
     ai_name: str = ""
+    creation_context: tuple = ()
 
 
 def _configured_intervals_min() -> tuple[int, ...]:
@@ -131,11 +131,9 @@ def _pick_interval_sec() -> int:
 async def _runtime_capabilities(
     *,
     model_key: str,
-    mobile_screen_target: Mapping[str, str] | None,
 ) -> frozenset[str]:
     return await resolve_autonomous_capabilities(
         model_key=model_key,
-        mobile_screen_target=mobile_screen_target,
     )
 
 
@@ -147,6 +145,7 @@ def _runtime_context_text(
     user_name: str,
     ai_name: str,
     context_delivery_text: str | None = None,
+    facts_sink: list[str] | None = None,
 ) -> str:
     return build_autonomous_runtime_context(
         now=now,
@@ -155,6 +154,7 @@ def _runtime_context_text(
         user_name=user_name,
         ai_name=ai_name,
         context_delivery_text=context_delivery_text,
+        facts_sink=facts_sink,
     )
 
 
@@ -174,6 +174,7 @@ async def _prepare_opportunity_turn(
         attachment_policy="last_user",
     )
     history = list(history_ctx.history)
+    creation_context = tuple(dict(message) for message in history)
     cap_idx = history_ctx.cap_idx
     inject_offset = 0
 
@@ -214,14 +215,8 @@ async def _prepare_opportunity_turn(
             # must not remove the rest of an otherwise valid opportunity turn.
             reflection_context = None
 
-    mobile_screen_target = (
-        await _autonomous_mobile_screen_target(model_key=model_key, now=now)
-        if kind in {"idle", "look_at_me_accept"}
-        else None
-    )
     capabilities = set(await _runtime_capabilities(
         model_key=model_key,
-        mobile_screen_target=mobile_screen_target,
     ))
     if kind in {"idle", "look_at_me_accept"}:
         capabilities.update(SELF_WAKE_ENTRY_TOOLS)
@@ -229,6 +224,7 @@ async def _prepare_opportunity_turn(
         capabilities.intersection_update({"desktop.presence.show"})
     else:
         capabilities.intersection_update({"desktop.presence.draw", "sticker.create"})
+    presence_identity = ''
     if kind != "night":
         capabilities.discard("sticker.create")
     from app.look_at_me.service import is_current
@@ -247,12 +243,14 @@ async def _prepare_opportunity_turn(
         presence_requires_human = not await sprite_library.has_non_seed_sprites()
         if not presence_requires_human and not await sprite_library.has_synced_non_seed_sprites(device_id="pc"):
             capabilities = capabilities - {"desktop.presence.draw"}
+    from app.scenes.config import scene_config
     profile = opportunity_turn_profile(
         runtime_capabilities=capabilities,
         reflection_allowed=reflection_context is not None,
         web_search_allowed=web_search_allowed,
         kind=kind,
         presence_bootstrap_required=presence_requires_human,
+        scene_card_allowed=kind == "night" and scene_config.available(),
     )
     ability_block = build_opportunity_ability_block(
         profile=profile,
@@ -260,7 +258,6 @@ async def _prepare_opportunity_turn(
         ai_name=ai_name,
         model_key=model_key,
         kind=kind,
-        mobile_screen_target=mobile_screen_target,
         self_wake_context=(
             await load_self_wake_prompt_context(conv_id, now=now)
             if kind in {"idle", "look_at_me_accept"}
@@ -339,6 +336,7 @@ async def _prepare_opportunity_turn(
             # An enabled shared projection fails closed; never revive legacy
             # sensing/location text on a durable-read failure.
             context_delivery_text = ""
+    creation_facts = []
     runtime_text = _runtime_context_text(
         now=now,
         last_user_ts=float(target["last_user_ts"]),
@@ -346,6 +344,7 @@ async def _prepare_opportunity_turn(
         user_name=user_name,
         ai_name=ai_name,
         context_delivery_text=context_delivery_text,
+        facts_sink=creation_facts,
     )
     history.append({"role": "user", "content": runtime_text, "attachments": []})
     history.append({"role": "assistant", "content": "（嗯，知道了。）", "attachments": []})
@@ -365,7 +364,7 @@ async def _prepare_opportunity_turn(
     elif kind == "summon":
         trigger_text = (
             f"{user_name}刚刚希望{ai_name}此刻出现。{user_name}没有附带消息。\n"
-            f"本轮只有两种选择：使用桌面出现能力，或者精确、单独输出 [OPPORTUNITY_NONE]。\n"
+            f"本轮可以选择桌面出现、心语创作，或者精确、单独输出 [OPPORTUNITY_NONE]。\n"
             f"是否出现完全由{ai_name}自己决定。不要向{user_name}提到按钮、召唤或这段内部机制。"
         )
     elif kind == 'look_at_me_accept':
@@ -380,14 +379,20 @@ async def _prepare_opportunity_turn(
             "不用解释后台的机会轮、计时或触发流程。"
         )
     history.append({"role": "user", "content": trigger_text, "attachments": []})
+    creation_context += tuple({'role': 'user', 'content': text} for text in creation_facts)
+    if presence_identity:
+        creation_context += ({'role': 'user', 'content': presence_identity},)
+    if inject_working_model:
+        creation_context += ({'role': 'user', 'content': build_v2_working_model_block(dict(working_model_head))},
+                             {'role': 'user', 'content': build_desire_block(dict(desire_head))})
     return PreparedOpportunityTurn(
+        creation_context=creation_context,
         kind=kind,
         messages=history,
         profile=profile,
         model_key=model_key,
         identity_snapshot=identity_snapshot,
         reflection_context=reflection_context,
-        mobile_screen_target=mobile_screen_target,
         advertised_tools=tuple(ability_block.advertised_tools),
         user_name=user_name,
         ai_name=ai_name,
@@ -446,6 +451,9 @@ class OpportunityRunner:
         now = time.time()
         if now < self._next_fire_at:
             return None
+        from app.together.coexist import is_active
+        if await is_active(now=now):
+            return {"status": "gated", "reason": "together_active"}
         self._schedule_next()
 
         gate, target = await self._check_gates(now)
@@ -520,6 +528,12 @@ class OpportunityRunner:
             f"{kind}_core"
         )
         source_chain = "opportunity" if kind == "idle" else kind
+        from app.heart_works.entry import attach
+        heart_entry = attach(prepared.messages, source=source_chain, turn_id=msg_id,
+            conv_id=str(target['conv_id']), model_key=prepared.model_key, msg_id=msg_id,
+            user_name=prepared.user_name, ai_name=prepared.ai_name,
+            context_messages=getattr(prepared, 'creation_context', ()),
+            identity_text=str(prepared.identity_snapshot.get('text') or ''))
         context = ToolContext(
             conv_id=str(target["conv_id"]),
             msg_id=msg_id,
@@ -534,9 +548,7 @@ class OpportunityRunner:
                 "advertised_tools": prepared.advertised_tools,
                 "wake_id": msg_id,
                 "round_kind": kind,
-                "mobile_target_device_id": (
-                    prepared.mobile_screen_target or {}
-                ).get("device_id"),
+                "heart_work_origin": heart_entry.metadata(),
             },
         )
 
@@ -545,6 +557,8 @@ class OpportunityRunner:
         look_at_me_meta = await inject_look_at_me(
             prepared.messages, conv_id=str(target['conv_id']), turn_id=msg_id,
             user_name=prepared.user_name, ai_name=prepared.ai_name)
+        from app.together.recent import inject_recent
+        await inject_recent(prepared.messages, user_name=prepared.user_name, ai_name=prepared.ai_name)
         sticker_feedback = {}
         if prepared.profile.allows_tool('sticker.send'):
             sticker_feedback = await sticker_turn.inject_feedback(
@@ -591,6 +605,9 @@ class OpportunityRunner:
             # Cost guard: one rolling-window attempt is recorded only after every
             # other gate and immediately before the target core is called.
             if kind == "idle":
+                from app.together.coexist import is_active
+                if await is_active():
+                    return await finish_turn(status="gated", turn_outcome="skipped", round_branch="none", reason="together_active")
                 self._attempt_timestamps.append(now)
             usage_meta: dict[str, Any] = {}
             raw = ""
@@ -649,10 +666,13 @@ class OpportunityRunner:
                     raw_response=raw,
                 )
 
+            raw = heart_entry.extract(raw)
             control = classify_opportunity_control_output(
                 raw,
                 profile=prepared.profile,
             )
+            if heart_entry.intent.strip() and control in {'none', 'reflect', 'scene_card'}:
+                control = 'invalid'
             if control == "invalid":
                 return await finish_turn(
                     status="invalid_control_output",
@@ -667,6 +687,15 @@ class OpportunityRunner:
                     round_branch="none",
                     raw_response=raw,
                 )
+            if control == "scene_card":
+                from app.scenes.session import get_scene_service
+                try:
+                    cards = await get_scene_service().night_cards(conv_id=str(target["conv_id"]), model_key=prepared.model_key)
+                except Exception as exc:
+                    return await finish_turn(status="action_failed", turn_outcome="succeeded",
+                        round_branch="scene_card", error="scene_cards_failed:" + type(exc).__name__)
+                return await finish_turn(status="acted" if cards else "action_failed", turn_outcome="succeeded",
+                    round_branch="scene_card", scene_card_count=len(cards))
             if control == "reflect":
                 if prepared.reflection_context is None:
                     return await finish_turn(
@@ -745,8 +774,8 @@ class OpportunityRunner:
                 strict_intents = list(postprocessed.tool_intents)
                 if (
                     visible_text
-                    or len(strict_intents) != 1
-                    or strict_intents[0].tool_name not in expected_tools
+                    or len(strict_intents) + bool(heart_entry.intent.strip()) != 1
+                    or (strict_intents and strict_intents[0].tool_name not in expected_tools)
                 ):
                     return await finish_turn(
                         status="invalid_control_output",
@@ -775,7 +804,8 @@ class OpportunityRunner:
                 profile=prepared.profile, context=context, history=prepared.messages,
                 user_name=prepared.user_name, ai_name=prepared.ai_name,
                 core_call=call_opportunity_core,
-                pending_followup=any(r.tool_name in {'pc.screen_check', 'mobile.screen_check', 'location.poi_search', 'mobile.look_at_me'}
+                heart_entry=heart_entry,
+                pending_followup=any(r.tool_name in {'pc.screen_check', 'location.poi_search', 'mobile.look_at_me'}
                                      for r in execution.executed))
             if sticker_delivery.supplement_text:
                 visible_text = sticker_delivery.supplement_text
@@ -840,15 +870,18 @@ class OpportunityRunner:
                 )
                 for result in failed_results
             )
+            heart_work = await heart_entry.commit()
             if web_search_detected and not web_search_queued:
                 status = "action_failed"
-            elif visible_persisted or tool_executed or web_search_queued:
+            elif visible_persisted or tool_executed or web_search_queued or heart_work:
                 status = "acted"
             elif had_tool_intent or visible_text or execution_error or web_search_detected:
                 status = "action_failed"
             else:
                 status = "empty"
-            if provider_tool_failure:
+            if heart_work:
+                round_branch = "heart_work"
+            elif provider_tool_failure:
                 round_branch = "provider_failed"
             elif kind == "night" and tool_executed:
                 round_branch = "sticker" if any(r.tool_name == "sticker.create" for r in execution.executed) else "draw"
@@ -929,16 +962,9 @@ async def _broadcast_action_results(execution: ActionExecution) -> None:
             await manager.broadcast({"type": "heart_whisper", "data": payload})
         elif result.tool_name == "location.poi_search" and payload:
             await manager.broadcast({"type": "poi_search", "data": payload})
-        elif result.tool_name in {"pc.screen_check", "mobile.screen_check"} and payload:
+        elif result.tool_name == "pc.screen_check" and payload:
             event_type = payload.get("type", "screen_check_pending")
             await manager.broadcast({"type": event_type, "data": payload})
-            if (
-                result.tool_name == "mobile.screen_check"
-                and event_type == "screen_check_pending"
-            ):
-                from app.mobile_screen.autonomous import record_autonomous_mobile_screen_request
-
-                record_autonomous_mobile_screen_request()
 
 
 async def _resolve_target_conv() -> dict | None:
@@ -1000,6 +1026,13 @@ async def _send_message(
     try:
         async with get_db() as db:
             await db.execute("BEGIN IMMEDIATE")
+            from app.together.delivery import defer_in_tx
+            if await defer_in_tx(db, [
+                {"id": system_id, "conv_id": conv_id, "role": "system", "content": system_content, "created_at": now, "attachments": []},
+                {"id": assistant_id, "conv_id": conv_id, "role": "assistant", "content": content, "created_at": now+.001, "attachments": attachments},
+            ], feedback=sticker_feedback, delivery=sticker_delivery):
+                await db.commit()
+                return True
             await db.execute(
                 "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) "
                 "VALUES (?,?,?,?,?,?)",
@@ -1053,15 +1086,6 @@ async def _send_message(
     except Exception:
         pass
     return True
-
-
-async def _autonomous_mobile_screen_target(*, model_key: str, now: float) -> dict | None:
-    try:
-        from app.mobile_screen.autonomous import autonomous_mobile_screen_target
-
-        return await autonomous_mobile_screen_target(model_key=model_key, now=now)
-    except Exception:
-        return None
 
 
 async def _broadcast_log(entry: dict) -> None:

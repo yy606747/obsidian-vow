@@ -216,9 +216,10 @@ async def init_presence_tables(db) -> None:
     night_schema = await (await db.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='presence_night_rounds'"
     )).fetchone()
-    migrate_night = bool(night_schema and "'sticker'" not in night_schema[0])
+    migrate_night = bool(night_schema and "'scene_card'" not in night_schema[0])
     if migrate_night:
-        await db.execute("ALTER TABLE presence_night_rounds RENAME TO presence_night_rounds_before_stickers")
+        await db.execute("SAVEPOINT migrate_scene_night")
+        await db.execute("ALTER TABLE presence_night_rounds RENAME TO presence_night_rounds_before_scenes")
         await db.execute("DROP INDEX IF EXISTS idx_presence_night_rounds_started")
     await db.execute(
         """
@@ -227,7 +228,7 @@ async def init_presence_tables(db) -> None:
             timezone TEXT NOT NULL,
             status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
             branch TEXT CHECK(branch IS NULL OR branch IN (
-                'draw','sticker','reflect','none','invalid','provider_failed'
+                'draw','sticker','reflect','scene_card','none','invalid','provider_failed'
             )),
             started_at REAL NOT NULL,
             finished_at REAL,
@@ -237,8 +238,9 @@ async def init_presence_tables(db) -> None:
         """
     )
     if migrate_night:
-        await db.execute("INSERT INTO presence_night_rounds SELECT * FROM presence_night_rounds_before_stickers")
-        await db.execute("DROP TABLE presence_night_rounds_before_stickers")
+        await db.execute("INSERT INTO presence_night_rounds SELECT * FROM presence_night_rounds_before_scenes")
+        await db.execute("DROP TABLE presence_night_rounds_before_scenes")
+        await db.execute("RELEASE SAVEPOINT migrate_scene_night")
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_presence_night_rounds_started "
         "ON presence_night_rounds(started_at DESC)"

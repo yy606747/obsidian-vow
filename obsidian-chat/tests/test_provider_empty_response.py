@@ -106,3 +106,33 @@ def test_error_inside_http_200_stream_is_not_swallowed(transport):
     assert events[0]['ok'] is False
     assert events[0]['message'] == 'upstream unavailable'
     assert 'upstream unavailable' in text and 'empty_response' not in text
+
+
+@pytest.mark.parametrize('content', ['', '还有一句没说完'])
+def test_content_filter_records_failure_and_preserves_any_received_text(transport, content):
+    collect, events, notices, requests = transport
+    body = frame({'choices': [{'delta': {'content': content}, 'finish_reason': 'content_filter'}]})
+    text, meta = collect(body + 'data: [DONE]\n\n')
+    assert len(requests) == len(events) == 1  # Retry belongs to foreground chat.
+    assert events[0]['ok'] is False
+    assert events[0]['error_type'] == 'content_filter'
+    assert meta['finish_reason'] == 'content_filter'
+    if content:
+        assert text == content and not notices
+        assert events[0]['retryable'] is False
+    else:
+        assert text.startswith('[错误]') and 'content_filter' in text
+        assert events[0]['retryable'] is True and len(notices) == 1
+
+
+def test_foreground_defers_empty_error_notice_but_keeps_provider_diagnostics(transport):
+    from app.chat.response_status import defer_empty_notice
+    collect, events, notices, requests = transport
+    token = defer_empty_notice.set(True)
+    try:
+        text, _ = collect(frame({'choices': [{'delta': {}, 'finish_reason': 'content_filter'}]}))
+    finally:
+        defer_empty_notice.reset(token)
+    assert len(events) == len(requests) == 1
+    assert 'content_filter' in text and events[0]['ok'] is False
+    assert not notices

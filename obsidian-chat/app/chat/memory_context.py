@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime
 
@@ -21,6 +22,7 @@ async def _plan_v2_recall_debug(
     pending_items: list[dict] | None = None,
     visible_message_ids: list[str] | None = None,
     user_name: str = "她",
+    pending_recall_task: asyncio.Task[dict] | None = None,
 ) -> dict:
     """V2 recall sidecar. Never block legacy chat if it fails."""
     try:
@@ -32,6 +34,8 @@ async def _plan_v2_recall_debug(
             pending_items=pending_items,
             visible_message_ids=visible_message_ids,
             user_name=user_name,
+            **({"pending_recall_task": pending_recall_task}
+               if pending_recall_task is not None else {}),
         )
     except Exception as exc:
         try:

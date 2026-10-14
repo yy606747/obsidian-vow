@@ -186,11 +186,17 @@ async def _deliver_reply(items, *, conv_id, model_key, messages, trigger_prompt,
     from app.chat.turn_profiles import TurnProfile
     from app.chat.control_syntax import strip_control_markers
     request_id = tool_context.request_id
+    from app.heart_works.entry import attach
+    heart_entry = attach(messages, source='schedule', turn_id=request_id, conv_id=conv_id,
+        model_key=model_key, user_name=user_name, ai_name=ai_name,
+        context_messages=context_meta.get('creation_context', ()))
     await tool_invocation_ledger.record_model_request(
         tool_context, invocation_id=invocation_id, request_snapshot=messages,
         advertised_tools=advertised_tools,
         metadata={"schedule_ids": [item["id"] for item in items]})
     full_text, stream_error, raw_output = await _stream_reply(messages, model_key, items)
+    full_text = heart_entry.extract(full_text)
+    heart_work = None
     await tool_invocation_ledger.record_model_output(
         tool_context,
         invocation_id=invocation_id,
@@ -224,9 +230,15 @@ async def _deliver_reply(items, *, conv_id, model_key, messages, trigger_prompt,
         expression_reply, execution=execution, profile=expression_profile,
         context=tool_context, history=messages, user_name=user_name, ai_name=ai_name,
         stream_model=supplement_stream, temperature=SETTINGS.get('temperature'),
-        other_attachments=music_cards)
+        other_attachments=music_cards, heart_entry=heart_entry)
+    if not stream_error:
+        heart_work = await heart_entry.commit()
     full_text = sticker_delivery.supplement_text or full_text
     if not full_text.strip() and not sticker_delivery.attachments and not music_cards:
+        if heart_work:
+            await tool_invocation_ledger.record_turn(tool_context, prompt_source='schedule',
+                advertised_tools=advertised_tools, turn_outcome='succeeded', metadata={'heart_work_id': heart_work['id']})
+            return
         await tool_invocation_ledger.record_turn(
             tool_context,
             prompt_source="schedule",
@@ -315,10 +327,12 @@ async def _build_messages(
         if has_monitor
         else []
     )
+    creation_context = list(prefix) + ([{'role': 'user', 'content': vow_block}] if vow_block else []) + list(history)
     if has_monitor:
         from app.daily_chat.service import cross_day_prompt
         history = await cross_day_prompt(conv_id, user_name=user_name,
-                                         ai_name=resolve_worldbook_names(wb)[1], db_factory=get_db) + history
+                                         ai_name=resolve_worldbook_names(wb)[1], context_limit=20,
+                                         current_message_count=len(history), db_factory=get_db) + history
     schedule_text = store.build_schedule_prompt(await store.list_active())
     ability_block = prompt.build_abilities_block(user_name, schedule_text, ai_name=resolve_worldbook_names(wb)[1])
     cap_idx = len(prefix) if prefix else 0
@@ -382,10 +396,13 @@ async def _build_messages(
                 "（嗯，近几天发生的事和新的纠正，我会优先按它们理解。）",
             ))
     trigger_prompt = _trigger_prompt(items, now_str, user_name, evidence_text, evidence_errors)
+    creation_context.append({'role': 'user', 'content': f'本轮触发时间：{now_str}\n日程内容：\n'
+        + '\n'.join(str(item.get('content') or '') for item in items) + '\n' + evidence_text})
     messages = prefix + context_inject + history + [{"role": "user", "content": trigger_prompt}]
     return messages, trigger_prompt, evidence_errors, {
         "alarm_creation": alarm_context_meta,
         "timeline": timeline_meta,
+        "creation_context": creation_context + context_inject,
     }
 
 

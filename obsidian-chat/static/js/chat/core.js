@@ -42,6 +42,7 @@
     return escHtml(s).replace(/\n/g, "<br>");
   }
 
+  // Retired MOBILE_SCREEN_CHECK stays here solely to hide old control text.
   const CHAT_VALUE_CONTROL_NAMES = [
     "MOBILE_SCREEN_CHECK", "SCREEN_CHECK", "POI_SEARCH", "MUSIC",
     "ALARM", "REMINDER", "Monitor", "SCHEDULE_DEL", "TOY", "HEART",

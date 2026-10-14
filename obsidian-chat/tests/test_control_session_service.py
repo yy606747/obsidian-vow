@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -131,6 +132,19 @@ def _events(db_path):
         return [row[0] for row in conn.execute("SELECT content FROM memory_events ORDER BY created_at")]
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize("operation", ["start", "heartbeat", "snapshot", "claim_tide_session"])
+def test_scene_ownership_blocks_legacy_start_resume_and_claim(tmp_path, monkeypatch, operation):
+    from app.scenes import session as scene_module
+    monkeypatch.setattr(scene_module, "get_scene_service", lambda: SimpleNamespace(occupies_control=lambda: True))
+    service, _ = _service(tmp_path, now_ref=[1000.0])
+    kwargs = ({"conv_id":"c", "kind":"dom", "owner_client_id":"o"} if operation == "start"
+              else {"session_id":"old", "owner_client_id":"o"})
+    if operation == "snapshot":
+        kwargs["frontend_snapshot_json"] = {}
+    with pytest.raises(control_service_module.ControlClaimRejected, match="scene_control_busy"):
+        asyncio.run(getattr(service, operation)(**kwargs))
 
 
 def test_control_session_lifecycle_stale_resume_timeout(tmp_path):

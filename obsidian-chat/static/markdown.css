@@ -56,6 +56,14 @@
 .md-table-wrap tr:last-child td { border-bottom: 0; }
 .md-table-wrap th:last-child, .md-table-wrap td:last-child { border-right: 0; }
 .msg-content .edit-textarea { min-width: min(260px, 100%); }
+.md-math { max-width: 100%; overflow-wrap: normal; word-break: normal; }
+.md-math:not(.md-math-display) { display: inline-block; vertical-align: middle; overflow-x: auto; overflow-y: hidden; padding: .15em 0; }
+.md-math-display { display: block; min-width: 0; overflow-x: auto; overflow-y: hidden; padding: .65em .15em; overscroll-behavior-x: contain; }
+.md-math-display > .katex-display { margin: 0; text-align: center; }
+.md-math-display > .katex-display > .katex { width: max-content; min-width: 100%; }
+.md-math .katex { font-size: 1.08em; text-align: initial; }
+.md-math-source { white-space: pre-wrap; overflow-wrap: anywhere; }
+.md-math-display:focus-visible { outline: 1px solid #d4b77e; outline-offset: 2px; border-radius: 4px; }
 @media (max-width: 480px) {
   .msg-row.md-expanded { gap: 8px; margin-bottom: 12px; }
   .md-document { padding: 15px 14px 17px; font-size: 15px; line-height: 1.8; }

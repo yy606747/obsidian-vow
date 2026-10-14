@@ -24,6 +24,11 @@
   function stopDevice(reason) {
     let attempted = false;
     const closeReason = reason || "stop";
+    if (global.SceneHardware?.isArmed() && !_shouldUseEmergencyBridge(closeReason)) return false;
+    if (_shouldUseEmergencyBridge(closeReason) && global.SceneRuntime?.isActive()) {
+      _watchStop(global.SceneRuntime.panic(), "scene panic");
+      attempted = true;
+    }
     const reasonKey = String(closeReason).toLowerCase();
     const driver = _currentDriver();
     const advDriver = _isAdvDriver(driver);

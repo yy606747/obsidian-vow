@@ -43,7 +43,7 @@ DEFAULT_MEMORY_V3_CONFIG = {
     "timeline_hours": 72,
     "timeline_max_chars": 600,
     "timeline_generation_min_interval_sec": 900.0,
-    "timeline_generation_timeout_sec": 20.0,
+    "timeline_generation_timeout_sec": 60.0,
     "timeline_generation_attempts": 2,
 }
 

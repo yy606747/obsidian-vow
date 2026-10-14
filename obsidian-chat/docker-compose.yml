@@ -2,18 +2,20 @@ services:
   obsidian-vow:
     platform: linux/amd64
     build:
+      # 上一级（仓库根）作为构建上下文，因为 main.py 引用的 public/ 在根目录
       context: ..
       dockerfile: obsidian-chat/Dockerfile
     image: obsidian-vow:latest
+    container_name: obsidian-vow
     restart: unless-stopped
+    network_mode: host
     env_file:
+      # .env 放仓库根目录（与 .env.example 同级）；如果你习惯放 obsidian-chat/ 下，把上一级 ../ 去掉
       - ../.env
     environment:
-      OBSIDIAN_BIND_HOST: "0.0.0.0"
+      OBSIDIAN_BIND_HOST: "127.0.0.1"
       OBSIDIAN_BIND_PORT: "18080"
-      OBSIDIAN_SIGNAL_DAILY_TIMEZONE: "${OBSIDIAN_SIGNAL_DAILY_TIMEZONE:-UTC}"
-    ports:
-      - "127.0.0.1:18080:18080"
+      OBSIDIAN_SIGNAL_DAILY_TIMEZONE: "Asia/Shanghai"
     volumes:
       - ./data:/app/data
     healthcheck:

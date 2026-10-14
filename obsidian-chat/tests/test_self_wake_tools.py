@@ -50,8 +50,6 @@ def _prompt_context():
         "user_name": "owner",
         "ai_name": "Arden",
         "pc_screen_available": True,
-        "mobile_screen_available": True,
-        "mobile_screen_target": {"device_id": "phone", "label": "手机"},
         "ring_available": True,
         "heart_prompt": "[HEART:内容]",
         "poi_available": True,
@@ -148,7 +146,7 @@ def test_self_wake_surface_and_prompt_are_exact_and_dynamic():
         context=_prompt_context(),
     )
     text = "\n".join(prose for _name, prose in opportunity_entries)
-    assert "Arden想晚些回到与owner的这段对话" in text
+    assert "你想晚些回到与owner的这段对话" in text
     assert "不想回来就不设置" in text
     assert "同一对话的新约定覆盖旧约定" in text
     assert "今天所有对话合计可尝试回来3次" in text

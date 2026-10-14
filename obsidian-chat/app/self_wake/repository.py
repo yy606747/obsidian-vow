@@ -227,6 +227,10 @@ class SelfWakeRepository:
             db.row_factory = aiosqlite.Row
             await db.execute("BEGIN IMMEDIATE")
             try:
+                from app.together.coexist import sync_holds_in_tx
+                if await sync_holds_in_tx(db, now=claimed_at):
+                    await db.commit()
+                    return []
                 await db.execute(
                     "UPDATE self_wakes SET state='expired', closed_at=?, "
                     "close_reason='expired' WHERE state='pending' AND expires_at<=?",
@@ -269,6 +273,27 @@ class SelfWakeRepository:
                 await db.rollback()
                 raise
         return claimed
+
+    async def defer_unstarted(self, wake_id: str, *, now: float | None = None) -> bool:
+        """Undo a claim if companionship began before the actual provider call."""
+        from app.together.coexist import active_in_tx, sync_holds_in_tx
+        now = time.time() if now is None else now
+        async with get_db() as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            if not await active_in_tx(db, now=now):
+                await db.commit()
+                return False
+            wake = await (await db.execute("SELECT * FROM self_wakes WHERE id=? AND state='consumed' AND finished_at IS NULL", (wake_id,))).fetchone()
+            if wake:
+                newer = await (await db.execute("SELECT id FROM self_wakes WHERE origin=? AND origin_ref=? AND state='pending'", (wake['origin'], wake['origin_ref']))).fetchone()
+                if newer:
+                    await db.execute("UPDATE self_wakes SET state='invalidated',consumed_at=NULL,closed_at=?,close_reason='replaced_while_deferred' WHERE id=?", (now, wake_id))
+                else:
+                    await db.execute("UPDATE self_wakes SET state='pending',consumed_at=NULL WHERE id=?", (wake_id,))
+                await sync_holds_in_tx(db, now=now)
+            await db.commit()
+            return True
 
     async def finish_trigger(
         self,

@@ -103,6 +103,18 @@ public class DomForegroundService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        // Check again at service delivery, not only when the JS bridge enqueues
+        // the intent. Old play/cleanup can arrive after a new scene takes over.
+        if (SceneDeviceBridge.active()) {
+            if(ACTION_EMERGENCY_STOP.equals(intent.getAction()) && intent.getBooleanExtra(EXTRA_TRIGGER_PANIC_JS,true))
+                SceneDeviceBridge.obtain(this).panic();
+            running=false;
+            bleHandler.removeCallbacksAndMessages(null);
+            stopCurrentAdv();
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
 
         // startForegroundService 要求5秒内调用 startForeground，否则 ANR
         if (!running) {
@@ -230,7 +242,7 @@ public class DomForegroundService extends Service {
     // ── 广播循环 ──
 
     private void advLoop() {
-        if (!running) return;
+        if (!running || SceneDeviceBridge.active()) return;
         int sx = curSx, pj = curPj;
         if (sx == 0 && pj == 0) {
             running = false;
@@ -258,10 +270,11 @@ public class DomForegroundService extends Service {
     }
 
     private void advOnce(String uuidStr) {
-        if (advertiser == null) return;
+        if (advertiser == null || SceneDeviceBridge.active()) return;
         try {
             stopCurrentAdv();
             sleepSafe(STOP_GAP_MS);
+            if(SceneDeviceBridge.active()) return;
             AdvertiseSettings settings = new AdvertiseSettings.Builder()
                     .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
                     .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)

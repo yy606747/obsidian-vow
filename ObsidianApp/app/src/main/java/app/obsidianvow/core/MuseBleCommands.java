@@ -12,6 +12,7 @@ import android.os.ParcelUuid;
 import android.util.Log;
 
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 
 @SuppressLint("MissingPermission")
 final class MuseBleCommands {
@@ -52,10 +53,15 @@ final class MuseBleCommands {
     }
 
     static void advertiseCommand(BluetoothLeAdvertiser advertiser, AdvertiseCallback callback, int command, String tag) {
-        if (advertiser == null) return;
+        advertiseCommand(advertiser, callback, command, tag, () -> true);
+    }
+
+    static void advertiseCommand(BluetoothLeAdvertiser advertiser, AdvertiseCallback callback, int command, String tag, BooleanSupplier valid) {
+        if (advertiser == null || !valid.getAsBoolean()) return;
         try {
             stopCurrentAdv(advertiser, callback);
             sleepSafe(CMD_GAP_MS);
+            if (!valid.getAsBoolean()) return;
             AdvertiseSettings settings = new AdvertiseSettings.Builder()
                     .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
                     .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
@@ -72,6 +78,7 @@ final class MuseBleCommands {
             stopCurrentAdv(advertiser, callback);
         } catch (Exception e) {
             Log.e(tag, "advertise command failed", e);
+            callback.onStartFailure(AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR);
         }
     }
 

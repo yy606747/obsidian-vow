@@ -113,6 +113,8 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 .msg-row.assistant .msg-bubble { background: linear-gradient(145deg, #2a2e28 0%, #262a24 100%); border: 1px solid rgba(255,255,255,0.06); border-bottom-left-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
 .msg-row.assistant .msg-bubble:hover { box-shadow: 0 0 16px rgba(122,173,106,0.1), 0 2px 6px rgba(0,0,0,0.3); }
 .msg-row.transient-error .msg-role-name { color:#ef9a9a; }
+.msg-response-notice { margin-top:6px; color:var(--text3); font-size:12px; }
+.msg-response-notice button { margin-left:8px; color:inherit; background:none; border:0; text-decoration:underline; cursor:pointer; }
 .msg-row.transient-error .msg-bubble { background:rgba(120,35,35,0.22); border-color:rgba(239,154,154,0.26); color:#ffd7d7; }
 .msg-bubbles { display:flex; flex-direction:column; gap:3px; }
 .msg-row.user .msg-bubbles { align-items:flex-end; }
@@ -860,13 +862,42 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 .sticker-panel { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface2); }
 .sticker-panel[hidden] { display: none; }
 .sticker-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border-bottom: 1px solid var(--border); }
-.sticker-panel-header strong { font-size: 14px; }
+.sticker-panel-header strong { font-size: 14px; white-space: nowrap; }
+.sticker-panel-header > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
 #stickerCount { font-size: 11px; color: var(--text3); font-weight: normal; }
 .sticker-panel-header button { padding: 6px 8px; background: transparent; color: var(--text2); border: 0; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px; }
 .sticker-panel-header button:hover { background: var(--surface); color: var(--text); }
 .sticker-panel-header button:disabled { opacity: .5; cursor: wait; }
 .sticker-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(72px,1fr)); gap: 8px; max-height: min(36vh,300px); overflow-y: auto; padding: 10px; overscroll-behavior: contain; }
-.sticker-tile { display: flex; align-items: center; justify-content: center; aspect-ratio: 1; min-width: 0; padding: 5px; border: 1px solid transparent; border-radius: 10px; background: var(--surface); cursor: pointer; }
+.sticker-tile { position: relative; display: flex; align-items: center; justify-content: center; aspect-ratio: 1; min-width: 0; padding: 5px; border: 1px solid transparent; border-radius: 10px; background: var(--surface); cursor: pointer; }
 .sticker-tile:hover, .sticker-tile:focus-visible { border-color: var(--accent); }
 .sticker-tile img { display: block; max-width: 100%; max-height: 82px; object-fit: contain; }
 .sticker-panel-empty { grid-column: 1 / -1; padding: 24px 8px; text-align: center; color: var(--text3); font-size: 13px; line-height: 1.8; }
+.sticker-tile.is-selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.sticker-select-indicator { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface2); color: transparent; font-size: 12px; }
+.sticker-tile.is-selected .sticker-select-indicator { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.sticker-manage-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text2); }
+.sticker-manage-bar[hidden] { display: none; }
+.sticker-manage-bar > span { flex: 1; }
+.sticker-manage-bar button { min-height: 36px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.sticker-manage-bar button:disabled { opacity: .45; cursor: default; }
+#stickerRemoveBtn { color: var(--danger); border-color: currentColor; }
+:root .heart-work-reference {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 260px;
+  padding: 12px 16px;
+  border: 1px solid rgba(194, 164, 114, .3);
+  border-radius: 12px;
+  background: rgba(194, 164, 114, .06);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: normal;
+}
+.heart-work-reference span, .query-progress { font-size: 12px; opacity: .65; }
+.heart-work-reference strong { font-size: 14px; font-weight: 500; }
+.query-progress { margin: 8px 0; }
+.preview-item.heart-work-preview { width: 240px; max-width: calc(100vw - 48px); max-height: none; border: 0; overflow: visible; }
+.heart-work-preview .heart-work-reference { width: 100%; box-sizing: border-box; padding-right: 30px; }

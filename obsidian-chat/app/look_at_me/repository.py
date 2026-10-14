@@ -54,19 +54,29 @@ class LookAtMeRepository:
             old = await (await db.execute('SELECT * FROM look_at_me_requests WHERE source_turn=? AND source_intent=?', (source_turn, source_intent))).fetchone()
             if old:
                 return dict(old)
-            busy = await (await db.execute("SELECT id FROM look_at_me_requests WHERE device_id=? AND status!='finished' AND (status IN ('accepted','active') OR COALESCE(choice_deadline,expires_at)>?)", (device_id, self.now()))).fetchone()
+            from app.together.coexist import sync_holds_in_tx
+            held = await sync_holds_in_tx(db, now=self.now())
+            busy = await (await db.execute("SELECT id FROM look_at_me_requests WHERE device_id=? AND status!='finished' AND (? OR status IN ('accepted','active') OR COALESCE(choice_deadline,expires_at)>?)", (device_id, int(held), self.now()))).fetchone()
             if busy:
                 raise ValueError('device_busy:' + busy['id'])
             rid, now = 'lam_' + uuid4().hex, self.now()
             await db.execute('''INSERT INTO look_at_me_requests
                 (id,conv_id,origin_conv_id,model_key,device_id,source_turn,source_intent,expression,duration_seconds,created_at,expires_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)''', (rid,conv_id,origin_conv_id,model_key,device_id,source_turn,source_intent,expression,duration_seconds,now,now+120))
+            if held:
+                await sync_holds_in_tx(db, now=now)
             await db.commit()
         return await self.get(rid)
 
     async def pending(self, device_id):
         async with self.db() as db:
             db.row_factory = aiosqlite.Row
+            from app.together.coexist import sync_holds_in_tx
+            await db.execute('BEGIN IMMEDIATE')
+            held = await sync_holds_in_tx(db, now=self.now())
+            await db.commit()
+            if held:
+                return None
             row = await (await db.execute("SELECT * FROM look_at_me_requests WHERE device_id=? AND status IN ('queued','offered') AND COALESCE(choice_deadline,expires_at)>? ORDER BY created_at LIMIT 1", (device_id,self.now()))).fetchone()
             return dict(row) if row else None
 
@@ -74,6 +84,8 @@ class LookAtMeRepository:
         async with self.db() as db:
             db.row_factory = aiosqlite.Row
             await db.execute('BEGIN IMMEDIATE')
+            from app.together.coexist import sync_holds_in_tx
+            held = await sync_holds_in_tx(db, now=self.now())
             raw = await (await db.execute('SELECT * FROM look_at_me_requests WHERE id=?', (request_id,))).fetchone()
             if not raw:
                 raise ValueError('not_found')
@@ -81,6 +93,11 @@ class LookAtMeRepository:
             valid_convs = set(valid_convs or (row['conv_id'],row['origin_conv_id'],current_conv))
             if row['device_id'] != device_id:
                 raise ValueError('device_mismatch')
+            if held and row['status'] in ('queued','offered'):
+                # Keep ordered receipts at the client until companionship ends;
+                # no synthetic rejection/timeout is written during the hold.
+                await db.commit()
+                return row
             for event in events:
                 existing = await (await db.execute('SELECT * FROM look_at_me_events WHERE event_id=? OR (request_id=? AND sequence=?)', (event['event_id'],request_id,event['sequence']))).fetchone()
                 payload = json.dumps(event.get('payload') or {}, ensure_ascii=False, sort_keys=True)

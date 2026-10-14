@@ -97,6 +97,7 @@ _MARKER_TO_TOOL = {
     "CAMCHECK": ("monitor.camera", "cam"),
     "查看动态": ("activity.summary", "activity"),
     "SCREENCHECK": ("pc.screen_check", "screen"),
+    # Retired: classify historical attempts without registering an executable tool.
     "MOBILESCREENCHECK": ("mobile.screen_check", "mobile_screen"),
     "POISEARCH": ("location.poi_search", "poi"),
     "ALARM": ("schedule.alarm", "schedule"),

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createElement, findById } = require('./dom_fixture');
 
 const scripts = path.join(__dirname, '../static/js/chat');
 const message = (id, created_at, conv_id = 'c1') => ({
@@ -22,7 +23,7 @@ function harness({ daily = false } = {}) {
   const requests = [], acknowledgements = [], sockets = [], notices = [];
   const storage = new Map();
   const docEvents = new Map(), windowEvents = new Map();
-  const nodes = new Map(), rows = new Map();
+  const nodes = new Map();
   let pendingConvId = '';
   let responseHandler = url => {
     if (url === '/api/models') return [{ key: 'test' }];
@@ -34,26 +35,8 @@ function harness({ daily = false } = {}) {
   const addListener = (map, name, fn) => map.set(name, [...(map.get(name) || []), fn]);
   function node(id) {
     if (nodes.has(id)) return nodes.get(id);
-    const classes = new Set();
-    let html = '';
-    const element = {
-      value: '', textContent: '', disabled: false, scrollHeight: 1000, scrollTop: 0,
-      classList: { contains: c => classes.has(c), add: c => classes.add(c), remove: c => classes.delete(c) },
-      getBoundingClientRect: () => ({ top: 0, bottom: 600, width: 400, height: 600 }),
-      addEventListener() {}, contains: () => true,
-      querySelector: () => null,
-      querySelectorAll: () => [...rows.values()],
-      get innerHTML() { return html; },
-      set innerHTML(value) {
-        html = value;
-        if (id === 'messages') {
-          rows.clear();
-          for (const match of value.matchAll(/id="(m_[^"]+)"/g)) {
-            rows.set(match[1], { getBoundingClientRect: () => ({ top: -500, bottom: -400 }) });
-          }
-        }
-      },
-    };
+    const element = createElement();
+    element.id = id;
     nodes.set(id, element);
     return element;
   }
@@ -72,7 +55,9 @@ function harness({ daily = false } = {}) {
     document: {
       visibilityState: 'visible',
       addEventListener: (name, fn) => addListener(docEvents, name, fn),
-      getElementById: id => id.startsWith('m_') ? rows.get(id) || null : node(id),
+      createElement,
+      querySelector: () => null,
+      getElementById: id => id.startsWith('m_') ? findById(node('messages'), id) : node(id),
     },
     addEventListener: (name, fn) => addListener(windowEvents, name, fn),
     $: node,
@@ -159,6 +144,20 @@ test('a websocket error before debug stays transient, is not spoken, and does no
   assert.deepEqual(spoken, []);
   assert.match(h.node('messages').innerHTML, /这次没有收到回复/);
   assert.doesNotMatch(h.node('messages').innerHTML, /empty_response|req_test/);
+});
+
+test('scene websocket events bypass ordinary messages, notifications and speech', () => {
+  const h = harness(); h.warm();
+  const sceneEvents = [], spoken = [];
+  h.context.SceneRuntime = {handleEvent: event => sceneEvents.push(event)};
+  h.context.ttsSpeak = text => spoken.push(text);
+  h.run('voiceInCall = true; ttsEnabled = true;');
+  h.context.handleSync({type:'scene_state',data:{id:'scene1',messages:[{content:'scene only'}]}});
+  h.context.handleSync({type:'scene_playback',data:{id:'scene1',devices:[]}});
+  assert.equal(sceneEvents.length,2);
+  assert.deepEqual(h.ids(),['old']);
+  assert.deepEqual(spoken,[]);
+  assert.equal(h.acknowledgements.length,0);
 });
 
 test('returning with an OPEN socket fetches missed messages and acknowledges latest plus earlier messages', async () => {

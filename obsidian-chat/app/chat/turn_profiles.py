@@ -20,10 +20,12 @@ MARKER_RECALL_INTENT = "recall_intent"
 MARKER_WEB_SEARCH_INTENT = "web_search_intent"
 MARKER_OPPORTUNITY_NONE = "opportunity_none"
 MARKER_OPPORTUNITY_REFLECT = "opportunity_reflect"
+MARKER_OPPORTUNITY_SCENE_CARD = "opportunity_scene_card"
 MARKER_SELF_WAKE_NONE = "self_wake_none"
 
 OPPORTUNITY_NONE_TOKEN = "[OPPORTUNITY_NONE]"
 OPPORTUNITY_REFLECT_TOKEN = "[OPPORTUNITY_REFLECT]"
+OPPORTUNITY_SCENE_CARD_TOKEN = "[OPPORTUNITY_SCENE_CARD]"
 SELF_WAKE_NONE_TOKEN = "[SELF_WAKE_NONE]"
 
 OPPORTUNITY_TOOL_CAPABILITIES = frozenset(
@@ -31,7 +33,6 @@ OPPORTUNITY_TOOL_CAPABILITIES = frozenset(
         "heart.whisper",
         "device.ring_touch",
         "pc.screen_check",
-        "mobile.screen_check",
         "mobile.look_at_me",
         "memory.remember",
         "location.poi_search",
@@ -78,7 +79,7 @@ class TurnProfile:
         return str(tool_name) in self.allowed_tool_capabilities
 
 
-OpportunityControlKind = Literal["ordinary", "none", "reflect", "invalid"]
+OpportunityControlKind = Literal["ordinary", "none", "reflect", "scene_card", "invalid"]
 SelfWakeControlKind = Literal["ordinary", "none", "invalid"]
 
 
@@ -109,6 +110,8 @@ def classify_opportunity_control_output(
         MARKER_OPPORTUNITY_REFLECT
     ):
         return "reflect"
+    if text == OPPORTUNITY_SCENE_CARD_TOKEN and profile.allows_marker(MARKER_OPPORTUNITY_SCENE_CARD):
+        return "scene_card"
     return "invalid"
 
 
@@ -170,12 +173,15 @@ def opportunity_turn_profile(
     web_search_allowed: bool = False,
     kind: AutonomousKind = "idle",
     presence_bootstrap_required: bool = False,
+    scene_card_allowed: bool = False,
 ) -> TurnProfile:
     if kind not in {"idle", "summon", "night", "look_at_me_accept"}:
         raise ValueError("invalid_autonomous_kind")
     if presence_bootstrap_required and kind != "night":
         raise ValueError("presence_bootstrap_requires_night")
     markers = {MARKER_OPPORTUNITY_NONE}
+    if kind == "night" and scene_card_allowed:
+        markers.add(MARKER_OPPORTUNITY_SCENE_CARD)
     if kind in {"idle", "look_at_me_accept"}:
         markers.add(MARKER_VISIBLE_REPLY)
     if (
@@ -220,6 +226,7 @@ def self_wake_turn_profile(
 __all__ = [
     "MARKER_OPPORTUNITY_NONE",
     "MARKER_OPPORTUNITY_REFLECT",
+    "MARKER_OPPORTUNITY_SCENE_CARD",
     "MARKER_RECALL_INTENT",
     "MARKER_SELF_WAKE_NONE",
     "MARKER_WEB_SEARCH_INTENT",
@@ -228,6 +235,7 @@ __all__ = [
     "MARKER_WORKING_MODEL_REQUEST",
     "OPPORTUNITY_NONE_TOKEN",
     "OPPORTUNITY_REFLECT_TOKEN",
+    "OPPORTUNITY_SCENE_CARD_TOKEN",
     "OPPORTUNITY_TOOL_CAPABILITIES",
     "AutonomousKind",
     "PRESENCE_TOOL_CAPABILITIES",

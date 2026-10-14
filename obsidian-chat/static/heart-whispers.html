@@ -6,10 +6,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>心语 - Obsidian Vow</title>
 <link rel="stylesheet" href="/static/common.css">
+<link rel="stylesheet" href="/static/markdown.css?v=20261009-math">
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#13151d">
 <style>
+.hw-tabs { display:flex; gap:6px; padding:5px; margin-bottom:22px; border:1px solid #d2a1a12c; border-radius:16px; background:#30242f; }
+.hw-tab { flex:1; min-width:0; min-height:64px; padding:10px 16px; border:1px solid transparent; border-radius:11px; background:none; color:var(--text2); font:inherit; cursor:pointer; text-align:left; }
+.hw-tab-title { display:block; font-size:15px; line-height:1.6; }
+.hw-tab-note { display:block; font-size:11px; line-height:1.7; color:var(--text3); }
+.hw-tab[aria-selected="true"] { background:var(--enamel, var(--surface2)); border-color:#d2a1a147; color:var(--accent); }
+.hw-tab[aria-selected="true"] .hw-tab-note { color:var(--text2); }
+.hw-tab:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .hw-list { flex:1; overflow-y:auto; max-height:calc(100dvh - 120px); padding:4px 0; }
 .hw-empty { padding:60px 24px; text-align:center; color:var(--text3); font-size:14px; line-height:2; }
 .hw-card {
@@ -58,10 +66,19 @@
   cursor: pointer;
 }
 .hw-load-more:hover { background: var(--border); }
+.hw-load-more:disabled { opacity:.6; cursor:wait; }
 .hw-stats { text-align: center; font-size: 12px; color: var(--text3); padding: 8px 0; }
+.hw-open { display:block; width:100%; text-align:left; color:inherit; background:none; border:0; padding:0; cursor:pointer; }
+.hw-work-image { max-width:100%; height:auto; border-radius:10px; display:block; margin:12px 0; }
+.hw-reader { padding:16px; max-width:820px; margin:auto; line-height:1.8; }
+.hw-list > .hw-reader { grid-column:1 / -1; width:100%; }
+.hw-reader audio { width:100%; margin:8px 0 20px; }
+.hw-reader-back { margin-bottom:20px; }
+.hw-card .md-document { font-size:14px; }
+.hw-reader-actions { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 </style>
 <link rel="stylesheet" href="/static/vow.css?v=20260913-enamel">
-<script src="/static/vow.js?v=20260913-gold-dust"></script>
+<script src="/static/vow.js?v=20260920-companion-names"></script>
 <link rel="stylesheet" href="/static/gold-dust.css?v=20260913-gold-dust">
 <script src="/static/gold-dust.js?v=20260913-gold-dust" defer></script>
 </head>
@@ -72,39 +89,98 @@
     <h2>💭 心语</h2>
   </div>
   <div class="page-content">
-    <div class="hw-list" id="hwList">
-      <div class="hw-empty">暂无心语</div>
+    <div class="hw-tabs" role="tablist" aria-label="心语分类">
+      <button class="hw-tab" id="hwTabWork" type="button" role="tab" aria-selected="true" aria-controls="hwList" data-kind="work" onclick="switchKind('work')">
+        <span class="hw-tab-title">长心语</span><span class="hw-tab-note">自主时刻</span>
+      </button>
+      <button class="hw-tab" id="hwTabLegacy" type="button" role="tab" aria-selected="false" aria-controls="hwList" tabindex="-1" data-kind="legacy" onclick="switchKind('legacy')">
+        <span class="hw-tab-title">短心语</span><span class="hw-tab-note">日常对话</span>
+      </button>
+    </div>
+    <div class="hw-list" id="hwList" role="tabpanel" aria-labelledby="hwTabWork" tabindex="0">
+      <div class="hw-empty">正在加载长心语…</div>
     </div>
   </div>
 </div>
 <script src="/static/common.js?v=20260913-refined"></script>
+<script src="/static/vendor/markdown-it.min.js?v=15.0.2"></script>
+<script src="/static/vendor/dompurify.min.js?v=3.4.15"></script>
+<script src="/static/js/chat/math.js?v=20261009-math"></script>
+<script src="/static/js/chat/markdown.js?v=20261009-math"></script>
 <script src="/static/web_push.js?v=20260905-brand"></script>
 <script>
 const PAGE_SIZE = 20;
+let currentKind = 'work';
 let currentPage = 1;
 let totalItems = 0;
 let allItems = [];
+let loadRequest = 0;
+let isLoading = false;
+let loadFailed = false;
+
+function switchKind(kind) {
+  if (kind === currentKind) return;
+  currentKind = kind;
+  readingWork = null;
+  currentPage = 1;
+  totalItems = 0;
+  allItems = [];
+  isLoading = false;
+  document.querySelectorAll('.hw-tab').forEach(tab => {
+    const selected = tab.dataset.kind === kind;
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected) document.getElementById('hwList').setAttribute('aria-labelledby', tab.id);
+  });
+  document.querySelector('.page-content').scrollTop = 0;
+  loadWhispers();
+}
+
+document.querySelector('.hw-tabs').addEventListener('keydown', event => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const kind = event.key === 'Home' ? 'work' : event.key === 'End' ? 'legacy' : currentKind === 'work' ? 'legacy' : 'work';
+  switchKind(kind);
+  document.querySelector(`.hw-tab[data-kind="${kind}"]`).focus();
+});
 
 async function loadWhispers(page = 1, append = false) {
+  if (isLoading) return;
+  const request = ++loadRequest;
+  isLoading = true;
+  loadFailed = false;
+  if (!readingWork) renderList();
   try {
-    const res = await api('GET', `/api/heart-whispers?page=${page}&page_size=${PAGE_SIZE}`);
+    const res = await api('GET', `/api/heart-whispers?page=${page}&page_size=${PAGE_SIZE}&kind=${currentKind}`);
+    if (request !== loadRequest) return;
     totalItems = res.total;
     if (append) {
-      allItems = allItems.concat(res.items);
+      const existing = new Set(allItems.map(item => item.id));
+      allItems = allItems.concat(res.items.filter(item => !existing.has(item.id)));
     } else {
       allItems = res.items;
     }
     currentPage = page;
-    renderList();
+    const latest = Math.max(0, ...res.items.filter(item => item.kind === 'work').map(item => item.created_at));
+    if (latest) localStorage.setItem('heartWorksSeenAt', String(Math.max(latest, Number(localStorage.getItem('heartWorksSeenAt')) || 0)));
   } catch (e) {
+    if (request !== loadRequest) return;
+    loadFailed = true;
     console.error('加载心语失败:', e);
+  } finally {
+    if (request === loadRequest) {
+      isLoading = false;
+      if (!readingWork) renderList();
+    }
   }
 }
 
 function renderList() {
   const container = document.getElementById('hwList');
+  const label = currentKind === 'work' ? '长心语' : '短心语';
+  container.setAttribute('aria-busy', String(isLoading));
   if (!allItems.length) {
-    container.innerHTML = '<div class="hw-empty">暂无心语</div>';
+    container.innerHTML = `<div class="hw-empty">${isLoading ? `正在加载${label}…` : loadFailed ? `${label}加载失败` : `暂无${label}`}${loadFailed ? '<button class="hw-load-more" onclick="loadWhispers()">重新加载</button>' : ''}</div>`;
     return;
   }
   let html = '';
@@ -114,12 +190,12 @@ function renderList() {
     html += `<div class="hw-card" data-id="${item.id}">
       <button class="hw-del" onclick="deleteWhisper('${item.id}')" title="删除">✕</button>
       <div class="hw-time">${timeStr}</div>
-      <div class="hw-content">${escapeHtml(item.content)}</div>
+      ${item.kind === 'work' ? `<button class="hw-open" onclick="openWork('${item.id}')" aria-label="打开这份心语">${renderWorkBlocks(item.cover, true)}</button>` : `<div class="hw-content">${escapeHtml(item.content)}</div>`}
     </div>`;
   }
-  html += `<div class="hw-stats">共 ${totalItems} 条心语</div>`;
+  html += `<div class="hw-stats">共 ${totalItems} ${currentKind === 'work' ? '篇长心语' : '条短心语'}</div>`;
   if (allItems.length < totalItems) {
-    html += `<button class="hw-load-more" onclick="loadMore()">加载更多</button>`;
+    html += `<button class="hw-load-more" onclick="loadMore()" ${isLoading ? 'disabled' : ''}>${isLoading ? '正在加载…' : loadFailed ? '加载失败，点击重试' : '加载更多'}</button>`;
   }
   container.innerHTML = html;
 }
@@ -130,9 +206,12 @@ function loadMore() {
 
 async function deleteWhisper(id) {
   if (!confirm('确定删除这条心语吗？')) return;
+  const kind = currentKind;
   try {
-    await api('DELETE', `/api/heart-whispers/${id}`);
+    const item = allItems.find(item => item.id === id);
+    await api('DELETE', `/api/heart-whispers/${item?.kind === 'work' ? 'works/' : ''}${id}`);
     try { window.parent.ChatHeartNotes?.remove(id); } catch (_) {}
+    if (kind !== currentKind) return;
     allItems = allItems.filter(i => i.id !== id);
     totalItems--;
     renderList();
@@ -147,16 +226,68 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+let readingWork = null;
+function renderWorkBlocks(blocks, cover = false) {
+  return (blocks || []).map(block => {
+    if (block.type === 'text') return `<div class="md-document">${ChatMarkdown.renderDocument(block.text)}</div>`;
+    if (block.type === 'image' && /^\/api\/heart-whispers\/works\/[a-zA-Z0-9_]+\/assets\/[a-zA-Z0-9_]+$/.test(block.url)) {
+      const img = document.createElement('img');
+      img.className = 'hw-work-image';
+      img.src = block.url;
+      img.alt = block.description || '';
+      img.loading = 'lazy';
+      return img.outerHTML;
+    }
+    if (!cover && block.type === 'music' && /^\/api\/music\/stream\/\d+$/.test(block.url)) {
+      return `<div class="hw-song"><span>${escapeHtml(block.title)} · ${escapeHtml(block.artist)}</span><audio controls preload="none" src="${escapeHtml(block.url)}"></audio></div>`;
+    }
+    return '';
+  }).join('');
+}
+async function openWork(id) {
+  readingWork = id;
+  try {
+    const work = await api('GET', `/api/heart-whispers/works/${id}`);
+    if (readingWork !== id || currentKind !== 'work') return;
+    document.getElementById('hwList').innerHTML = `<article class="hw-reader"><div class="hw-reader-actions"><button class="hw-reader-back hw-load-more" onclick="closeWork()">返回心语</button><button class="hw-load-more" onclick="talkAboutWork('${work.id}')">聊聊这份</button></div>${renderWorkBlocks(work.body)}</article>`;
+    document.getElementById('hwList').scrollTop = 0;
+    document.querySelector('.page-content').scrollTop = 0;
+  } catch (_) {
+    if (readingWork !== id) return;
+    readingWork = null;
+    showToast('这份心语暂时无法读取');
+  }
+}
+function closeWork() { readingWork = null; renderList(); }
+async function talkAboutWork(id) {
+  if (!/^hw_[a-f0-9]{32}$/.test(id)) return;
+  try {
+    if (window.parent !== window && window.parent.ChatHeartWorks) {
+      await window.parent.ChatHeartWorks.attach(id);
+    } else {
+      sessionStorage.setItem('obsidian_pending_heart_work', id);
+      location.assign('/chat');
+    }
+  } catch (_) { showToast('这份心语暂时无法读取'); }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) document.querySelectorAll('audio').forEach(audio => audio.pause());
+});
+
 // The shared socket also receives events forwarded by the chat iframe host.
 connectCommonWS(msg => {
-  if (msg.type !== 'heart_whisper' || !msg.data?.id) return;
+  if (!['heart_whisper', 'heart_work_published'].includes(msg.type) || !msg.data?.id) return;
+  const kind = msg.type === 'heart_work_published' ? 'work' : 'legacy';
+  if (kind !== currentKind) return;
   if (allItems.some(item => item.id === msg.data.id)) return;
-  allItems.unshift(msg.data);
+  allItems.unshift({...msg.data, kind});
   totalItems++;
-  renderList();
+  if (!readingWork) renderList();
 });
 
 loadWhispers();
+const linkedWork = new URLSearchParams(location.search).get('work');
+if (/^hw_[a-f0-9]{32}$/.test(linkedWork || '')) openWork(linkedWork);
 </script>
 </body>
 </html>

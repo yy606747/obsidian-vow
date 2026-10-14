@@ -13,7 +13,7 @@ def test_schedule_v2_files_stay_small_and_within_declared_boundaries():
         "prompt.py": 142,  # 增加按可用性提供的表情能力与运行时称谓
         "evidence.py": 47,
         "alarm_context.py": 280,  # 闹钟创建时可见上下文的不可变旁表
-        "trigger.py": 650,  # 增加表情附件交付和事务内回注认领；仍以当前行数封顶
+        "trigger.py": 667,  # 增加心语出口与事实快照；创作执行仍留在 app/heart_works
         "commands.py": 340,  # 闹钟创建时同步冻结上下文；仍以当前行数封顶
         "manager.py": 128,
     }

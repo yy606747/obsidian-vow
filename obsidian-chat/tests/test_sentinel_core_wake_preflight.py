@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import json
 
 import pytest
@@ -125,15 +126,16 @@ def test_core_wake_preflight_builds_ready_trace_without_side_effects_or_raw_payl
     assert trace["visible_message_ids"] == ["m1", "m2"]
 
     core_request = trace["core_request"]
-    assert core_request["persona_message_count"] == 6  # two persona pairs + chat presentation
+    assert core_request["persona_message_count"] == 8  # two persona pairs, shared life, presentation
     assert core_request["history_message_count"] == 2
     assert core_request["messages"][0]["content"].startswith("[关于你自己：Arden]")
     assert core_request["messages"][2]["content"].startswith("[关于她]")
     assert core_request["messages"][-1]["role"] == "user"
     assert core_request["messages"][-1]["content"] == core_request["core_prompt"]
+    assert core_request["core_prompt"].startswith("【能力使用】你是Arden。")
     assert "已经1小时2分钟没有和你说话了" in core_request["core_prompt"]
-    assert "哨兵唤醒你的原因" in core_request["core_prompt"]
-    assert "语气提示：轻轻出现" in core_request["core_prompt"]
+    assert "这次想找她的原因" in core_request["core_prompt"]
+    assert "语气提示" not in core_request["core_prompt"]
     assert "可参考记忆" not in core_request["core_prompt"]
     assert "相关记忆" not in core_request["core_prompt"]
     assert "硬限制" in core_request["core_prompt"]
@@ -220,6 +222,130 @@ def test_core_wake_v2_renders_projection_without_leaking_diagnostic_fields():
     assert "12000" not in prompt
     assert "NJU-WLAN" not in prompt
     assert "0.17" not in prompt
+
+
+def test_slim_core_prompt_keeps_context_without_sentinel_reply_directions(monkeypatch):
+    from app.sentinel import core_wake_orchestrator
+    from app.context_delivery import render_context_delivery_projection
+
+    monkeypatch.setattr(core_wake_orchestrator, "_sentinel_ring_touch_enabled", lambda: False)
+    judgment = _wake_judgment(
+        core_reason="隔了一阵没聊，想再去关心一下小栀。",
+        summary="小栀先前说没睡醒，阿澈问过近况；这不是当前状态的确认。",
+        uncertainty="还不知道小栀是否已经起床、是否有空。",
+        monitoringlog="仅供监控的最新日志，不应进入主脑。",
+        tone_hint="先催小栀起床，再追问身体，用半哄半催的口吻。",
+    )
+    package = _wake_package(judgment)
+    package["context"]["recent_chat"] = ["小栀：阿澈，我没睡醒，你呢？", "阿澈：昨晚睡得怎么样？"]
+    package["context"]["recent_sentinel_logs"] = ["仅供监控的历史日志，不应进入主脑。"]
+    package["context"]["context_projection"]["generated_at"] = 1000
+    package["context"]["context_projection"]["observations"] = [{
+        "key": "phone.screen", "value": "on", "source": "android.sensing",
+        "observed_at": 990, "received_at": 991, "freshness_sec": 10,
+        "since_at": 980, "confidence": 1,
+    }]
+    rendered = render_context_delivery_projection(
+        package["context"]["context_projection"], user_name="小栀", ai_name="阿澈",
+    )
+    package["attention"]["compact_text"] = next(
+        line.removeprefix("- ") for line in rendered.splitlines() if line.startswith("- ")
+    )
+    original = deepcopy(package)
+
+    trace = build_core_wake_preflight(
+        wake_package=package,
+        execution_context={
+            "conv_id": "conv_sentinel", "model_key": "mock-model",
+            "user_name": "小栀", "ai_name": "阿澈",
+            "last_user_message_age_sec": 4440,
+            "recent_messages": [{"id": "m1", "role": "user", "content": "我没睡醒。"}],
+        },
+    )
+    prompt = trace["core_request"]["core_prompt"]
+
+    for text in (judgment["core_reason"], judgment["summary"], judgment["uncertainty"],
+                 *package["context"]["recent_chat"]):
+        assert text in prompt
+    assert prompt.startswith("【能力使用】你是阿澈。")
+    assert "小栀是你的人" in prompt
+    assert "已经1小时14分钟没有和你说话了" in prompt
+    assert "小栀最近亲口说的情况，永远压过设备信号" in prompt
+    assert "小栀骗你、撒谎、编故事" in prompt
+    assert prompt.count("【能力使用】") == 1
+    assert "不必等小栀提出要求" in prompt
+    assert "用不用、什么时候用、怎样表达，由你决定" in prompt
+    assert "调用不等于成功" in prompt
+    assert "只基于本轮注入的上下文" in prompt
+    assert "手机报告屏幕亮起" in prompt
+    assert prompt.count("[设备与环境上下文]") == 1
+    assert "最近聊天片段" in prompt
+    assert trace["core_request"]["history_message_count"] == 1
+    for removed in (judgment["monitoringlog"], judgment["tone_hint"],
+                    *package["context"]["recent_sentinel_logs"],
+                    "语气提示", "最新一条哨兵日志", "最近的哨兵记录", "Attention 简报"):
+        assert removed not in prompt
+    assert prompt.count(package["attention"]["compact_text"]) == 1
+    assert all(generic not in prompt for generic in ("用户", "TA"))
+    assert package == original
+    assert trace["sentinel"]["tone_hint"] == judgment["tone_hint"]
+    assert trace["gate"] == original["gate"]
+
+
+def test_slim_core_prompt_preserves_attention_not_covered_by_device_snapshot():
+    package = _wake_package()
+    package["context"]["context_projection"]["generated_at"] = 1000
+    package["context"]["context_projection"]["observations"] = [{
+        "key": "phone.screen", "value": "on", "source": "android.sensing",
+        "observed_at": 990, "received_at": 991, "freshness_sec": 10,
+        "since_at": 980, "confidence": 1,
+    }]
+    package["attention"]["compact_text"] = "小栀刚说正在开会；屏幕亮起不代表可以聊天。"
+    trace = build_core_wake_preflight(
+        wake_package=package,
+        execution_context={"conv_id": "conv_sentinel", "model_key": "mock-model",
+                           "user_name": "小栀", "ai_name": "阿澈"},
+    )
+
+    prompt = trace["core_request"]["core_prompt"]
+    assert "手机报告屏幕亮起" in prompt
+    assert package["attention"]["compact_text"] in prompt
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_slim_core_prompt_retains_attention_without_shared_device_context(legacy):
+    package = _wake_package()
+    if legacy:
+        package["schema_version"] = LEGACY_CORE_WAKE_PACKAGE_SCHEMA_VERSION
+        package["context"].pop("context_projection")
+
+    trace = build_core_wake_preflight(
+        wake_package=package,
+        execution_context={"conv_id": "conv_sentinel", "model_key": "mock-model",
+                           "user_name": "小栀", "ai_name": "阿澈"},
+    )
+
+    prompt = trace["core_request"]["core_prompt"]
+    assert "Attention 简报" in prompt
+    assert package["attention"]["compact_text"].replace("用户", "小栀") in prompt
+    assert "语气提示" not in prompt
+    assert "最近聊天片段" in prompt
+
+
+def test_monitor_notes_cannot_expand_or_direct_the_core_prompt():
+    short = _wake_package(_wake_judgment(monitoringlog="短日志", tone_hint="短备注"))
+    long = deepcopy(short)
+    long["sentinel"]["monitoringlog"] = "长日志里的回复指导。" * 30
+    long["sentinel"]["tone_hint"] = "先催促再追问。" * 10
+    long["context"]["recent_sentinel_logs"] = ["只用于监控的重复记录。" * 15] * 3
+    context = {"conv_id": "conv_sentinel", "model_key": "mock-model",
+               "user_name": "小栀", "ai_name": "阿澈"}
+
+    short_trace = build_core_wake_preflight(wake_package=short, execution_context=context)
+    long_trace = build_core_wake_preflight(wake_package=long, execution_context=context)
+
+    assert short_trace["core_request"]["core_prompt"] == long_trace["core_request"]["core_prompt"]
+    assert long_trace["sentinel"]["tone_hint"] != short_trace["sentinel"]["tone_hint"]
 
 
 def test_core_wake_preflight_fails_loud_without_model_key():

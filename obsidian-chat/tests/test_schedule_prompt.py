@@ -73,7 +73,7 @@ def test_time_explanations_precede_formats_and_formats_use_existing_parser():
         assert len(intents) == 1
         assert intents[0].tool_name == name
     assert "创建成功不等于手机已确认设置" in entries["schedule.alarm"]
-    assert "不会到点自动唤醒阿澈" in entries["schedule.reminder"]
+    assert "不会到点自动唤醒你" in entries["schedule.reminder"]
     assert "不提供摄像头画面" in entries["schedule.monitor"]
     assert "缺失的情况不能当作已知" in entries["schedule.monitor"]
     for surface, variant in (("schedule", ""), ("main_stable", "regenerate")):

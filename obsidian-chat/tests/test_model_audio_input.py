@@ -211,6 +211,8 @@ class _SendGateDb:
 
     async def execute(self, sql, params=()):
         self.statements.append((sql, params))
+        if "FROM sqlite_master" in sql:
+            return _Cursor(None)
         if sql.startswith("SELECT model"):
             return _Cursor(("text-only",))
         raise AssertionError("audio gate must run before any write")
@@ -257,6 +259,8 @@ class _RegenerateGateDb:
         self.select_count = 0
 
     async def execute(self, sql, params=()):
+        if "FROM sqlite_master" in sql:
+            return _Cursor(None)
         self.select_count += 1
         if sql.startswith("SELECT model"):
             return _Cursor(("text-only",))

@@ -86,18 +86,6 @@ class CoreWakePorts(Protocol):
     ) -> Mapping[str, Any] | None:
         """Request a PC screenshot through the existing confirmation-gated service."""
 
-    async def request_mobile_screen_check(
-        self,
-        *,
-        conv_id: str,
-        msg_id: str,
-        model_key: str,
-        target: str,
-        reason: str,
-        request_id: str | None = None,
-        wake_id: str | None = None,
-    ) -> Mapping[str, Any] | None:
-        """Request a phone/tablet screenshot through the Android confirmation flow."""
 
     async def execute_ring_touch(
         self,
@@ -143,7 +131,6 @@ CORE_WAKE_PORT_METHODS = (
     "broadcast_monitor_alert",
     "broadcast_msg_created",
     "request_screen_check",
-    "request_mobile_screen_check",
     "broadcast_toy_command",
     "insert_assistant_message",
     "insert_system_wake_notice",

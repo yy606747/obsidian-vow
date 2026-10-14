@@ -69,7 +69,7 @@ final class LookAtMeOverlay {
     }
 
     void update(long remaining, boolean active) {
-        if(timer!=null) timer.setText((active?"◆ 腻歪时间 · ":"邀请剩余 ")+duration(Math.max(0,(remaining+999)/1000)));
+        if(timer!=null) timer.setText((active?"◆ 邀约 · ":"邀请剩余 ")+duration(Math.max(0,(remaining+999)/1000)));
     }
 
     void hide() {

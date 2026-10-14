@@ -59,6 +59,7 @@ function copyMsg(id) {
 }
 
 async function regenerateMsg(aiMsgId) {
+  if (await window.ChatTogether?.guard?.()) return;
   if (sending || !currentConvId) return;
   const latestUserMessage = [...currentMessages].reverse().find(message => message.role === "user");
   if (hasVoiceAttachments(latestUserMessage?.attachments) && !currentModelSupportsAudioInput()) {
@@ -127,10 +128,19 @@ async function regenerateMsg(aiMsgId) {
             currentMessages.push({ id: newId, conv_id: currentConvId, role: "assistant", content: "...", created_at: Date.now()/1000 });
             renderMessages();
             _startTypingAnim(newId);
+          } else if (d.type === "retry" && newId) {
+            aiContent = '';
+            hasError = false;
+            resetStreamingAssistantMessage(newId);
+            _startTypingAnim(newId, d.reason === "timeout" ? "连接有点慢，正在重试…" : "");
+          } else if (d.type === "query") {
+            showQueryProgress(newId, d, aiContent);
           } else if (d.type === "chunk") {
+            clearQueryProgress(newId);
             _stopTypingAnim();
             if (d.content.includes('\x00RETRY\x00')) {
               aiContent = '';
+              hasError = false;
               resetStreamingAssistantMessage(newId);
               _startTypingAnim(newId);
               continue;
@@ -152,6 +162,7 @@ async function regenerateMsg(aiMsgId) {
             aiContent = String(d.message.content || "");
             upsertSystemMessage(d.message);
           } else if (d.type === "debug" && newId) {
+            clearQueryProgress(newId);
             msgDebugData[newId] = d;
             if (d.has_error) {
               hasError = true;
